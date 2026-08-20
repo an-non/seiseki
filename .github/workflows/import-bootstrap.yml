@@ -36,9 +36,10 @@ jobs:
         run: |
           set -euo pipefail
           cat bootstrap/part-* > /tmp/seiseki-source-bootstrap.b64
-          base64 --decode /tmp/seiseki-source-bootstrap.b64 > /tmp/seiseki-source-bootstrap.tar.gz
-          echo "fa11a6e195ac0d530187b974cf48c12fb03d5541c66a9f27fd359c18d3bbd0ac  /tmp/seiseki-source-bootstrap.tar.gz" | sha256sum -c -
-          tar -tzf /tmp/seiseki-source-bootstrap.tar.gz >/dev/null
+          echo "ab06d4973e126f04e7de5855b00025ddfe4933a6b2499e6a4952e69400b79355  /tmp/seiseki-source-bootstrap.b64" | sha256sum -c -
+          base64 --decode /tmp/seiseki-source-bootstrap.b64 > /tmp/seiseki-source-bootstrap.tar.xz
+          echo "f6ebaa6ba100fb0e8d0e3e65b4a4dede02fd2b1a1f13f6c62febf2531af45bbf  /tmp/seiseki-source-bootstrap.tar.xz" | sha256sum -c -
+          tar -tJf /tmp/seiseki-source-bootstrap.tar.xz >/dev/null
 
       - name: Expand source snapshot
         if: steps.guard.outputs.run == 'true'
@@ -47,7 +48,7 @@ jobs:
           set -euo pipefail
           rm -rf bootstrap
           rm -f .github/workflows/import-bootstrap.yml
-          tar -xzf /tmp/seiseki-source-bootstrap.tar.gz -C .
+          tar -xJf /tmp/seiseki-source-bootstrap.tar.xz -C .
 
       - name: Verify application baseline
         if: steps.guard.outputs.run == 'true'
@@ -66,7 +67,7 @@ jobs:
           npm run check
           npm test
 
-      - name: Fresh-build staging UI and compare preserved hashes
+      - name: Fresh-build and verify preserved staging assets
         if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
