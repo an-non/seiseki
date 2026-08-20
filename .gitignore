@@ -1,0 +1,23 @@
+# Dependencies and tool caches
+**/node_modules/
+**/.npm-cache/
+**/.wrangler/
+**/.vite/
+**/.vite-temp/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+.dev.vars
+.dev.vars.*
+
+# Runtime / diagnostic logs
+*.log
+*.out
+*.err
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
