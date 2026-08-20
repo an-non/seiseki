@@ -1,0 +1,72 @@
+name: Deploy and record opinion preview status
+
+on:
+  push:
+    branches:
+      - feature/opinion-network-preview
+    paths:
+      - preview/opinion-network/DEPLOY_TRIGGER
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-and-record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/opinion-network-preview
+          fetch-depth: 0
+
+      - name: Check Cloudflare credentials presence
+        id: credentials
+        shell: bash
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy isolated Cloudflare preview
+        if: steps.credentials.outputs.ready == 'true'
+        id: deploy
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          workingDirectory: preview/opinion-network
+          command: deploy
+
+      - name: Record deployment status
+        if: always()
+        shell: bash
+        env:
+          CREDS_READY: ${{ steps.credentials.outputs.ready }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Opinion network preview deployment"
+            echo
+            echo "- credentials_ready: ${CREDS_READY:-false}"
+            echo "- deploy_outcome: ${DEPLOY_OUTCOME:-not-run}"
+            echo "- deployment_url: ${DEPLOY_URL:-}"
+            echo "- worker: seiseki-opinion-network-preview"
+            echo "- source_branch: feature/opinion-network-preview"
+            echo "- trigger_commit: ${GITHUB_SHA}"
+            echo "- existing_seiseki_staging_touched: false"
+            echo "- d1_migrations_run: false"
+          } > preview/opinion-network/DEPLOYMENT_STATUS.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- preview/opinion-network/DEPLOYMENT_STATUS.md
+          git commit -m "Record opinion network preview deployment status"
+          git push origin HEAD:feature/opinion-network-preview
