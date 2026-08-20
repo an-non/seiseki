@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           cat bootstrap/part-* > /tmp/seiseki-source-bootstrap.b64
           base64 --decode /tmp/seiseki-source-bootstrap.b64 > /tmp/seiseki-source-bootstrap.tar.gz
-          echo "c076fb83feb3bc54fb2c85e026815bd9ed29012afc29b86256dbd3650edef283  /tmp/seiseki-source-bootstrap.tar.gz" | sha256sum -c -
+          echo "fa11a6e195ac0d530187b974cf48c12fb03d5541c66a9f27fd359c18d3bbd0ac  /tmp/seiseki-source-bootstrap.tar.gz" | sha256sum -c -
           tar -tzf /tmp/seiseki-source-bootstrap.tar.gz >/dev/null
 
       - name: Expand source snapshot
@@ -66,19 +66,23 @@ jobs:
           npm run check
           npm test
 
-      - name: Verify preserved staging assets
+      - name: Fresh-build staging UI and compare preserved hashes
         if: steps.guard.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          test -f local/dist/index.html
-          test -f local/dist/assets/App-B2f5Hqqm.js
-          test -f local/dist/assets/index-Ddx_ZOJK.js
-          test -f local/dist/assets/react-dom-stZKkA6x.js
-          echo "220749617e60385572cb56d247bc89820e657c0cd28e83296e6e67a0980332ff  local/dist/assets/App-B2f5Hqqm.js" | sha256sum -c -
-          echo "9ba25ab9045cd07048e4012ea4713fc51aa1577b83fc730b386e987cb7f7bb4e  local/dist/assets/index-Ddx_ZOJK.js" | sha256sum -c -
-          echo "14cabb31e799c8eca546da2a65e48c8fa94646763a7c130fbb8056fd534941bf  local/dist/assets/react-dom-stZKkA6x.js" | sha256sum -c -
-          echo "70bb520e29fe217f6d7323eacc83fb6270fac9da2cae7ac9ce78de87b2bf6e4c  local/dist/index.html" | sha256sum -c -
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          test -f dist/index.html
+          test -f dist/assets/App-B2f5Hqqm.js
+          test -f dist/assets/index-Ddx_ZOJK.js
+          test -f dist/assets/react-dom-stZKkA6x.js
+          echo "220749617e60385572cb56d247bc89820e657c0cd28e83296e6e67a0980332ff  dist/assets/App-B2f5Hqqm.js" | sha256sum -c -
+          echo "9ba25ab9045cd07048e4012ea4713fc51aa1577b83fc730b386e987cb7f7bb4e  dist/assets/index-Ddx_ZOJK.js" | sha256sum -c -
+          echo "14cabb31e799c8eca546da2a65e48c8fa94646763a7c130fbb8056fd534941bf  dist/assets/react-dom-stZKkA6x.js" | sha256sum -c -
+          echo "70bb520e29fe217f6d7323eacc83fb6270fac9da2cae7ac9ce78de87b2bf6e4c  dist/index.html" | sha256sum -c -
+          rm -rf dist
 
       - name: Commit expanded source
         if: steps.guard.outputs.run == 'true'
@@ -88,5 +92,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Import verified SEISEKI source baseline"
+          git commit -m "Import verified SEISEKI deploy baseline"
           git push origin HEAD:import/seiseki-v0.15.0
