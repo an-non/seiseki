@@ -36,9 +36,9 @@ jobs:
         run: |
           set -euo pipefail
           cat bootstrap/part-* > /tmp/seiseki-source-bootstrap.b64
-          echo "ab06d4973e126f04e7de5855b00025ddfe4933a6b2499e6a4952e69400b79355  /tmp/seiseki-source-bootstrap.b64" | sha256sum -c -
+          echo "d880a544d985bd7f198706907d10040cc928729ad272e76a763515b13fe63ed8  /tmp/seiseki-source-bootstrap.b64" | sha256sum -c -
           base64 --decode /tmp/seiseki-source-bootstrap.b64 > /tmp/seiseki-source-bootstrap.tar.xz
-          echo "f6ebaa6ba100fb0e8d0e3e65b4a4dede02fd2b1a1f13f6c62febf2531af45bbf  /tmp/seiseki-source-bootstrap.tar.xz" | sha256sum -c -
+          echo "1fa923d97e95643b526277ce647a0d35a8e28c160d062e244eb9a6e04a832677  /tmp/seiseki-source-bootstrap.tar.xz" | sha256sum -c -
           tar -tJf /tmp/seiseki-source-bootstrap.tar.xz >/dev/null
 
       - name: Expand source snapshot
