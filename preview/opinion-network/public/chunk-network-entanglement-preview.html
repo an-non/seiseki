@@ -1,0 +1,1217 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>意見ネットワーク 量子もつれ観測</title>
+  <style>
+    :root {
+      color-scheme:light;
+      --paper:#ffffff;
+      --ink:#14213d;
+      --sub:#53647d;
+      --rule:#d5deea;
+      --cyan:#007b9b;
+      --violet:#3657d6;
+      --gold:#9a6200;
+      --panel:rgba(255,255,255,.9);
+      --control:rgba(255,255,255,.78);
+      --panel-shadow:0 8px 28px rgba(43,62,94,.1);
+      --trace:#163c69;
+      --node-near:#7a38ff;
+      --node-far:#00d9ff;
+    }
+    :root[data-theme="dark"] {
+      color-scheme:dark;
+      --paper:#110f20;
+      --ink:#f4f1ff;
+      --sub:#b5aecb;
+      --rule:#3b315f;
+      --cyan:#50f581;
+      --violet:#9a6cff;
+      --gold:#f5f050;
+      --panel:rgba(17,15,32,.88);
+      --control:rgba(17,15,32,.8);
+      --panel-shadow:0 12px 34px rgba(7,4,18,.38);
+      --trace:#c8b8ff;
+      --node-near:#f58250;
+      --node-far:#50f581;
+    }
+    * { box-sizing:border-box; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:var(--paper); color:var(--ink); }
+    body {
+      font-family:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+      background-image:none;
+    }
+    button { font:inherit; letter-spacing:0; }
+    #scene { position:fixed; inset:0; }
+    canvas { display:block; width:100%; height:100%; }
+    header { position:fixed; z-index:6; top:20px; left:24px; pointer-events:none; }
+    h1 {
+      margin:0;
+      color:var(--ink);
+      font-family:"Shippori Mincho","Yu Mincho","Noto Serif JP",serif;
+      font-size:25px;
+      letter-spacing:0;
+      text-shadow:0 1px 12px rgba(44,84,145,.12);
+    }
+    .legend { display:flex; flex-wrap:wrap; gap:11px; margin-top:8px; color:var(--sub); font-size:11px; }
+    .legend span { display:inline-flex; align-items:center; gap:6px; }
+    .dot { width:8px; height:8px; border-radius:50%; box-shadow:0 0 8px currentColor; }
+    .dot.opinion { color:var(--cyan); background:currentColor; }
+    .dot.near { color:var(--node-near); background:currentColor; outline:1px solid #7188ff; }
+    .dot.far { color:var(--node-far); background:currentColor; }
+    .ring { width:10px; height:10px; border:1px solid var(--cyan); border-radius:50%; box-shadow:0 0 8px var(--cyan); }
+    .controls {
+      position:fixed;
+      z-index:7;
+      top:92px;
+      left:24px;
+      display:flex;
+      align-items:center;
+      gap:4px;
+      padding:4px;
+      border:1px solid rgba(72,99,140,.2);
+      border-radius:6px;
+      background:var(--control);
+      backdrop-filter:blur(8px);
+    }
+    .controls button {
+      min-width:48px;
+      height:30px;
+      padding:0 9px;
+      border:1px solid transparent;
+      border-radius:4px;
+      background:transparent;
+      color:var(--sub);
+      cursor:pointer;
+    }
+    .controls button:hover,
+    .controls button:focus-visible { color:var(--ink); border-color:rgba(0,123,155,.35); outline:none; }
+    .controls button[aria-pressed="true"] { color:#142d74; background:rgba(54,87,214,.1); border-color:rgba(54,87,214,.3); }
+    .controls .observe { min-width:32px; width:32px; padding:0; color:var(--cyan); font-size:19px; }
+    .controls .divider { width:1px; height:18px; margin:0 3px; background:rgba(46,234,255,.2); }
+    .provenance { position:fixed; z-index:7; left:18px; top:78px; max-width:min(620px,calc(100vw - 36px)); padding:8px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--sub); font-size:11px; line-height:1.45; backdrop-filter:blur(12px); }
+    .provenance strong { color:var(--text); font-weight:650; }
+    .status {
+      position:fixed;
+      z-index:6;
+      top:22px;
+      right:24px;
+      color:var(--sub);
+      font:11px/1.6 "IBM Plex Mono",Consolas,monospace;
+      text-align:right;
+      white-space:pre-line;
+      pointer-events:none;
+    }
+    .details {
+      position:fixed;
+      z-index:8;
+      right:20px;
+      bottom:20px;
+      width:min(350px,calc(100% - 40px));
+      min-height:112px;
+      max-height:min(260px,calc(100vh - 190px));
+      overflow:auto;
+      padding:14px 15px;
+      border:1px solid var(--rule);
+      border-radius:6px;
+      background:var(--panel);
+      box-shadow:var(--panel-shadow);
+      backdrop-filter:blur(10px);
+    }
+    .details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }
+    .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
+    .details .generated { color:var(--ink); font-size:12px; }
+    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }
+    .details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
+    .details dt { color:var(--sub); }
+    .details dd { margin:0; overflow-wrap:anywhere; }
+    .trace {
+      position:fixed;
+      z-index:7;
+      left:20px;
+      bottom:20px;
+      width:min(470px,calc(100% - 410px));
+      height:min(56vh,540px);
+      max-height:calc(100vh - 210px);
+      overflow:auto;
+      scrollbar-width:none;
+      padding:2px 0;
+      border:0;
+      background:transparent;
+      box-shadow:none;
+      color:var(--trace);
+      font:10px/1.55 "IBM Plex Mono",Consolas,monospace;
+      text-shadow:none;
+    }
+    .trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }
+    .trace header span:last-child { color:var(--sub); }
+    .trace pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .trace::-webkit-scrollbar { display:none; }
+    .loading {
+      position:fixed;
+      z-index:9;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      color:var(--cyan);
+      font:12px/1.5 "IBM Plex Mono",Consolas,monospace;
+      text-shadow:0 1px 10px rgba(0,123,155,.2);
+      pointer-events:none;
+    }
+    .loading[hidden] { display:none; }
+    @media (max-width:700px) {
+      header { top:14px; left:15px; right:15px; }
+      h1 { font-size:20px; }
+      .legend { max-width:280px; gap:6px 10px; }
+      .controls { top:82px; left:14px; max-width:calc(100% - 28px); overflow-x:auto; }
+      .controls button { min-width:43px; padding:0 7px; }
+      .provenance { position:fixed; z-index:7; left:18px; top:78px; max-width:min(620px,calc(100vw - 36px)); padding:8px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--sub); font-size:11px; line-height:1.45; backdrop-filter:blur(12px); }
+    .provenance strong { color:var(--text); font-weight:650; }
+    .status { top:auto; right:13px; bottom:148px; font-size:9px; line-height:1.45; }
+      .status .optional { display:none; }
+      .details { right:11px; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }
+      .trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:10px 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="scene" aria-label="政治を中心とする量子もつれ意見ネットワーク"></div>
+  <header>
+    <h1>意見ネットワーク 量子もつれ観測</h1>
+    <div class="legend" aria-label="表示凡例">
+      <span><i class="dot opinion"></i>意見ノード</span>
+      <span><i class="ring"></i>量子もつれノード</span>
+    </div>
+  </header>
+  <nav class="controls" aria-label="観測軸">
+    <button type="button" data-model="correlated" aria-pressed="true" title="共有乱数による古典相関">相関</button>
+    <button type="button" data-model="amplitude" aria-pressed="false" title="二量子ビットの複素振幅とBorn則">量子式</button>
+    <span class="divider" aria-hidden="true"></span>
+    <button type="button" data-basis="overall" aria-pressed="true">総合</button>
+    <button type="button" data-basis="urgency" aria-pressed="false">切実度</button>
+    <button type="button" data-basis="motivation" aria-pressed="false">意欲</button>
+    <button type="button" data-basis="validity" aria-pressed="false">妥当性</button>
+    <button type="button" class="observe" id="observe" aria-label="全体を再観測" title="全体を再観測">↻</button>
+    <span class="divider" aria-hidden="true"></span>
+    <button type="button" data-theme-choice="light" aria-pressed="true" title="白背景">白</button>
+    <button type="button" data-theme-choice="dark" aria-pressed="false" title="黒背景">黒</button>
+  </nav>
+  <div class="provenance" role="note"><strong>合成検証データ / PROTOTYPE</strong> — 実回答DBには未接続。量子式はBell-likeな数値シミュレーションで、量子ハードウェアの測定ではありません。</div>
+  <div class="status" id="status"></div>
+  <section class="trace" aria-label="観測計算コンソール">
+    <header><span>OBSERVATION TRACE</span><span id="trace-state">READY</span></header>
+    <pre id="trace-output"></pre>
+  </section>
+  <aside class="details" id="details" aria-live="polite">
+    <h2>政治</h2>
+    <p>5,000件の観測投影</p>
+  </aside>
+  <div class="loading" id="loading" role="status">観測投影を構築中</div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/controls/OrbitControls.js";
+    import { LineMaterial } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineMaterial.js";
+    import { LineSegments2 } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegments2.js";
+    import { LineSegmentsGeometry } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegmentsGeometry.js";
+    import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/EffectComposer.js";
+    import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/UnrealBloomPass.js";
+    import { OutputPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/OutputPass.js";
+    import {
+      createEntanglementModel,
+      deduplicateNodes,
+      generatePrototypeCandidates,
+      observeAmplitudeEntanglement,
+      observeEntanglement
+    } from "./quantum-entanglement-engine.mjs";
+
+    const host = document.getElementById("scene");
+    const details = document.getElementById("details");
+    const loading = document.getElementById("loading");
+    const status = document.getElementById("status");
+    const traceOutput = document.getElementById("trace-output");
+    const traceState = document.getElementById("trace-state");
+    const traceEntries = [];
+    const traceQueue = [];
+    let traceSequence = 0;
+    let traceTyping = false;
+    let traceGeneration = 0;
+    const traceTypeDelay = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 4;
+    const observeButton = document.getElementById("observe");
+    const modelButtons = [...document.querySelectorAll("[data-model]")];
+    const basisButtons = [...document.querySelectorAll("[data-basis]")];
+    const themeButtons = [...document.querySelectorAll("[data-theme-choice]")];
+    const searchParams = new URLSearchParams(location.search);
+    let colorTheme = searchParams.get("theme") === "dark" ? "dark" : "light";
+    document.documentElement.dataset.theme = colorTheme;
+    const requested = Number(searchParams.get("count"));
+    const count = Math.max(240, Math.min(5000, Number.isFinite(requested) && requested > 0 ? requested : 5000));
+    const duplicateCount = Math.max(1, Math.round(count * 0.08));
+    const observationSeed = searchParams.get("seed") || "prototype-5000";
+    const basisLabels = { overall:"総合", urgency:"切実度", motivation:"意欲", validity:"妥当性" };
+    const basisWeights = {
+      overall:[0.5, 0.3, 0.2],
+      urgency:[1, 0, 0],
+      motivation:[0, 1, 0],
+      validity:[0, 0, 1]
+    };
+    let basis = basisLabels[searchParams.get("basis")] ? searchParams.get("basis") : "overall";
+    let observationMode = searchParams.get("mode") === "amplitude" ? "amplitude" : "correlated";
+    let epoch = 0;
+
+    const categoryDefinitions = [
+      { id:"livelihood", label:"暮らし・社会", topics:["生活費","住宅","社会保障","年金"] },
+      { id:"work", label:"仕事・産業", topics:["雇用","働き方","農業","観光"] },
+      { id:"people", label:"教育・福祉", topics:["子育て","教育","医療","介護"] },
+      { id:"infrastructure", label:"地域・基盤", topics:["交通","防災","地域","人口減少"] },
+      { id:"environment", label:"環境・資源", topics:["環境","エネルギー","食料","文化"] },
+      { id:"governance", label:"統治・国際", topics:["行政DX","税制","外交","安全保障"] }
+    ];
+    const topics = categoryDefinitions.flatMap(category => category.topics.map((label, index) => ({
+      id:`${category.id}-${index}`,
+      label,
+      categoryId:category.id,
+      categoryLabel:category.label
+    })));
+    const topicById = new Map(topics.map(topic => [topic.id, topic]));
+
+    function hash32(value) {
+      let hash = 2166136261;
+      for (const character of String(value)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+      return hash >>> 0;
+    }
+    function random01(value) {
+      let state = hash32(value) || 0x9e3779b9;
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return (state >>> 0) / 4294967296;
+    }
+    function directionFor(value) {
+      const longitude = random01(`${value}|longitude`) * Math.PI * 2;
+      const vertical = random01(`${value}|latitude`) * 2 - 1;
+      const radial = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+      return new THREE.Vector3(radial * Math.cos(longitude), vertical, radial * Math.sin(longitude));
+    }
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, character => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"
+      })[character]);
+    }
+    const themePalette = {
+      light:{ background:"#ffffff", fog:"#ffffff", opinion:"#18b8d6", root:"#2446ff", topic:"#f2a900", entanglement:"#00bddd", relation:"#3489b5", active:"#007fd4", glow:"#19ccec", outer:"#78e8f7" },
+      // Divergences theme palette, adapted from the MIT-licensed Obsidian theme by Mekann2904.
+      dark:{ background:"#110f20", fog:"#110f20", opinion:"#5de7ff", root:"#8a5cf5", topic:"#f5f050", entanglement:"#50f581", relation:"#8a5cf5", active:"#f5f050", glow:"#50f581", outer:"#f58250" }
+    };
+    const bloomByTheme = {
+      // The dark theme follows the reference renderer's galaxy bloom settings.
+      dark:{ strength:.75, radius:.5, threshold:.28 },
+      // A white background needs selective HDR bloom or the canvas itself glows.
+      light:{ strength:.5, radius:.28, threshold:1.03 }
+    };
+    const initialPalette = themePalette[colorTheme];
+    function labelSprite(text, color, scale = 1) {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = 512;
+      canvas.height = 96;
+      context.font = "700 34px sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.shadowColor = color;
+      context.shadowBlur = 14;
+      context.fillStyle = color;
+      context.fillText(text, canvas.width / 2, canvas.height / 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthWrite:false }));
+      sprite.scale.set(6.2 * scale, 1.16 * scale, 1);
+      return sprite;
+    }
+    function makeLineSegments(color, opacity) {
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent:true,
+        opacity,
+        depthWrite:false,
+        fog:false,
+        blending:THREE.NormalBlending
+      });
+      const lines = new THREE.LineSegments(new THREE.BufferGeometry(), material);
+      lines.renderOrder = 0;
+      return lines;
+    }
+    function makeSoftHaloTexture() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 64;
+      const context = canvas.getContext("2d");
+      const gradient = context.createRadialGradient(32, 32, 3, 32, 32, 31);
+      gradient.addColorStop(0, "rgba(255,255,255,.78)");
+      gradient.addColorStop(.24, "rgba(255,255,255,.42)");
+      gradient.addColorStop(.62, "rgba(255,255,255,.12)");
+      gradient.addColorStop(1, "rgba(255,255,255,0)");
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 64, 64);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    const rawCandidates = generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount });
+    const uniqueNodes = deduplicateNodes(rawCandidates);
+    const model = createEntanglementModel(uniqueNodes);
+    const sourceById = model.nodeById;
+    const nodeIndexById = new Map(model.nodes.map((node, index) => [node.id, index]));
+    function calculateProjection(options) {
+      return observationMode === "amplitude"
+        ? observeAmplitudeEntanglement(model, options)
+        : observeEntanglement(model, options);
+    }
+    let projection = calculateProjection({ basis, seed:observationSeed, epoch });
+    let projectionById = new Map(projection.nodes.map(node => [node.id, node]));
+    let groupById = new Map(projection.groups.map(group => [group.id, group]));
+    const nodeCountScale = Math.cbrt(Math.max(1, model.nodes.length) / 5000);
+    const groupCountScale = Math.sqrt(Math.max(1, model.groups.length) / 24);
+    const displayScale = clamp(Math.max(.72, nodeCountScale, groupCountScale), .72, 3);
+    const displayRadiusBounds = Object.freeze({ min:14 * displayScale, max:72 * displayScale });
+    const groupDisplayRadiusBounds = Object.freeze({ min:11 * displayScale, max:58 * displayScale });
+    const maxPersistentRelations = 1400;
+    const maxSelectedRelations = 48;
+    function displayPosition(source, id, phase, bounds) {
+      const direction = new THREE.Vector3(source.x, source.y, source.z);
+      if (direction.lengthSq() < 1e-8) direction.copy(directionFor(`display|${id}`));
+      else direction.normalize();
+      const ratio = random01(`display-radius|${id}|${Number(phase || 0).toFixed(8)}`);
+      return direction.multiplyScalar(bounds.min + ratio * (bounds.max - bounds.min));
+    }
+    function nodeDisplayPosition(node) {
+      return displayPosition(node.position, node.id, node.phase, displayRadiusBounds);
+    }
+    function groupDisplayPosition(group) {
+      const phase = group.quantumState?.phase ?? group.nearProbability ?? group.groupBit;
+      return displayPosition(group.position, group.id, phase, groupDisplayRadiusBounds);
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(initialPalette.background);
+    scene.fog = new THREE.FogExp2(initialPalette.fog, .009 / displayScale);
+    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 600);
+    camera.position.set(0, 13 * displayScale, Math.max(92, displayRadiusBounds.max * 1.36));
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:"high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1;
+    host.appendChild(renderer.domElement);
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const initialBloom = bloomByTheme[colorTheme];
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(innerWidth, innerHeight),
+      initialBloom.strength,
+      initialBloom.radius,
+      initialBloom.threshold
+    );
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = .065;
+    controls.minDistance = 13;
+    controls.maxDistance = Math.max(170, displayRadiusBounds.max * 2.5);
+
+    scene.add(new THREE.HemisphereLight("#ffffff", "#dce4f0", 2.1));
+    const keyLight = new THREE.DirectionalLight("#ffffff", 2.2);
+    keyLight.position.set(11, 16, 13);
+    scene.add(keyLight);
+
+    const root = new THREE.Mesh(
+      new THREE.SphereGeometry(1.28, 30, 22),
+      new THREE.MeshStandardMaterial({
+        color:initialPalette.root,
+        emissive:"#2eeaff",
+        emissiveIntensity:.52,
+        roughness:.28,
+        metalness:.12,
+        depthTest:false
+      })
+    );
+    root.userData = { type:"root" };
+    root.renderOrder = 8;
+    scene.add(root);
+    const rootLabel = labelSprite("政治", "#2eeaff", 1.05);
+    rootLabel.position.set(0, 1.95, 0);
+    rootLabel.material.depthTest = false;
+    rootLabel.renderOrder = 9;
+    scene.add(rootLabel);
+
+    const topicPositions = topics.map(topic => directionFor(`topic|${topic.id}`).multiplyScalar(displayRadiusBounds.max * .82));
+    const topicGeometry = new THREE.SphereGeometry(.34, 12, 8);
+    const topicMaterial = new THREE.MeshBasicMaterial({
+      color:initialPalette.topic,
+      transparent:true,
+      opacity:colorTheme === "dark" ? .64 : .68,
+      depthWrite:false,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+    });
+    const topicInstances = new THREE.InstancedMesh(topicGeometry, topicMaterial, topics.length);
+    topicInstances.userData = { type:"topics" };
+    const matrixHelper = new THREE.Object3D();
+    topicPositions.forEach((position, index) => {
+      matrixHelper.position.copy(position);
+      matrixHelper.scale.setScalar(1);
+      matrixHelper.updateMatrix();
+      topicInstances.setMatrixAt(index, matrixHelper.matrix);
+    });
+    topicInstances.instanceMatrix.needsUpdate = true;
+    topicInstances.renderOrder = 2;
+    scene.add(topicInstances);
+
+    const opinionGeometry = new THREE.SphereGeometry(.56, 6, 4);
+    const opinionMaterial = new THREE.MeshBasicMaterial({
+      color:"#ffffff",
+      transparent:true,
+      opacity:colorTheme === "dark" ? .6 : .62,
+      depthWrite:false,
+      fog:false,
+      toneMapped:false,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+    });
+    const opinionInstances = new THREE.InstancedMesh(opinionGeometry, opinionMaterial, model.nodes.length);
+    opinionInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    opinionInstances.userData = { type:"opinions" };
+    opinionInstances.renderOrder = 3;
+    const softHaloTexture = makeSoftHaloTexture();
+    const opinionGlowGeometry = new THREE.BufferGeometry();
+    const opinionGlowPositionAttribute = new THREE.BufferAttribute(
+      new Float32Array(model.nodes.length * 3),
+      3
+    ).setUsage(THREE.DynamicDrawUsage);
+    const opinionGlowColorAttribute = new THREE.BufferAttribute(
+      new Float32Array(model.nodes.length * 3),
+      3
+    );
+    opinionGlowGeometry.setAttribute("position", opinionGlowPositionAttribute);
+    opinionGlowGeometry.setAttribute("color", opinionGlowColorAttribute);
+    const opinionGlowMaterial = new THREE.PointsMaterial({
+      size:1.48,
+      map:softHaloTexture,
+      alphaMap:softHaloTexture,
+      vertexColors:true,
+      transparent:true,
+      opacity:colorTheme === "dark" ? .11 : .12,
+      depthWrite:false,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending,
+      sizeAttenuation:true,
+      toneMapped:false
+    });
+    const opinionGlowPoints = new THREE.Points(opinionGlowGeometry, opinionGlowMaterial);
+    opinionGlowPoints.renderOrder = 2;
+    const renderPositions = projection.nodes.map(nodeDisplayPosition);
+    let startPositions = renderPositions.map(position => position.clone());
+    let targetPositions = renderPositions.map(position => position.clone());
+    const opinionScales = model.nodes.map(node => .2 + Math.sqrt(node.urgency / 100) * .11);
+    function updateOpinionInstances(positionMix = 1) {
+      projection.nodes.forEach((node, index) => {
+        if (positionMix < 1) renderPositions[index].lerpVectors(startPositions[index], targetPositions[index], positionMix);
+        else renderPositions[index].copy(targetPositions[index]);
+        matrixHelper.position.copy(renderPositions[index]);
+        opinionGlowPositionAttribute.setXYZ(
+          index,
+          renderPositions[index].x,
+          renderPositions[index].y,
+          renderPositions[index].z
+        );
+        matrixHelper.scale.setScalar(opinionScales[index]);
+        matrixHelper.updateMatrix();
+        opinionInstances.setMatrixAt(index, matrixHelper.matrix);
+      });
+      opinionInstances.instanceMatrix.needsUpdate = true;
+      opinionGlowPositionAttribute.needsUpdate = true;
+    }
+    function updateOpinionColors() {
+      const palette = themePalette[colorTheme];
+      const color = new THREE.Color(palette.opinion);
+      const glowColor = color.clone().multiplyScalar(colorTheme === "dark" ? 1 : 1.65);
+      projection.nodes.forEach((node, index) => {
+        opinionInstances.setColorAt(index, color);
+        opinionGlowColorAttribute.setXYZ(index, glowColor.r, glowColor.g, glowColor.b);
+      });
+      opinionInstances.instanceColor.needsUpdate = true;
+      opinionGlowColorAttribute.needsUpdate = true;
+    }
+    updateOpinionInstances();
+    updateOpinionColors();
+    scene.add(opinionGlowPoints);
+    scene.add(opinionInstances);
+
+    const entanglementGeometry = new THREE.TorusGeometry(.43, .075, 6, 18);
+    const entanglementMaterial = new THREE.MeshBasicMaterial({
+      color:initialPalette.entanglement,
+      transparent:true,
+      opacity:colorTheme === "dark" ? .72 : .8,
+      depthWrite:false,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+    });
+    const entanglementInstances = new THREE.InstancedMesh(
+      entanglementGeometry,
+      entanglementMaterial,
+      projection.groups.length
+    );
+    entanglementInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    entanglementInstances.userData = { type:"entanglement" };
+    entanglementInstances.renderOrder = 4;
+    const entanglementGlowGeometry = new THREE.BufferGeometry();
+    const entanglementGlowPositionAttribute = new THREE.BufferAttribute(
+      new Float32Array(projection.groups.length * 3),
+      3
+    ).setUsage(THREE.DynamicDrawUsage);
+    entanglementGlowGeometry.setAttribute("position", entanglementGlowPositionAttribute);
+    const entanglementGlowMaterial = new THREE.PointsMaterial({
+      color:initialPalette.entanglement,
+      size:2.35,
+      map:softHaloTexture,
+      alphaMap:softHaloTexture,
+      transparent:true,
+      opacity:colorTheme === "dark" ? .15 : .14,
+      depthWrite:false,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending,
+      sizeAttenuation:true,
+      toneMapped:false
+    });
+    const entanglementGlowPoints = new THREE.Points(entanglementGlowGeometry, entanglementGlowMaterial);
+    entanglementGlowPoints.renderOrder = 3;
+    const groupRenderPositions = projection.groups.map(groupDisplayPosition);
+    let groupStartPositions = groupRenderPositions.map(position => position.clone());
+    let groupTargetPositions = groupRenderPositions.map(position => position.clone());
+    function updateEntanglementInstances(positionMix = 1) {
+      projection.groups.forEach((group, index) => {
+        if (positionMix < 1) groupRenderPositions[index].lerpVectors(
+          groupStartPositions[index],
+          groupTargetPositions[index],
+          positionMix
+        );
+        else groupRenderPositions[index].copy(groupTargetPositions[index]);
+        matrixHelper.position.copy(groupRenderPositions[index]);
+        matrixHelper.rotation.set(group.groupBit ? Math.PI / 2 : 0, group.groupBit ? .4 : -.4, group.groupBit ? .3 : -.3);
+        entanglementGlowPositionAttribute.setXYZ(
+          index,
+          groupRenderPositions[index].x,
+          groupRenderPositions[index].y,
+          groupRenderPositions[index].z
+        );
+        matrixHelper.scale.setScalar(group.groupBit ? 1.08 : .84);
+        matrixHelper.updateMatrix();
+        entanglementInstances.setMatrixAt(index, matrixHelper.matrix);
+      });
+      entanglementInstances.instanceMatrix.needsUpdate = true;
+      entanglementGlowPositionAttribute.needsUpdate = true;
+    }
+    updateEntanglementInstances();
+    scene.add(entanglementGlowPoints);
+    scene.add(entanglementInstances);
+
+    const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
+    scene.add(relationLines);
+    const relationGlowMaterial = new LineMaterial({
+      color:initialPalette.relation,
+      linewidth:1.55,
+      transparent:true,
+      opacity:colorTheme === "dark" ? .04 : .04,
+      depthWrite:false,
+      worldUnits:false,
+      alphaToCoverage:true,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending,
+      fog:false,
+      toneMapped:false
+    });
+    relationGlowMaterial.resolution.set(innerWidth, innerHeight);
+    const relationGlowLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowMaterial);
+    relationGlowLines.renderOrder = -1;
+    scene.add(relationGlowLines);
+    let relationEndpointIndices = [];
+    function rebuildRelationGeometry() {
+      relationEndpointIndices = [...projection.relations]
+        .sort((left, right) => right.strength - left.strength || left.id.localeCompare(right.id))
+        .slice(0, maxPersistentRelations)
+        .map(relation => ({
+        left:nodeIndexById.get(relation.leftId),
+        right:nodeIndexById.get(relation.rightId)
+      })).filter(indices => Number.isInteger(indices.left) && Number.isInteger(indices.right));
+      relationLines.geometry.dispose();
+      relationLines.geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(relationEndpointIndices.length * 6);
+      relationLines.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+      relationGlowLines.geometry.dispose();
+      relationGlowLines.geometry = new LineSegmentsGeometry();
+      updateRelationPositions();
+    }
+    function updateRelationPositions() {
+      const attribute = relationLines.geometry.getAttribute("position");
+      if (!attribute) return;
+      const glowPositions = new Float32Array(relationEndpointIndices.length * 6);
+      relationEndpointIndices.forEach((indices, index) => {
+        const left = renderPositions[indices.left];
+        const right = renderPositions[indices.right];
+        attribute.setXYZ(index * 2, left.x, left.y, left.z);
+        attribute.setXYZ(index * 2 + 1, right.x, right.y, right.z);
+        glowPositions.set([left.x, left.y, left.z, right.x, right.y, right.z], index * 6);
+      });
+      attribute.needsUpdate = true;
+      relationLines.geometry.computeBoundingSphere();
+      if (glowPositions.length) relationGlowLines.geometry.setPositions(glowPositions);
+    }
+    rebuildRelationGeometry();
+
+    const activeLines = makeLineSegments("#ffffff", .88);
+    activeLines.renderOrder = 5;
+    scene.add(activeLines);
+    const activeGlowOuterMaterial = new LineMaterial({
+      color:new THREE.Color("#10c8ec").multiplyScalar(2.25),
+      linewidth:4.2,
+      transparent:true,
+      opacity:.12,
+      depthWrite:false,
+      worldUnits:false,
+      alphaToCoverage:true,
+      blending:THREE.AdditiveBlending,
+      fog:false,
+      toneMapped:false
+    });
+    activeGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
+    const activeGlowOuterLines = new LineSegments2(new LineSegmentsGeometry(), activeGlowOuterMaterial);
+    activeGlowOuterLines.renderOrder = 3;
+    activeGlowOuterLines.visible = false;
+    scene.add(activeGlowOuterLines);
+    const activeGlowMaterial = new LineMaterial({
+      color:new THREE.Color("#40e8ff").multiplyScalar(3.2),
+      linewidth:2.25,
+      transparent:true,
+      opacity:.48,
+      depthWrite:false,
+      worldUnits:false,
+      alphaToCoverage:true,
+      blending:THREE.AdditiveBlending,
+      fog:false,
+      toneMapped:false
+    });
+    activeGlowMaterial.resolution.set(innerWidth, innerHeight);
+    const activeGlowLines = new LineSegments2(new LineSegmentsGeometry(), activeGlowMaterial);
+    activeGlowLines.renderOrder = 4;
+    activeGlowLines.visible = false;
+    scene.add(activeGlowLines);
+    const highlight = new THREE.Mesh(
+      new THREE.SphereGeometry(.7, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color:"#008cab",
+        transparent:true,
+        opacity:.38,
+        depthWrite:false,
+        blending:THREE.NormalBlending
+      })
+    );
+    highlight.visible = false;
+    highlight.renderOrder = 6;
+    scene.add(highlight);
+
+    function applyColorTheme(nextTheme) {
+      colorTheme = nextTheme === "dark" ? "dark" : "light";
+      const palette = themePalette[colorTheme];
+      const bloom = bloomByTheme[colorTheme];
+      const additiveNodes = colorTheme === "dark";
+      document.documentElement.dataset.theme = colorTheme;
+      scene.background.set(palette.background);
+      scene.fog.color.set(palette.fog);
+      relationLines.material.color.set(palette.relation);
+      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;
+      relationGlowMaterial.color.set(palette.relation);
+      relationGlowMaterial.opacity = .04;
+      relationGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
+      relationGlowMaterial.needsUpdate = true;
+      activeLines.material.color.set("#ffffff");
+      activeGlowMaterial.color.copy(new THREE.Color("#40e8ff").multiplyScalar(colorTheme === "dark" ? 3.2 : 2.15));
+      activeGlowOuterMaterial.color.copy(new THREE.Color("#10c8ec").multiplyScalar(colorTheme === "dark" ? 2.25 : 1.55));
+      bloomPass.strength = bloom.strength;
+      bloomPass.radius = bloom.radius;
+      bloomPass.threshold = bloom.threshold;
+      root.material.color.set(palette.root);
+      root.material.emissive.set(palette.entanglement);
+      topicMaterial.color.set(palette.topic);
+      topicMaterial.opacity = additiveNodes ? .64 : .68;
+      topicMaterial.blending = additiveNodes ? THREE.AdditiveBlending : THREE.NormalBlending;
+      topicMaterial.needsUpdate = true;
+      entanglementMaterial.color.set(palette.entanglement);
+      entanglementMaterial.opacity = additiveNodes ? .72 : .8;
+      entanglementMaterial.blending = additiveNodes ? THREE.AdditiveBlending : THREE.NormalBlending;
+      entanglementMaterial.needsUpdate = true;
+      entanglementGlowMaterial.color.copy(
+        new THREE.Color(palette.entanglement).multiplyScalar(additiveNodes ? 1 : 1.65)
+      );
+      opinionMaterial.opacity = additiveNodes ? .6 : .62;
+      opinionMaterial.blending = additiveNodes ? THREE.AdditiveBlending : THREE.NormalBlending;
+      opinionMaterial.needsUpdate = true;
+      opinionGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
+      entanglementGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
+      opinionGlowMaterial.opacity = additiveNodes ? .11 : .12;
+      entanglementGlowMaterial.opacity = additiveNodes ? .15 : .14;
+      opinionGlowMaterial.needsUpdate = true;
+      entanglementGlowMaterial.needsUpdate = true;
+      highlight.material.color.set(colorTheme === "dark" ? "#eaffff" : "#008cab");
+      updateOpinionColors();
+      themeButtons.forEach(button => button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.themeChoice === colorTheme)
+      ));
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set("theme", colorTheme);
+      history.replaceState(null, "", nextUrl);
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2(2, 2);
+    let pointerDirty = false;
+    let hovered = null;
+    let selected = { type:"root" };
+    let lastObservationSummary = null;
+    let transitionStartedAt = 0;
+    let transitioning = false;
+    let activeGlowAvailable = false;
+    let glowPulseStartedAt = -Infinity;
+    const glowPulseDuration = 760;
+    const transitionDuration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 950;
+
+    function setPointer(event) {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.x = (event.clientX - bounds.left) / bounds.width * 2 - 1;
+      pointer.y = -(event.clientY - bounds.top) / bounds.height * 2 + 1;
+      pointerDirty = true;
+    }
+    function hitFromPointer() {
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects([
+        opinionInstances,
+        entanglementInstances,
+        topicInstances,
+        root
+      ], false)[0];
+      if (!hit) return null;
+      if (hit.object === opinionInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"opinion", index:hit.instanceId, id:model.nodes[hit.instanceId].id };
+      }
+      if (hit.object === entanglementInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"entanglement", index:hit.instanceId, id:projection.groups[hit.instanceId].id };
+      }
+      if (hit.object === topicInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"topic", index:hit.instanceId, id:topics[hit.instanceId].id };
+      }
+      return { type:"root" };
+    }
+    function selectionPosition(item) {
+      if (!item || item.type === "root") return new THREE.Vector3();
+      if (item.type === "opinion") return renderPositions[item.index];
+      if (item.type === "entanglement") return groupRenderPositions[item.index];
+      return topicPositions[item.index];
+    }
+    function relationsForSelection(item) {
+      if (!item || item.type === "root") return [];
+      if (item.type === "opinion") {
+        return projection.relations.filter(relation => relation.leftId === item.id || relation.rightId === item.id);
+      }
+      if (item.type === "entanglement") {
+        return projection.relations.filter(relation => relation.groupId === item.id);
+      }
+      const memberIds = new Set(projection.nodes
+        .filter(node => node.observedTopicId === item.id)
+        .map(node => node.id));
+      return projection.relations.filter(relation => memberIds.has(relation.leftId) && memberIds.has(relation.rightId));
+    }
+    function updateActiveLines() {
+      const points = [];
+      for (const relation of relationsForSelection(selected).slice(0, maxSelectedRelations)) {
+        points.push(
+          renderPositions[nodeIndexById.get(relation.leftId)],
+          renderPositions[nodeIndexById.get(relation.rightId)]
+        );
+      }
+      if (selected?.type === "opinion") {
+        const node = projectionById.get(selected.id);
+        const topicIndex = topics.findIndex(topic => topic.id === node.observedTopicId);
+        points.push(renderPositions[selected.index], topicPositions[topicIndex]);
+      } else if (selected?.type === "entanglement") {
+        const group = groupById.get(selected.id);
+        const anchor = groupRenderPositions[selected.index];
+        for (const id of group.memberIds.slice(0, 120)) points.push(anchor, renderPositions[nodeIndexById.get(id)]);
+      }
+      activeLines.geometry.dispose();
+      activeLines.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const glowPositions = [];
+      for (const point of points) glowPositions.push(point.x, point.y, point.z);
+      activeGlowLines.geometry.dispose();
+      activeGlowLines.geometry = new LineSegmentsGeometry();
+      activeGlowAvailable = glowPositions.length >= 6;
+      activeGlowLines.visible = false;
+      if (activeGlowAvailable) activeGlowLines.geometry.setPositions(glowPositions);
+      activeGlowOuterLines.geometry.dispose();
+      activeGlowOuterLines.geometry = new LineSegmentsGeometry();
+      activeGlowOuterLines.visible = false;
+      if (activeGlowAvailable) activeGlowOuterLines.geometry.setPositions(glowPositions);
+    }
+    function triggerRelationGlow() {
+      glowPulseStartedAt = performance.now();
+    }
+    function renderDetails(item) {
+      if (!item || item.type === "root") {
+        const result = lastObservationSummary
+          ? `<p class="result">再観測 ${lastObservationSummary.nodeCount.toLocaleString("ja-JP")}件 / 所属変更 ${lastObservationSummary.topicChanges.toLocaleString("ja-JP")}件 / 平均距離差 ${lastObservationSummary.meanDistanceDelta.toFixed(2)}</p>`
+          : "";
+        details.innerHTML = `<h2>政治</h2><p>${projection.nodes.length.toLocaleString("ja-JP")}件の観測投影</p>${result}<dl><dt>計算方式</dt><dd>${observationMode === "amplitude" ? "複素振幅・Born則" : "古典相関"}</dd><dt>観測軸</dt><dd>${basisLabels[basis]}</dd><dt>観測番号</dt><dd>${epoch}</dd><dt>観測シード</dt><dd>${escapeHtml(observationSeed)}</dd></dl>`;
+        return;
+      }
+      if (item.type === "opinion") {
+        const source = sourceById.get(item.id);
+        const observed = projectionById.get(item.id);
+        const originalTopic = topicById.get(source.topicId);
+        const observedTopic = topicById.get(observed.observedTopicId);
+        details.innerHTML = `<h2>${escapeHtml(observedTopic.label)}</h2><p>${escapeHtml(source.text)}</p><dl><dt>意見ID</dt><dd>${escapeHtml(source.id)}</dd><dt>出典</dt><dd>合成検証データ</dd><dt>元の所属</dt><dd>${escapeHtml(originalTopic.label)}</dd><dt>観測所属</dt><dd>${escapeHtml(observedTopic.label)}</dd><dt>表示半径</dt><dd>${targetPositions[item.index].length().toFixed(2)}</dd><dt>重複統合</dt><dd>${source.occurrenceCount}件</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+        return;
+      }
+      if (item.type === "entanglement") {
+        const group = groupById.get(item.id);
+        const result = lastObservationSummary?.groupId === group.id
+          ? `<p class="result">このノードを再観測 / 所属変更 ${lastObservationSummary.topicChanges.toLocaleString("ja-JP")}件 / 平均距離差 ${lastObservationSummary.meanDistanceDelta.toFixed(2)}</p>`
+          : "";
+        const quantum = group.quantumState;
+        const quantumRows = quantum
+          ? `<dt>論理状態</dt><dd>${Math.cos(quantum.schmidtAngle).toFixed(3)}|00&gt; + e<sup>iφ</sup>${Math.sin(quantum.schmidtAngle).toFixed(3)}|11&gt;</dd><dt>観測結果</dt><dd>${quantum.outcome} (${(quantum.selectedProbability * 100).toFixed(1)}%)</dd><dt>もつれ度</dt><dd>${quantum.concurrence.toFixed(3)}</dd><dt>量子情報量</dt><dd>${quantum.entanglementEntropy.toFixed(3)} bit</dd>`
+          : `<dt>観測枝</dt><dd>${group.groupBit}</dd>`;
+        const sourceIds = group.derivedContent.sourceNodeIds.map(escapeHtml).join("<br>");
+        details.innerHTML = `<h2>量子もつれノード ${item.index + 1}</h2><p class="generated">${escapeHtml(group.derivedContent.text)}</p>${result}<dl><dt>出典</dt><dd>合成検証データ</dd><dt>計算方式</dt><dd>${quantum ? "複素振幅・Born則" : "古典相関"}</dd><dt>観測軸</dt><dd>${basisLabels[basis]}</dd><dt>構成意見</dt><dd>${group.memberIds.length}件</dd><dt>文章素材ID</dt><dd>${sourceIds || "なし"}</dd>${quantumRows}<dt>グループ</dt><dd>${escapeHtml(group.key)}</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+        return;
+      }
+      const topic = topicById.get(item.id);
+      const memberCount = projection.nodes.filter(node => node.observedTopicId === item.id).length;
+      details.innerHTML = `<h2>${escapeHtml(topic.label)}</h2><p>${escapeHtml(topic.categoryLabel)}</p><dl><dt>観測所属</dt><dd>${memberCount}件</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+    }
+    function weightedNodeScore(node) {
+      const weights = basisWeights[basis];
+      return (node.urgency / 100) * weights[0]
+        + (node.motivation / 100) * weights[1]
+        + (node.validity / 100) * weights[2];
+    }
+    function formatTrace(item, action, sequence) {
+      const mode = observationMode === "amplitude" ? "amplitude/Born" : "correlated/classic";
+      const heading = [
+        `[${String(sequence).padStart(2, "0")}] ${action}`,
+        `$ observe --mode ${mode} --basis ${basis} --epoch ${epoch}`,
+        `seed = ${observationSeed}`
+      ];
+      if (item?.type === "opinion") {
+        const source = sourceById.get(item.id);
+        const observed = projectionById.get(item.id);
+        const weights = basisWeights[basis];
+        const nodeScore = weightedNodeScore(source);
+        const group = model.groups.find(candidate => candidate.id === observed.groupId);
+        const groupScore = group.memberIds.reduce(
+          (sum, id) => sum + weightedNodeScore(sourceById.get(id)),
+          0
+        ) / Math.max(1, group.memberIds.length);
+        const branchDelta = observed.bit ? 0.09 : -0.09;
+        const residual = observed.observedWeight - nodeScore * 0.68 - groupScore * 0.22 - branchDelta;
+        return [
+          ...heading,
+          `node = ${source.id}`,
+          `input = { urgency:${source.urgency}, motivation:${source.motivation}, validity:${source.validity} }`,
+          `score = (${source.urgency}/100)*${weights[0]} + (${source.motivation}/100)*${weights[1]} + (${source.validity}/100)*${weights[2]}`,
+          `      = ${nodeScore.toFixed(6)}`,
+          `weight = score*0.68 + group*0.22 + branch + jitter`,
+          `       = ${nodeScore.toFixed(6)}*0.68 + ${groupScore.toFixed(6)}*0.22 ${branchDelta >= 0 ? "+" : "-"} ${Math.abs(branchDelta).toFixed(2)} ${residual >= 0 ? "+" : "-"} ${Math.abs(residual).toFixed(6)}`,
+          `       = ${observed.observedWeight.toFixed(6)}`,
+          `analysis_distance = ${observed.distance.toFixed(6)}  # layout unused`,
+          `display_radius = ${targetPositions[item.index].length().toFixed(6)}  # deterministic spread`,
+          `topic = ${observed.observedTopicId} / coupling = ${observed.coupling.toFixed(6)}`
+        ].join("\n");
+      }
+      if (item?.type === "entanglement") {
+        const group = groupById.get(item.id);
+        const quantum = group.quantumState;
+        return quantum ? [
+          ...heading,
+          `group = ${group.id} / members = ${group.memberIds.length}`,
+          `|psi> = cos(theta)|00> + exp(i*phi)sin(theta)|11>`,
+          `P(outcome) = |amplitude|^2 = ${quantum.selectedProbability.toFixed(6)}`,
+          `outcome = ${quantum.outcome}`,
+          `concurrence = ${quantum.concurrence.toFixed(6)}`,
+          `entropy = ${quantum.entanglementEntropy.toFixed(6)} bit`
+        ].join("\n") : [
+          ...heading,
+          `group = ${group.id} / members = ${group.memberIds.length}`,
+          `near_probability = ${group.nearProbability.toFixed(6)}`,
+          `observed_bit = ${group.groupBit}`
+        ].join("\n");
+      }
+      return [
+        ...heading,
+        `basis score = U*${basisWeights[basis][0]} + M*${basisWeights[basis][1]} + V*${basisWeights[basis][2]}`,
+        `observed_weight = node_score*0.68 + group_score*0.22 + branch + jitter`,
+        `analysis_distance = f(observed_weight)  # layout unused`,
+        `display_radius = hash(node, phase) -> [${displayRadiusBounds.min}, ${displayRadiusBounds.max}]`,
+        `nodes = ${projection.nodes.length} / groups = ${projection.groups.length} / relations = ${projection.relations.length}`,
+        `$ select <node>  # show substituted values`
+      ].join("\n");
+    }
+    function renderTraceHistory(activeEntry = "") {
+      const completed = activeEntry ? traceEntries.slice(-23) : traceEntries.slice(-24);
+      traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\n\n");
+      requestAnimationFrame(() => {
+        const container = traceOutput.parentElement;
+        container.scrollTop = container.scrollHeight;
+      });
+    }
+    async function processTraceQueue(generation) {
+      if (traceTyping) return;
+      traceTyping = true;
+      while (traceQueue.length && generation === traceGeneration) {
+        const entry = traceQueue.shift();
+        if (traceTypeDelay > 0) {
+          let activeEntry = "";
+          for (const character of entry) {
+            if (generation !== traceGeneration) break;
+            activeEntry += character;
+            renderTraceHistory(activeEntry);
+            await new Promise(resolve => setTimeout(resolve, traceTypeDelay));
+          }
+          if (generation !== traceGeneration) break;
+        }
+        traceEntries.push(entry);
+        if (traceEntries.length > 24) traceEntries.shift();
+        renderTraceHistory();
+      }
+      traceTyping = false;
+      if (traceQueue.length) void processTraceQueue(traceGeneration);
+    }
+    function appendTrace(item, action) {
+      traceState.textContent = `EPOCH ${epoch}`;
+      traceSequence += 1;
+      traceGeneration += 1;
+      traceQueue.length = 0;
+      traceQueue.push(formatTrace(item, action, traceSequence));
+      void processTraceQueue(traceGeneration);
+    }
+    function updateStatus() {
+      const merged = rawCandidates.length - model.nodes.length;
+      status.innerHTML =
+        `入力  ${rawCandidates.length.toLocaleString("ja-JP")}件\n` +
+        `重複統合  ${merged.toLocaleString("ja-JP")}件\n` +
+        `固有ノード  ${model.nodes.length.toLocaleString("ja-JP")}件\n` +
+        `もつれノード  ${projection.groups.length}件\n` +
+        `観測関係  ${projection.relations.length.toLocaleString("ja-JP")}本\n` +
+        `常時描画  ${relationEndpointIndices.length.toLocaleString("ja-JP")}本\n` +
+        `表示半径  ${displayRadiusBounds.min.toFixed(0)}–${displayRadiusBounds.max.toFixed(0)}\n` +
+        `計算方式  ${observationMode === "amplitude" ? "複素振幅・Born則" : "古典相関"}\n` +
+        `<span class="optional">観測シード  ${escapeHtml(observationSeed)}:${epoch}</span>`;
+    }
+    function refreshSelection() {
+      if (selected?.type === "opinion") selected.index = nodeIndexById.get(selected.id);
+      if (selected?.type === "entanglement") selected.index = projection.groups.findIndex(group => group.id === selected.id);
+      updateActiveLines();
+      renderDetails(selected);
+    }
+    function summarizeObservation(previousProjection, nextProjection, groupId) {
+      const previousById = new Map(previousProjection.nodes.map(node => [node.id, node]));
+      const targetIds = groupId
+        ? new Set(model.groups.find(group => group.id === groupId).memberIds)
+        : null;
+      let nodeCount = 0;
+      let topicChanges = 0;
+      let distanceDelta = 0;
+      for (const node of nextProjection.nodes) {
+        if (targetIds && !targetIds.has(node.id)) continue;
+        const previous = previousById.get(node.id);
+        if (!previous) continue;
+        nodeCount += 1;
+        if (previous.observedTopicId !== node.observedTopicId) topicChanges += 1;
+        distanceDelta += Math.abs(previous.distance - node.distance);
+      }
+      return {
+        groupId,
+        nodeCount,
+        topicChanges,
+        meanDistanceDelta: distanceDelta / Math.max(1, nodeCount)
+      };
+    }
+    function mergeGroupProjection(nextProjection, groupId) {
+      const nextNodeById = new Map(nextProjection.nodes.map(node => [node.id, node]));
+      const groupMemberIds = new Set(model.groups.find(group => group.id === groupId).memberIds);
+      const nodes = projection.nodes.map(node => groupMemberIds.has(node.id) ? nextNodeById.get(node.id) : node);
+      const relations = [
+        ...projection.relations.filter(relation => relation.groupId !== groupId),
+        ...nextProjection.relations.filter(relation => relation.groupId === groupId)
+      ];
+      const nextGroup = nextProjection.groups.find(group => group.id === groupId);
+      const groups = projection.groups.map(group => group.id === groupId ? nextGroup : group);
+      return { ...nextProjection, nodes, relations, groups };
+    }
+    function applyObservation(nextProjection, groupId = null) {
+      lastObservationSummary = summarizeObservation(projection, nextProjection, groupId);
+      projection = groupId ? mergeGroupProjection(nextProjection, groupId) : nextProjection;
+      projectionById = new Map(projection.nodes.map(node => [node.id, node]));
+      groupById = new Map(projection.groups.map(group => [group.id, group]));
+      startPositions = renderPositions.map(position => position.clone());
+      targetPositions = projection.nodes.map(nodeDisplayPosition);
+      groupStartPositions = groupRenderPositions.map(position => position.clone());
+      groupTargetPositions = projection.groups.map(groupDisplayPosition);
+      updateOpinionColors();
+      rebuildRelationGeometry();
+      transitionStartedAt = performance.now();
+      transitioning = transitionDuration > 0;
+      if (!transitioning) {
+        updateOpinionInstances();
+        updateEntanglementInstances();
+        updateRelationPositions();
+      }
+      refreshSelection();
+      updateStatus();
+      const observedItem = groupId
+        ? { type:"entanglement", id:groupId, index:projection.groups.findIndex(group => group.id === groupId) }
+        : { type:"root" };
+      appendTrace(observedItem, groupId ? "OBSERVE GROUP" : "OBSERVE ALL");
+      window.__ENTANGLEMENT_PROTOTYPE__.observationCount += 1;
+    }
+    function syncObservationUrl() {
+      const nextUrl = new URL(location.href);
+      nextUrl.searchParams.set("basis", basis);
+      nextUrl.searchParams.set("mode", observationMode);
+      nextUrl.searchParams.set("theme", colorTheme);
+      history.replaceState(null, "", nextUrl);
+    }
+    function observeAll(nextBasis = basis, resample = true, force = false) {
+      if (!force && !resample && nextBasis === basis) return;
+      basis = nextBasis;
+      if (resample) epoch += 1;
+      applyObservation(calculateProjection({
+        basis,
+        seed:observationSeed,
+        epoch
+      }));
+      basisButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.basis === basis)));
+      syncObservationUrl();
+    }
+    function observeGroup(groupId) {
+      epoch += 1;
+      const next = calculateProjection({ basis, seed:observationSeed, epoch });
+      applyObservation(next, groupId);
+    }
+
+    function changeObservationMode(nextMode) {
+      const normalizedMode = nextMode === "amplitude" ? "amplitude" : "correlated";
+      if (normalizedMode === observationMode) return;
+      observationMode = normalizedMode;
+      observeAll(basis, false, true);
+      modelButtons.forEach(button => button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.model === observationMode)
+      ));
+      syncObservationUrl();
+    }
+
+    renderer.domElement.addEventListener("pointermove", setPointer);
+    renderer.domElement.addEventListener("pointerleave", () => {
+      pointer.set(2, 2);
+      pointerDirty = true;
+    });
+    renderer.domElement.addEventListener("click", () => {
+      if (!hovered) return;
+      selected = { ...hovered };
+      if (selected.type === "root") observeAll();
+      else if (selected.type === "entanglement") observeGroup(selected.id);
+      else {
+        refreshSelection();
+        if (selected.type === "opinion") appendTrace(selected, "SELECT NODE");
+      }
+      triggerRelationGlow();
+    });
+    basisButtons.forEach(button => button.addEventListener("click", () => observeAll(button.dataset.basis, false)));
+    modelButtons.forEach(button => button.addEventListener("click", () => changeObservationMode(button.dataset.model)));
+    themeButtons.forEach(button => button.addEventListener("click", () => applyColorTheme(button.dataset.themeChoice)));
+    observeButton.addEventListener("click", () => observeAll());
+    basisButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.basis === basis)));
+    modelButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.model === observationMode)));
+    themeButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.themeChoice === colorTheme)));
+    syncObservationUrl();
+
+    let relationFrame = 0;
+    function animate(now = performance.now()) {
+      requestAnimationFrame(animate);
+      root.rotation.y = now * .00018;
+      if (transitioning) {
+        const rawProgress = clamp((now - transitionStartedAt) / transitionDuration, 0, 1);
+        const progress = 1 - Math.pow(1 - rawProgress, 3);
+        updateOpinionInstances(progress);
+        updateEntanglementInstances(progress);
+        relationFrame += 1;
+        if (relationFrame % 2 === 0 || rawProgress >= 1) {
+          updateRelationPositions();
+          if (selected?.type !== "root") updateActiveLines();
+        }
+        if (rawProgress >= 1) transitioning = false;
+      }
+      if (pointerDirty) {
+        hovered = hitFromPointer();
+        pointerDirty = false;
+      }
+      const active = hovered || selected;
+      renderer.domElement.style.cursor = hovered ? "pointer" : "grab";
+      highlight.visible = Boolean(active);
+      if (active) {
+        highlight.position.copy(selectionPosition(active));
+        const scale = active.type === "root" ? 1.5 : active.type === "opinion" ? .38 : active.type === "entanglement" ? .62 : .48;
+        highlight.scale.setScalar(scale);
+      }
+      const glowProgress = clamp((now - glowPulseStartedAt) / glowPulseDuration, 0, 1);
+      const glowStrength = Math.pow(1 - glowProgress, 1.7);
+      const showRelationGlow = activeGlowAvailable && glowStrength > .001;
+      activeGlowLines.visible = showRelationGlow;
+      activeGlowOuterLines.visible = showRelationGlow;
+      activeGlowMaterial.opacity = .42 * glowStrength;
+      activeGlowOuterMaterial.opacity = .075 * glowStrength;
+      controls.update();
+      composer.render();
+    }
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      composer.setSize(innerWidth, innerHeight);
+      activeGlowMaterial.resolution.set(innerWidth, innerHeight);
+      activeGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
+      relationGlowMaterial.resolution.set(innerWidth, innerHeight);
+    });
+
+    window.__ENTANGLEMENT_PROTOTYPE__ = {
+      ready:true,
+      rawCount:rawCandidates.length,
+      uniqueCount:model.nodes.length,
+      duplicateCount:rawCandidates.length - model.nodes.length,
+      groupCount:model.groups.length,
+      get basis() { return basis; },
+      get epoch() { return epoch; },
+      get relationCount() { return projection.relations.length; },
+      observationCount:0,
+      observe:observeAll
+    };
+    updateStatus();
+    renderDetails(selected);
+    appendTrace(selected, "INITIAL OBSERVATION");
+    loading.hidden = true;
+    animate();
+  </script>
+</body>
+</html>

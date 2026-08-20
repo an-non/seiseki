@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "seiseki-opinion-network-preview",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-08-21",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  }
+}
