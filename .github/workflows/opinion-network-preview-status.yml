@@ -28,17 +28,16 @@ jobs:
           set -uo pipefail
           : > /tmp/reconstruct.log
           {
-            echo "bootstrap listing:"
-            ls -l bootstrap || true
             echo "part byte counts:"
             wc -c bootstrap/part-* || true
             cat bootstrap/part-* > /tmp/seiseki-integration-source.b64
             echo "combined_b64_bytes=$(wc -c < /tmp/seiseki-integration-source.b64)"
-            if ! base64 --decode /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz 2>/tmp/base64.err; then
-              echo "base64_decode=failed"
+            if ! base64 --decode --ignore-garbage /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz 2>/tmp/base64.err; then
+              echo "base64_decode_ignore_garbage=failed"
               cat /tmp/base64.err
               exit 11
             fi
+            echo "base64_decode_ignore_garbage=success"
             echo "decoded_bytes=$(wc -c < /tmp/seiseki-integration-source.tar.xz)"
             echo "archive_sha256=$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')"
             if ! xz -t /tmp/seiseki-integration-source.tar.xz 2>/tmp/xz.err; then
@@ -126,7 +125,6 @@ jobs:
             result=success
           fi
           diagnostic="$(tail -n 20 /tmp/reconstruct.log 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | sed 's/`/'"'"'/g' | cut -c1-1600)"
-
           rm -rf local/dist local/node_modules cloudflare/node_modules
           cat > INTEGRATION_VERIFICATION.md <<EOF
           # SEISEKI integration verification
@@ -146,22 +144,18 @@ jobs:
           - production_touched: false
           - reconstruct_diagnostic: ${diagnostic:-unavailable}
           EOF
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- INTEGRATION_VERIFICATION.md
-
           if [ "$result" = success ]; then
             git add -- .gitignore AGENTS.md CHANGELOG.md HANDOFF.md app cloudflare core docs legacy local production prototypes scripts tests
             git rm -r --ignore-unmatch bootstrap
           fi
-
           if git diff --cached --quiet; then
             exit 0
           fi
           git commit -m "Record SEISEKI integration verification ${result}"
           git push origin HEAD:feature/quantum-app-integration
-
           if [ "$result" != success ]; then
             exit 1
           fi
