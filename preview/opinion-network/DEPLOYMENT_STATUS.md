@@ -1,10 +1,10 @@
 # Opinion network preview deployment
 
-- credentials_ready: false
-- deploy_outcome: skipped
-- deployment_url: 
+- credentials_ready: true
+- deploy_outcome: success
+- deployment_url: https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev
 - worker: seiseki-opinion-network-preview
 - source_branch: feature/opinion-network-preview
-- trigger_commit: cab0bca370e1781dfc56f6ed4bf6f980f046bfd6
+- trigger_commit: 53bd9cfa270ea46cdc5d9ae4f5c8866e7d741f9d
 - existing_seiseki_staging_touched: false
 - d1_migrations_run: false
