@@ -110,22 +110,22 @@
       right:20px;
       top:96px;
       bottom:auto;
-      width:min(350px,calc(100% - 40px));
-      min-height:112px;
-      max-height:min(260px,calc(100vh - 190px));
+      width:min(292px,calc(100% - 40px));
+      min-height:92px;
+      max-height:min(210px,calc(100vh - 190px));
       overflow:auto;
-      padding:14px 15px;
+      padding:10px 12px;
       border:1px solid var(--rule);
       border-radius:6px;
       background:var(--panel);
       box-shadow:var(--panel-shadow);
       backdrop-filter:blur(10px);
     }
-    .details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }
-    .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
-    .details .generated { color:var(--ink); font-size:12px; }
-    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }
-    .details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
+    .details h2 { margin:0 0 5px; color:var(--ink); font-size:12px; }
+    .details p { margin:0; color:var(--sub); font-size:10px; line-height:1.55; }
+    .details .generated { color:var(--ink); font-size:11px; }
+    .details .result { margin-top:6px; color:var(--cyan); font:9px/1.45 "IBM Plex Mono",Consolas,monospace; }
+    .details dl { display:grid; grid-template-columns:64px 1fr; gap:3px 7px; margin:8px 0 0; font-size:10px; }
     .details dt { color:var(--sub); }
     .details dd { margin:0; overflow-wrap:anywhere; }
     .trace {
@@ -133,9 +133,9 @@
       z-index:7;
       left:20px;
       bottom:20px;
-      width:min(470px,calc(100% - 410px));
-      height:min(56vh,540px);
-      max-height:calc(100vh - 210px);
+      width:min(390px,calc(100% - 350px));
+      height:min(40vh,360px);
+      max-height:calc(100vh - 260px);
       overflow:auto;
       scrollbar-width:none;
       padding:2px 0;
@@ -143,11 +143,11 @@
       background:transparent;
       box-shadow:none;
       color:var(--trace);
-      font:10px/1.55 "IBM Plex Mono",Consolas,monospace;
+      font:9px/1.45 "IBM Plex Mono",Consolas,monospace;
       text-shadow:none;
     }
-    .trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }
-    .trace header span:last-child { color:var(--sub); }
+    .trace header { position:static; display:flex; justify-content:flex-start; margin:0 0 5px; color:var(--cyan); }
+    .trace header span:last-child { display:none; }
     .trace pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
     .trace::-webkit-scrollbar { display:none; }
     .loading {
@@ -925,8 +925,7 @@
       const mode = observationMode === "amplitude" ? "amplitude/Born" : "correlated/classic";
       const heading = [
         `[${String(sequence).padStart(2, "0")}] ${action}`,
-        `$ observe --mode ${mode} --basis ${basis} --epoch ${epoch}`,
-        `seed = ${observationSeed}`
+        `$ mode=${mode} basis=${basis} epoch=${epoch}`
       ];
       if (item?.type === "opinion") {
         const source = sourceById.get(item.id);
@@ -947,10 +946,9 @@
           `score = (${source.urgency}/100)*${weights[0]} + (${source.motivation}/100)*${weights[1]} + (${source.validity}/100)*${weights[2]}`,
           `      = ${nodeScore.toFixed(6)}`,
           `weight = score*0.68 + group*0.22 + branch + jitter`,
-          `       = ${nodeScore.toFixed(6)}*0.68 + ${groupScore.toFixed(6)}*0.22 ${branchDelta >= 0 ? "+" : "-"} ${Math.abs(branchDelta).toFixed(2)} ${residual >= 0 ? "+" : "-"} ${Math.abs(residual).toFixed(6)}`,
           `       = ${observed.observedWeight.toFixed(6)}`,
-          `analysis_distance = ${observed.distance.toFixed(6)}  # layout unused`,
-          `display_radius = ${targetPositions[item.index].length().toFixed(6)}  # deterministic spread`,
+          `distance = ${observed.distance.toFixed(6)}`,
+          `radius = ${targetPositions[item.index].length().toFixed(6)}`,
           `topic = ${observed.observedTopicId} / coupling = ${observed.coupling.toFixed(6)}`
         ].join("\n");
       }
@@ -976,14 +974,12 @@
         ...heading,
         `basis score = U*${basisWeights[basis][0]} + M*${basisWeights[basis][1]} + V*${basisWeights[basis][2]}`,
         `observed_weight = node_score*0.68 + group_score*0.22 + branch + jitter`,
-        `analysis_distance = f(observed_weight)  # layout unused`,
-        `display_radius = hash(node, phase) -> [${displayRadiusBounds.min}, ${displayRadiusBounds.max}]`,
+        `radius = [${displayRadiusBounds.min.toFixed(0)}, ${displayRadiusBounds.max.toFixed(0)}]`,
         `nodes = ${projection.nodes.length} / groups = ${projection.groups.length} / relations = ${projection.relations.length}`,
-        `$ select <node>  # show substituted values`
       ].join("\n");
     }
     function renderTraceHistory(activeEntry = "") {
-      const completed = activeEntry ? traceEntries.slice(-23) : traceEntries.slice(-24);
+      const completed = activeEntry ? traceEntries.slice(-15) : traceEntries.slice(-16);
       traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\n\n");
       requestAnimationFrame(() => {
         const container = traceOutput.parentElement;
@@ -1006,7 +1002,7 @@
           if (generation !== traceGeneration) break;
         }
         traceEntries.push(entry);
-        if (traceEntries.length > 24) traceEntries.shift();
+        if (traceEntries.length > 16) traceEntries.shift();
         renderTraceHistory();
       }
       traceTyping = false;
