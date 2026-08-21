@@ -25,13 +25,40 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          test -d bootstrap
-          cat bootstrap/part-* > /tmp/seiseki-integration-source.b64
-          base64 --decode /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz
-          tar -tJf /tmp/seiseki-integration-source.tar.xz >/dev/null
-          tar -xJf /tmp/seiseki-integration-source.tar.xz -C .
-          echo "archive_sha256=$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          set -uo pipefail
+          : > /tmp/reconstruct.log
+          {
+            echo "bootstrap listing:"
+            ls -l bootstrap || true
+            echo "part byte counts:"
+            wc -c bootstrap/part-* || true
+            cat bootstrap/part-* > /tmp/seiseki-integration-source.b64
+            echo "combined_b64_bytes=$(wc -c < /tmp/seiseki-integration-source.b64)"
+            if ! base64 --decode /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz 2>/tmp/base64.err; then
+              echo "base64_decode=failed"
+              cat /tmp/base64.err
+              exit 11
+            fi
+            echo "decoded_bytes=$(wc -c < /tmp/seiseki-integration-source.tar.xz)"
+            echo "archive_sha256=$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')"
+            if ! xz -t /tmp/seiseki-integration-source.tar.xz 2>/tmp/xz.err; then
+              echo "xz_test=failed"
+              cat /tmp/xz.err
+              exit 12
+            fi
+            echo "xz_test=success"
+            if ! tar -tJf /tmp/seiseki-integration-source.tar.xz >/tmp/tar-list.txt 2>/tmp/tar.err; then
+              echo "tar_test=failed"
+              cat /tmp/tar.err
+              exit 13
+            fi
+            echo "tar_test=success"
+            echo "archive_entries=$(wc -l < /tmp/tar-list.txt)"
+            tar -xJf /tmp/seiseki-integration-source.tar.xz -C .
+            echo "extract=success"
+            echo "archive_sha256=$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          } 2>&1 | tee /tmp/reconstruct.log
+          exit ${PIPESTATUS[0]}
 
       - name: Verify protected files and application tests
         id: app_tests
@@ -98,6 +125,7 @@ jobs:
           if [ "$RECONSTRUCT" = success ] && [ "$APP_TESTS" = success ] && [ "$CLOUDFLARE_TESTS" = success ] && [ "$VITE_BUILD" = success ]; then
             result=success
           fi
+          diagnostic="$(tail -n 20 /tmp/reconstruct.log 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | sed 's/`/'"'"'/g' | cut -c1-1600)"
 
           rm -rf local/dist local/node_modules cloudflare/node_modules
           cat > INTEGRATION_VERIFICATION.md <<EOF
@@ -116,6 +144,7 @@ jobs:
           - d1_migrations_run: false
           - staging_worker_touched: false
           - production_touched: false
+          - reconstruct_diagnostic: ${diagnostic:-unavailable}
           EOF
 
           git config user.name "github-actions[bot]"
@@ -127,6 +156,9 @@ jobs:
             git rm -r --ignore-unmatch bootstrap
           fi
 
+          if git diff --cached --quiet; then
+            exit 0
+          fi
           git commit -m "Record SEISEKI integration verification ${result}"
           git push origin HEAD:feature/quantum-app-integration
 
