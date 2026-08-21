@@ -76,6 +76,34 @@ jobs:
           s = s.replace('right:20px;\n      bottom:20px;', 'right:20px;\n      top:96px;\n      bottom:auto;', 1)
           s = s.replace('.details { right:11px; bottom:11px;', '.details { right:11px; top:auto; bottom:11px;')
 
+          # Compact desktop information panels.
+          s = s.replace('width:min(350px,calc(100% - 40px));', 'width:min(292px,calc(100% - 40px));')
+          s = s.replace('min-height:112px;', 'min-height:92px;')
+          s = s.replace('max-height:min(260px,calc(100vh - 190px));', 'max-height:min(210px,calc(100vh - 190px));')
+          s = s.replace('padding:14px 15px;', 'padding:10px 12px;')
+          s = s.replace('.details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }', '.details h2 { margin:0 0 5px; color:var(--ink); font-size:12px; }')
+          s = s.replace('.details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }', '.details p { margin:0; color:var(--sub); font-size:10px; line-height:1.55; }')
+          s = s.replace('.details .generated { color:var(--ink); font-size:12px; }', '.details .generated { color:var(--ink); font-size:11px; }')
+          s = s.replace('.details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }', '.details .result { margin-top:6px; color:var(--cyan); font:9px/1.45 "IBM Plex Mono",Consolas,monospace; }')
+          s = s.replace('.details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }', '.details dl { display:grid; grid-template-columns:64px 1fr; gap:3px 7px; margin:8px 0 0; font-size:10px; }')
+          s = s.replace('width:min(470px,calc(100% - 410px));', 'width:min(390px,calc(100% - 350px));')
+          s = s.replace('height:min(56vh,540px);', 'height:min(40vh,360px);')
+          s = s.replace('max-height:calc(100vh - 210px);', 'max-height:calc(100vh - 260px);')
+          s = s.replace('font:10px/1.55 "IBM Plex Mono",Consolas,monospace;', 'font:9px/1.45 "IBM Plex Mono",Consolas,monospace;', 1)
+          s = s.replace('.trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }', '.trace header { position:static; display:flex; justify-content:flex-start; margin:0 0 5px; color:var(--cyan); }')
+          s = s.replace('.trace header span:last-child { color:var(--sub); }', '.trace header span:last-child { display:none; }')
+
+          # Trim trace text while preserving the actual calculation path.
+          s = s.replace('        `$ observe --mode ${mode} --basis ${basis} --epoch ${epoch}`,\n        `seed = ${observationSeed}`', '        `$ mode=${mode} basis=${basis} epoch=${epoch}`')
+          s = s.replace('          `       = ${nodeScore.toFixed(6)}*0.68 + ${groupScore.toFixed(6)}*0.22 ${branchDelta >= 0 ? "+" : "-"} ${Math.abs(branchDelta).toFixed(2)} ${residual >= 0 ? "+" : "-"} ${Math.abs(residual).toFixed(6)}`,\n', '')
+          s = s.replace('`analysis_distance = ${observed.distance.toFixed(6)}  # layout unused`', '`distance = ${observed.distance.toFixed(6)}`')
+          s = s.replace('`display_radius = ${targetPositions[item.index].length().toFixed(6)}  # deterministic spread`', '`radius = ${targetPositions[item.index].length().toFixed(6)}`')
+          s = s.replace('        `analysis_distance = f(observed_weight)  # layout unused`,\n', '')
+          s = s.replace('`display_radius = hash(node, phase) -> [${displayRadiusBounds.min}, ${displayRadiusBounds.max}]`', '`radius = [${displayRadiusBounds.min.toFixed(0)}, ${displayRadiusBounds.max.toFixed(0)}]`')
+          s = s.replace('        `$ select <node>  # show substituted values`\n', '')
+          s = s.replace('const completed = activeEntry ? traceEntries.slice(-23) : traceEntries.slice(-24);', 'const completed = activeEntry ? traceEntries.slice(-15) : traceEntries.slice(-16);')
+          s = s.replace('if (traceEntries.length > 24) traceEntries.shift();', 'if (traceEntries.length > 16) traceEntries.shift();')
+
           media_marker = '      .controls button { min-width:43px; padding:0 7px; }\n'
           if media_marker in s:
               start = s.index(media_marker) + len(media_marker)
@@ -105,6 +133,8 @@ jobs:
           assert '<script type="importmap">' in s
           assert 'import * as THREE from "three";' in s
           assert 'cdn.jsdelivr.net/npm/three@0.185.1' not in s
+          assert 'width:min(390px,calc(100% - 350px));' in s
+          assert '.trace header span:last-child { display:none; }' in s
           p.write_text(s)
           PY
 
@@ -163,6 +193,7 @@ jobs:
             echo "- trigger_commit: ${GITHUB_SHA}"
             echo "- module_loading: same-origin-importmap"
             echo "- demo_count_default: 5000"
+            echo "- ui_layout: compact-v1"
             echo "- existing_seiseki_staging_touched: false"
             echo "- d1_migrations_run: false"
           } > preview/opinion-network/DEPLOYMENT_STATUS.md
@@ -172,5 +203,5 @@ jobs:
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "Restore original SEISEKI preview loading"
+          git commit -m "Compact opinion network preview panels"
           git push origin HEAD:feature/opinion-network-preview
