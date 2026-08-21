@@ -5,7 +5,7 @@
 - deployment_url: https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev
 - worker: seiseki-opinion-network-preview
 - source_branch: feature/opinion-network-preview
-- trigger_commit: cea1e16c247a3fd1c9de1e2f5afe4f3a0ca92dc8
+- trigger_commit: e22e0f3019a860dce883265e447191a4d0f4766b
 - module_loading: same-origin-importmap
 - ui_baseline: relations1400
 - demo_count_default: 5000
