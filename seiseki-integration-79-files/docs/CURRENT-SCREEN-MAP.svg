@@ -1,0 +1,220 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1120" viewBox="0 0 1800 1120" role="img" aria-labelledby="title desc">
+  <title id="title">声析 SEISEKI 現行画面構成図</title>
+  <desc id="desc">単一ページアプリ内の回答、閲覧、自分の回答と、簡易ロックの管理画面、未接続の独立プレビューを示す。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#263a63"/>
+    </marker>
+    <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#78868e"/>
+    </marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#18243b" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .title { font: 700 30px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #172126; }
+      .subtitle { font: 400 15px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #536169; }
+      .group-title { font: 700 19px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #172126; }
+      .box-title { font: 700 15px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #172126; }
+      .body { font: 400 12px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #4d5a61; }
+      .small { font: 400 11px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #65727a; }
+      .tag { font: 700 11px 'Yu Gothic UI','Hiragino Kaku Gothic ProN',sans-serif; fill: #ffffff; }
+      .line { fill: none; stroke: #263a63; stroke-width: 2; marker-end: url(#arrow); }
+      .line-thin { fill: none; stroke: #263a63; stroke-width: 1.5; marker-end: url(#arrow); }
+      .line-dashed { fill: none; stroke: #78868e; stroke-width: 2; stroke-dasharray: 8 6; marker-end: url(#arrowMuted); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1120" fill="#f5f7f8"/>
+
+  <!-- Title -->
+  <path d="M28 24 H550 V91 L529 116 H28 Z" fill="#ffffff" stroke="#263a63" stroke-width="3" filter="url(#shadow)"/>
+  <text x="54" y="61" class="title">声析（SEISEKI）</text>
+  <text x="54" y="88" class="subtitle">現行画面構成図 / v0.15.2</text>
+  <rect x="581" y="37" width="365" height="52" rx="3" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="600" y="59" class="box-title">単一ページ内の画面状態切替</text>
+  <text x="600" y="78" class="body">URL・ブラウザ履歴は現在変化しない</text>
+
+  <!-- Start and Home -->
+  <circle cx="104" cy="166" r="13" fill="#263a63"/>
+  <line x1="104" y1="179" x2="104" y2="210" class="line"/>
+  <rect x="38" y="211" width="190" height="76" fill="#dcefdc" stroke="#263a63" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="38" y="211" width="190" height="27" fill="#176b5b"/>
+  <text x="133" y="230" text-anchor="middle" class="tag">HOME</text>
+  <text x="52" y="259" class="box-title">ホーム</text>
+  <text x="52" y="277" class="body">各機能の入口・集計概要</text>
+
+  <!-- Main SPA boundary -->
+  <rect x="25" y="306" width="1315" height="779" rx="4" fill="#e7f1e6" stroke="#263a63" stroke-width="3"/>
+  <text x="48" y="338" class="group-title">SEISEKI 本体（同一React SPA）</text>
+  <text x="48" y="359" class="body">共通ナビゲーションから view 状態を切り替える</text>
+
+  <!-- Navigation -->
+  <rect x="51" y="389" width="208" height="620" rx="18" fill="#ffdc79" stroke="#263a63" stroke-width="2"/>
+  <text x="72" y="421" class="group-title">共通ナビ</text>
+  <text x="72" y="442" class="body">全画面から切替可能</text>
+
+  <g filter="url(#shadow)">
+    <rect x="71" y="466" width="168" height="54" fill="#ffffff" stroke="#263a63"/>
+    <circle cx="92" cy="493" r="12" fill="#176b5b"/><text x="92" y="498" text-anchor="middle" class="tag">1</text>
+    <text x="112" y="490" class="box-title">回答する</text><text x="112" y="507" class="small">回答フローへ</text>
+
+    <rect x="71" y="536" width="168" height="54" fill="#ffffff" stroke="#263a63"/>
+    <circle cx="92" cy="563" r="12" fill="#245a8d"/><text x="92" y="568" text-anchor="middle" class="tag">2</text>
+    <text x="112" y="560" class="box-title">ダッシュボード</text><text x="112" y="577" class="small">集計を表示</text>
+
+    <rect x="71" y="606" width="168" height="54" fill="#ffffff" stroke="#263a63"/>
+    <circle cx="92" cy="633" r="12" fill="#245a8d"/><text x="92" y="638" text-anchor="middle" class="tag">3</text>
+    <text x="112" y="630" class="box-title">意見ツリー</text><text x="112" y="647" class="small">ネットワーク表示</text>
+
+    <rect x="71" y="676" width="168" height="54" fill="#ffffff" stroke="#263a63"/>
+    <circle cx="92" cy="703" r="12" fill="#245a8d"/><text x="92" y="708" text-anchor="middle" class="tag">4</text>
+    <text x="112" y="700" class="box-title">意見一覧</text><text x="112" y="717" class="small">絞り込み・参照</text>
+
+    <rect x="71" y="746" width="168" height="54" fill="#ffffff" stroke="#263a63"/>
+    <circle cx="92" cy="773" r="12" fill="#4f6672"/><text x="92" y="778" text-anchor="middle" class="tag">5</text>
+    <text x="112" y="770" class="box-title">自分の回答</text><text x="112" y="787" class="small">照会・撤回</text>
+
+    <rect x="71" y="816" width="168" height="54" fill="#fff1f2" stroke="#9a3d44"/>
+    <circle cx="92" cy="843" r="12" fill="#9a3d44"/><text x="92" y="848" text-anchor="middle" class="tag">6</text>
+    <text x="112" y="840" class="box-title">管理</text><text x="112" y="857" class="small">簡易ロックへ</text>
+  </g>
+
+  <rect x="71" y="906" width="168" height="76" fill="#fff7e8" stroke="#b57a11"/>
+  <text x="84" y="930" class="box-title">現在の制約</text>
+  <text x="84" y="950" class="body">戻る履歴は直前1件</text>
+  <text x="84" y="968" class="body">再読込はホームへ戻る</text>
+
+  <!-- Survey group -->
+  <rect x="292" y="389" width="440" height="620" rx="18" fill="#ffdc79" stroke="#263a63" stroke-width="2"/>
+  <text x="315" y="421" class="group-title">［回答する］機能</text>
+  <text x="315" y="442" class="body">登録・同意・回答・端末内解析を順に進める</text>
+
+  <g filter="url(#shadow)">
+    <rect x="327" y="470" width="370" height="65" fill="#dce9f7" stroke="#263a63"/>
+    <text x="346" y="494" class="box-title">登録 / ログイン</text>
+    <text x="346" y="516" class="body">既存セッションがあれば省略する。</text>
+
+    <rect x="327" y="561" width="370" height="65" fill="#ffffff" stroke="#263a63"/>
+    <text x="346" y="585" class="box-title">同意文確認</text>
+    <text x="346" y="607" class="body">同意しない場合はホームへ戻る。</text>
+
+    <rect x="327" y="652" width="370" height="65" fill="#ffffff" stroke="#263a63"/>
+    <text x="346" y="676" class="box-title">回答者属性</text>
+    <text x="346" y="698" class="body">統計グループ用の属性を選択する。</text>
+
+    <rect x="327" y="743" width="370" height="65" fill="#ffffff" stroke="#263a63"/>
+    <text x="346" y="767" class="box-title">設問 Q1 ... Qn</text>
+    <text x="346" y="789" class="body">選択・5段階・自由記述。下書きを保存する。</text>
+
+    <rect x="327" y="834" width="370" height="65" fill="#fce8c4" stroke="#263a63"/>
+    <text x="346" y="858" class="box-title">端末内解析・保存</text>
+    <text x="346" y="880" class="body">パラメータ、意見チャンク、集計を生成する。</text>
+
+    <rect x="327" y="925" width="370" height="65" fill="#dcefdc" stroke="#176b5b" stroke-width="2"/>
+    <text x="346" y="949" class="box-title">回答完了</text>
+    <text x="346" y="971" class="body">回答ID・解析結果を表示し、集計へ進む。</text>
+  </g>
+  <path d="M512 535 V561 M512 626 V652 M512 717 V743 M512 808 V834 M512 899 V925" class="line-thin"/>
+
+  <!-- Browse group -->
+  <rect x="765" y="389" width="540" height="365" rx="18" fill="#dce9f7" stroke="#263a63" stroke-width="2"/>
+  <text x="788" y="421" class="group-title">［集計・意見を閲覧する］機能</text>
+  <text x="788" y="442" class="body">集計から意見の分布と本文へ移る</text>
+
+  <rect x="800" y="478" width="210" height="80" fill="#ffffff" stroke="#263a63" filter="url(#shadow)"/>
+  <text x="820" y="504" class="box-title">ダッシュボード</text>
+  <text x="820" y="527" class="body">統計・属性・時系列</text>
+  <text x="820" y="545" class="body">トピック概要を表示</text>
+
+  <rect x="1056" y="478" width="210" height="80" fill="#ffffff" stroke="#263a63" filter="url(#shadow)"/>
+  <text x="1076" y="504" class="box-title">意見ツリー</text>
+  <text x="1076" y="527" class="body">トピック・対象・ノード</text>
+  <text x="1076" y="545" class="body">を選択する</text>
+
+  <rect x="928" y="632" width="210" height="80" fill="#ffffff" stroke="#263a63" filter="url(#shadow)"/>
+  <text x="948" y="658" class="box-title">意見一覧</text>
+  <text x="948" y="681" class="body">選択条件を引き継ぎ</text>
+  <text x="948" y="699" class="body">元の意見を表示する</text>
+
+  <path d="M1010 518 H1056" class="line-thin"/>
+  <path d="M1161 558 V592 H1033 V632" class="line-thin"/>
+  <path d="M928 672 H868 V589 H1056" class="line-thin"/>
+  <text x="1065" y="590" class="small">絞り込み条件</text>
+
+  <!-- My response group -->
+  <rect x="765" y="784" width="540" height="225" rx="18" fill="#eef1f3" stroke="#263a63" stroke-width="2"/>
+  <text x="788" y="816" class="group-title">［自分の回答］機能</text>
+  <text x="788" y="837" class="body">回答IDまたはログイン中アカウントから照会する</text>
+
+  <rect x="795" y="868" width="145" height="92" fill="#ffffff" stroke="#263a63"/>
+  <text x="814" y="894" class="box-title">回答ID照会</text>
+  <text x="814" y="916" class="body">本人の回答を</text><text x="814" y="934" class="body">取得する</text>
+  <rect x="962" y="868" width="145" height="92" fill="#ffffff" stroke="#263a63"/>
+  <text x="981" y="894" class="box-title">内容表示</text>
+  <text x="981" y="916" class="body">回答・分析・追記</text><text x="981" y="934" class="body">を確認する</text>
+  <rect x="1129" y="868" width="145" height="92" fill="#fff1f2" stroke="#9a3d44"/>
+  <text x="1148" y="894" class="box-title">回答撤回</text>
+  <text x="1148" y="916" class="body">削除後に集計を</text><text x="1148" y="934" class="body">再構築する</text>
+  <path d="M940 914 H962 M1107 914 H1129" class="line-thin"/>
+
+  <!-- Main navigation connectors -->
+  <path d="M239 493 H281 V501 H327" class="line-thin"/>
+  <path d="M239 563 H748 V518 H800" class="line-thin"/>
+  <path d="M239 633 H748 V518 H1056" class="line-thin"/>
+  <path d="M239 703 H748 V672 H928" class="line-thin"/>
+  <path d="M239 773 H748 V914 H795" class="line-thin"/>
+  <path d="M512 990 V1040 H905 V558" class="line-thin"/>
+
+  <!-- Admin separated boundary -->
+  <rect x="1380" y="224" width="385" height="575" rx="20" fill="#fae8ea" stroke="#9a3d44" stroke-width="3" stroke-dasharray="11 7"/>
+  <rect x="1412" y="249" width="174" height="28" rx="14" fill="#9a3d44"/>
+  <text x="1499" y="268" text-anchor="middle" class="tag">分離が必要な領域</text>
+  <text x="1412" y="311" class="group-title">Admin</text>
+  <text x="1412" y="333" class="body">現行は同一SPA内の簡易合言葉ロック</text>
+
+  <rect x="1412" y="365" width="321" height="68" fill="#ffffff" stroke="#9a3d44" filter="url(#shadow)"/>
+  <text x="1432" y="390" class="box-title">合言葉で解錠</text>
+  <text x="1432" y="413" class="body">サーバー認証・権限分離ではない。</text>
+
+  <rect x="1412" y="468" width="321" height="265" rx="14" fill="#ffdc79" stroke="#9a3d44"/>
+  <text x="1432" y="499" class="group-title">管理操作</text>
+  <rect x="1435" y="521" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1451" y="551" class="box-title">データ操作</text>
+  <rect x="1578" y="521" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1594" y="551" class="box-title">集計再構築</text>
+  <rect x="1435" y="581" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1451" y="611" class="box-title">JSON入出力</text>
+  <rect x="1578" y="581" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1594" y="611" class="box-title">設問編集</text>
+  <rect x="1435" y="641" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1451" y="671" class="box-title">同意文編集</text>
+  <rect x="1578" y="641" width="132" height="48" fill="#ffffff" stroke="#9a3d44"/>
+  <text x="1594" y="671" class="box-title">回答削除</text>
+  <text x="1435" y="715" class="small">共有ストレージを一般画面と共用</text>
+
+  <path d="M239 843 H1360 V399 H1412" class="line-dashed"/>
+  <text x="1186" y="827" class="small">現行：同一SPAから直接表示</text>
+
+  <!-- Independent previews -->
+  <rect x="1380" y="837" width="385" height="248" rx="20" fill="#eef1f3" stroke="#78868e" stroke-width="3" stroke-dasharray="11 7"/>
+  <text x="1412" y="872" class="group-title">独立プレビュー</text>
+  <text x="1412" y="894" class="body">本体UIから正式な遷移なし / 開発用</text>
+
+  <rect x="1412" y="920" width="321" height="43" fill="#ffffff" stroke="#78868e"/>
+  <text x="1430" y="947" class="box-title">2D 意見ネットワーク</text>
+  <rect x="1412" y="975" width="321" height="43" fill="#ffffff" stroke="#78868e"/>
+  <text x="1430" y="1002" class="box-title">3D 階層ネットワーク</text>
+  <rect x="1412" y="1030" width="321" height="43" fill="#ffffff" stroke="#78868e"/>
+  <text x="1430" y="1057" class="box-title">量子もつれ観測</text>
+  <path d="M1305 518 H1353 V941 H1412" class="line-dashed"/>
+  <text x="1359" y="824" transform="rotate(-90 1359 824)" class="small">将来の正式導線候補</text>
+
+  <!-- Legend -->
+  <rect x="978" y="35" width="787" height="65" fill="#ffffff" stroke="#c7d0d5"/>
+  <circle cx="1007" cy="67" r="10" fill="#176b5b"/><text x="1025" y="72" class="body">主要画面</text>
+  <rect x="1130" y="57" width="20" height="20" fill="#ffdc79" stroke="#263a63"/><text x="1160" y="72" class="body">機能群</text>
+  <rect x="1263" y="57" width="20" height="20" fill="#fae8ea" stroke="#9a3d44" stroke-dasharray="4 3"/><text x="1293" y="72" class="body">要分離境界</text>
+  <line x1="1425" y1="67" x2="1480" y2="67" class="line-dashed"/><text x="1492" y="72" class="body">未接続・将来導線</text>
+  <text x="1658" y="72" class="small">2026-08-04</text>
+</svg>

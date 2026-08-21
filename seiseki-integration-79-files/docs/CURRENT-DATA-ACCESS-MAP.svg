@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1280" viewBox="0 0 1900 1280" role="img" aria-labelledby="title desc">
+  <title id="title">声析 現行データアクセス構成図</title>
+  <desc id="desc">画面、表示変数、ストレージアダプタ、共有および個人スコープのキー、Cloudflare WorkerとD1候補のアクセス関係を示す。</desc>
+  <defs>
+    <marker id="arrowRead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#245a8d"/></marker>
+    <marker id="arrowWrite" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#176b5b"/></marker>
+    <marker id="arrowDelete" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#a33c45"/></marker>
+    <marker id="arrowFuture" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7a858b"/></marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#172126" flood-opacity=".12"/></filter>
+    <style>
+      .title{font:700 30px 'Yu Gothic UI',sans-serif;fill:#172126}.sub{font:400 13px 'Yu Gothic UI',sans-serif;fill:#5d6970}
+      .gt{font:700 19px 'Yu Gothic UI',sans-serif;fill:#172126}.bt{font:700 14px 'Yu Gothic UI',sans-serif;fill:#172126}
+      .body{font:400 12px 'Yu Gothic UI',sans-serif;fill:#4f5b62}.small{font:400 10.5px 'Yu Gothic UI',sans-serif;fill:#657178}
+      .tag{font:700 11px 'Yu Gothic UI',sans-serif;fill:#fff}.read{fill:none;stroke:#245a8d;stroke-width:2;marker-end:url(#arrowRead)}
+      .write{fill:none;stroke:#176b5b;stroke-width:2;marker-end:url(#arrowWrite)}.del{fill:none;stroke:#a33c45;stroke-width:2;marker-end:url(#arrowDelete)}
+      .future{fill:none;stroke:#7a858b;stroke-width:2;stroke-dasharray:8 6;marker-end:url(#arrowFuture)}
+    </style>
+  </defs>
+  <rect width="1900" height="1280" fill="#f5f7f8"/>
+
+  <path d="M26 22H630V90L608 116H26Z" fill="#fff" stroke="#263a63" stroke-width="3" filter="url(#shadow)"/>
+  <text x="52" y="60" class="title">声析 現行データアクセス構成図</text>
+  <text x="52" y="88" class="sub">読出・書込・削除・表示変数 / v0.15.2</text>
+
+  <rect x="675" y="35" width="1190" height="65" fill="#fff" stroke="#c8d1d5"/>
+  <line x1="706" y1="58" x2="766" y2="58" class="read"/><text x="778" y="63" class="body">読出・表示</text>
+  <line x1="906" y1="58" x2="966" y2="58" class="write"/><text x="978" y="63" class="body">書込・更新</text>
+  <line x1="1117" y1="58" x2="1177" y2="58" class="del"/><text x="1189" y="63" class="body">削除</text>
+  <line x1="1304" y1="58" x2="1364" y2="58" class="future"/><text x="1376" y="63" class="body">未接続・移行候補</text>
+  <text x="1650" y="63" class="small">2026-08-04</text>
+
+  <!-- UI -->
+  <rect x="28" y="145" width="430" height="1045" rx="18" fill="#e7f1e6" stroke="#263a63" stroke-width="2"/>
+  <text x="52" y="180" class="gt">React UI / 画面</text>
+  <text x="52" y="203" class="body">読み出した値を状態変数へ入れ、各画面で表示する</text>
+
+  <g filter="url(#shadow)">
+    <rect x="62" y="237" width="360" height="104" fill="#fff" stroke="#263a63"/>
+    <text x="82" y="263" class="bt">起動・ホーム</text>
+    <text x="82" y="286" class="body">questions / policy / agg</text>
+    <text x="82" y="307" class="body">hasDraft / session / myId</text>
+    <text x="82" y="328" class="small">設定・集計概要・回答状態を表示</text>
+
+    <rect x="62" y="367" width="360" height="148" fill="#fff8e7" stroke="#b57a11"/>
+    <text x="82" y="393" class="bt">回答する / Survey</text>
+    <text x="82" y="416" class="body">読出: config / account / draft / 既存回答</text>
+    <text x="82" y="439" class="body">書込: response / agg / account.respId</text>
+    <text x="82" y="462" class="body">個人: draft / session / last:id</text>
+    <text x="82" y="488" class="small">回答送信後に集計JSONもクライアントで更新</text>
+
+    <rect x="62" y="541" width="360" height="142" fill="#e8f0f7" stroke="#245a8d"/>
+    <text x="82" y="567" class="bt">閲覧画面</text>
+    <text x="82" y="590" class="body">Home / Dashboard / Tree / Opinions</text>
+    <text x="82" y="613" class="body">主入力: agg 状態変数</text>
+    <text x="82" y="636" class="body">補助入力: questions / opFilter</text>
+    <text x="82" y="662" class="small">DBではなく agg:summary の派生値を描画</text>
+
+    <rect x="62" y="709" width="360" height="123" fill="#eef1f3" stroke="#596a72"/>
+    <text x="82" y="735" class="bt">自分の回答 / MyResponse</text>
+    <text x="82" y="758" class="body">読出: account.respId または last:id</text>
+    <text x="82" y="781" class="body">照会: resp:{id} と resp:{id}-2</text>
+    <text x="82" y="804" class="body">削除後: 全回答から集計を再構築</text>
+
+    <rect x="62" y="858" width="360" height="190" fill="#fae8ea" stroke="#9a3d44"/>
+    <text x="82" y="884" class="bt">管理 / Admin</text>
+    <text x="82" y="907" class="body">読み書き: config:* / resp:* / agg:summary</text>
+    <text x="82" y="930" class="body">更新: 設問・同意文・合言葉・回答・集計</text>
+    <text x="82" y="953" class="body">削除: ID指定 / デモ / 全回答</text>
+    <text x="82" y="976" class="body">入出力: 回答JSON import / 全件export</text>
+    <text x="82" y="1014" class="small">現行は管理者も同じクライアント権限で操作</text>
+  </g>
+
+  <rect x="62" y="1075" width="360" height="82" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="82" y="1101" class="bt">表示用一時変数</text>
+  <text x="82" y="1124" class="body">view / opFilter / result / selected node</text>
+  <text x="82" y="1146" class="small">永続DBではなくReactメモリ。再読込で消える。</text>
+
+  <!-- Adapter -->
+  <rect x="508" y="145" width="390" height="1045" rx="18" fill="#fff" stroke="#263a63" stroke-width="2"/>
+  <text x="532" y="180" class="gt">ストレージアダプタ</text>
+  <text x="532" y="203" class="body">全キーに pqx1: を付与し、値をJSON文字列化</text>
+
+  <rect x="542" y="245" width="322" height="159" fill="#e8f0f7" stroke="#245a8d" filter="url(#shadow)"/>
+  <rect x="542" y="245" width="322" height="30" fill="#245a8d"/>
+  <text x="703" y="266" text-anchor="middle" class="tag">共有スコープ shared=true</text>
+  <text x="562" y="301" class="bt">sGet(key)</text><text x="700" y="301" class="body">1件読出</text>
+  <text x="562" y="326" class="bt">sSet(key,val)</text><text x="700" y="326" class="body">作成・上書き</text>
+  <text x="562" y="351" class="bt">sDel(key)</text><text x="700" y="351" class="body">1件削除</text>
+  <text x="562" y="376" class="bt">sList(prefix)</text><text x="700" y="376" class="body">接頭辞一覧</text>
+
+  <rect x="542" y="437" width="322" height="135" fill="#eef1f3" stroke="#596a72" filter="url(#shadow)"/>
+  <rect x="542" y="437" width="322" height="30" fill="#596a72"/>
+  <text x="703" y="458" text-anchor="middle" class="tag">個人スコープ shared=false</text>
+  <text x="562" y="493" class="bt">pGet(key)</text><text x="700" y="493" class="body">本人領域を読出</text>
+  <text x="562" y="518" class="bt">pSet(key,val)</text><text x="700" y="518" class="body">本人領域へ保存</text>
+  <text x="562" y="543" class="bt">pDel(key)</text><text x="700" y="543" class="body">本人領域から削除</text>
+
+  <rect x="542" y="608" width="322" height="144" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="562" y="638" class="bt">__call(method,args)</text>
+  <text x="562" y="663" class="body">window.storage を最大6秒待機</text>
+  <text x="562" y="686" class="body">失敗・無応答なら __memStore へ退避</text>
+  <text x="562" y="709" class="body">メモリ退避後はセッション内だけ保持</text>
+  <text x="562" y="735" class="small">退避は永続保存・同期・DB保証ではない</text>
+
+  <rect x="542" y="787" width="322" height="165" fill="#fae8ea" stroke="#9a3d44"/>
+  <text x="562" y="817" class="bt">現行の信頼境界</text>
+  <text x="562" y="842" class="body">ブラウザ自身が共有データを読み書き・削除できる</text>
+  <text x="562" y="865" class="body">Admin合言葉はUIロックでしかない</text>
+  <text x="562" y="888" class="body">agg更新は last-write-wins</text>
+  <text x="562" y="911" class="body">競合・不整合時は全回答から再構築</text>
+  <text x="562" y="937" class="small">一般公開の本番DB境界としては不十分</text>
+
+  <rect x="542" y="987" width="322" height="158" fill="#e7f1e6" stroke="#176b5b"/>
+  <text x="562" y="1017" class="bt">認証補助</text>
+  <text x="562" y="1042" class="body">acctStorageKey = SHA-256(name) 先頭32桁</text>
+  <text x="562" y="1065" class="body">password = PBKDF2-SHA256 / 120,000回</text>
+  <text x="562" y="1088" class="body">salt・hash・respIdを共有領域に保存</text>
+  <text x="562" y="1111" class="small">試作上の攻撃コスト上昇で、サーバー認証ではない</text>
+
+  <!-- Stores -->
+  <rect x="948" y="145" width="485" height="1045" rx="18" fill="#fff" stroke="#263a63" stroke-width="2"/>
+  <text x="972" y="180" class="gt">現行キー型データ</text>
+  <text x="972" y="203" class="body">window.storage またはメモリ退避 / SQLなし</text>
+
+  <rect x="980" y="237" width="421" height="705" rx="14" fill="#e8f0f7" stroke="#245a8d"/>
+  <text x="1002" y="268" class="gt">共有キー</text>
+
+  <rect x="1003" y="291" width="375" height="74" fill="#fff" stroke="#245a8d"/>
+  <text x="1021" y="316" class="bt">config:questions</text><text x="1021" y="340" class="body">設問配列 → Survey / Dashboard</text>
+  <rect x="1003" y="378" width="375" height="74" fill="#fff" stroke="#245a8d"/>
+  <text x="1021" y="403" class="bt">config:policy</text><text x="1021" y="427" class="body">同意文・版 → Survey</text>
+  <rect x="1003" y="465" width="375" height="74" fill="#fff1f2" stroke="#9a3d44"/>
+  <text x="1021" y="490" class="bt">config:admin</text><text x="1021" y="514" class="body">簡易合言葉 → Admin解錠</text>
+  <rect x="1003" y="552" width="375" height="100" fill="#fff" stroke="#245a8d"/>
+  <text x="1021" y="577" class="bt">acct:{sha256(name)[0..32]}</text>
+  <text x="1021" y="600" class="body">name / salt / iter / hash / createdAt</text>
+  <text x="1021" y="623" class="body">respId → 回答との論理参照</text>
+  <rect x="1003" y="665" width="375" height="100" fill="#fff" stroke="#245a8d"/>
+  <text x="1021" y="690" class="bt">resp:{id} / resp:{id}-2</text>
+  <text x="1021" y="713" class="body">同意・属性・回答・原文・解析・チャンク</text>
+  <text x="1021" y="736" class="body">追記は pid / seq=2 で元回答へ論理参照</text>
+  <rect x="1003" y="778" width="375" height="137" fill="#fff8e7" stroke="#b57a11"/>
+  <text x="1021" y="803" class="bt">agg:summary</text>
+  <text x="1021" y="826" class="body">total / demo / questions / ideology</text>
+  <text x="1021" y="849" class="body">topics / targets / cross / series / rtree</text>
+  <text x="1021" y="872" class="body">net.nodes・links / opinions / updatedAt</text>
+  <text x="1021" y="897" class="small">閲覧画面の主要表示元。回答から再生成可能。</text>
+
+  <rect x="980" y="971" width="421" height="185" rx="14" fill="#eef1f3" stroke="#596a72"/>
+  <text x="1002" y="1002" class="gt">個人キー</text>
+  <text x="1003" y="1035" class="bt">draft:current</text><text x="1150" y="1035" class="body">同意・属性・回答途中</text>
+  <text x="1003" y="1072" class="bt">session:current</text><text x="1150" y="1072" class="body">name / login timestamp</text>
+  <text x="1003" y="1109" class="bt">last:id</text><text x="1150" y="1109" class="body">直近の回答ID・時刻</text>
+  <text x="1003" y="1138" class="small">共有利用者には見せない前提の保存領域</text>
+
+  <!-- Current flow arrows -->
+  <path d="M422 286H508" class="read"/><path d="M422 427H508" class="write"/><path d="M422 611H508" class="read"/>
+  <path d="M422 770H508" class="read"/><path d="M422 804H482V365H508" class="del"/><path d="M422 932H484V326H508" class="write"/>
+  <path d="M864 325H980" class="read"/><path d="M864 350H948V325H980" class="write"/><path d="M864 375H936V325H980" class="del"/>
+  <path d="M864 494H946V1035H980" class="read"/><path d="M864 519H935V1072H980" class="write"/><path d="M864 544H923V1109H980" class="del"/>
+
+  <!-- Cloudflare candidate -->
+  <rect x="1481" y="145" width="391" height="1045" rx="18" fill="#fff8e7" stroke="#b57a11" stroke-width="2" stroke-dasharray="10 7"/>
+  <text x="1505" y="180" class="gt">Cloudflare本番候補</text>
+  <text x="1505" y="203" class="body">実装済みだがremote D1には未接続</text>
+
+  <rect x="1514" y="240" width="325" height="117" fill="#fff" stroke="#263a63" filter="url(#shadow)"/>
+  <text x="1534" y="267" class="bt">ブラウザ</text>
+  <text x="1534" y="291" class="body">固定された /api/* のみ呼び出す</text>
+  <text x="1534" y="315" class="body">DB名・SQL・table名は指定しない</text>
+  <text x="1534" y="339" class="small">D1 bindingや認証情報を受け取らない</text>
+
+  <rect x="1514" y="403" width="325" height="274" fill="#f5e8d0" stroke="#b57a11" filter="url(#shadow)"/>
+  <text x="1534" y="432" class="gt">Cloudflare Worker</text>
+  <text x="1534" y="462" class="bt">POST /api/responses</text><text x="1534" y="483" class="body">検証 → responses + answersへ保存</text>
+  <text x="1534" y="516" class="bt">GET /api/responses/:id</text><text x="1534" y="537" class="body">最小メタデータだけ返す</text>
+  <text x="1534" y="570" class="bt">DELETE /api/responses/:id</text><text x="1534" y="591" class="body">親回答を削除し子をcascade削除</text>
+  <text x="1534" y="624" class="bt">GET /api/stats・health</text><text x="1534" y="645" class="body">固定集計SQL・接続確認</text>
+
+  <rect x="1514" y="725" width="325" height="127" fill="#e7f1e6" stroke="#176b5b" filter="url(#shadow)"/>
+  <text x="1534" y="754" class="gt">D1 binding: env.DB</text>
+  <text x="1534" y="782" class="body">prepared statement + bindのみ</text>
+  <text x="1534" y="806" class="body">responses / answers / opinion_chunks</text>
+  <text x="1534" y="830" class="body">app_config / rate_limits</text>
+
+  <rect x="1514" y="896" width="325" height="226" fill="#fae8ea" stroke="#9a3d44"/>
+  <text x="1534" y="925" class="bt">まだ接続・実装されていない範囲</text>
+  <text x="1534" y="953" class="body">database_id は全0のプレースホルダー</text>
+  <text x="1534" y="977" class="body">本体UIはWorker APIへ未切替</text>
+  <text x="1534" y="1001" class="body">解析結果・opinion_chunksの更新処理</text>
+  <text x="1534" y="1025" class="body">アカウント・認証・Admin API</text>
+  <text x="1534" y="1049" class="body">量子観測・関係線・スナップショット</text>
+  <text x="1534" y="1073" class="body">設定取得・更新API</text>
+  <text x="1534" y="1102" class="small">図中で既存DBとして扱ってはいけない</text>
+
+  <path d="M1433 328H1460V298H1514" class="future"/>
+  <path d="M1677 357V403" class="write"/>
+  <path d="M1677 677V725" class="write"/>
+
+  <rect x="505" y="1211" width="930" height="43" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="529" y="1238" class="body">要点：現在は「UI → キー型共有ストレージ」。本番候補は「UI → 固定API → Worker → 固定D1 binding」で、ブラウザからDBを直接指定しない。</text>
+</svg>

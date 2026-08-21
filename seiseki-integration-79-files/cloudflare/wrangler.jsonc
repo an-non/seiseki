@@ -1,0 +1,69 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "seiseki-api",
+  "account_id": "5d1a16ce92c25012e162a15bf75a3609",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-08-03",
+  "assets": {
+    "directory": "../local/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "seiseki-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "TURNSTILE_REQUIRED": "false"
+  },
+  "env": {
+    "staging": {
+      "name": "seiseki-api-staging",
+      "account_id": "5d1a16ce92c25012e162a15bf75a3609",
+      "workers_dev": true,
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "seiseki-db-staging",
+          "database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "ai": {
+        "binding": "AI"
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "ANALYSIS_QUEUE",
+            "queue": "seiseki-analysis-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "seiseki-analysis-staging",
+            "max_batch_size": 3,
+            "max_batch_timeout": 2,
+            "max_retries": 3,
+            "max_concurrency": 1,
+            "retry_delay": 10
+          }
+        ]
+      },
+      "vars": {
+        "TURNSTILE_REQUIRED": "false",
+        "ALLOWED_ORIGINS": "https://seiseki-api-staging.tokyo-odh-129.workers.dev,http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173",
+        "AI_ANALYSIS_ENABLED": "true",
+        "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+        "AI_MAX_ATTEMPTS": "2",
+        "AI_MAX_OUTPUT_TOKENS": "1800",
+        "PASSWORD_ITERATIONS": "30000"
+      }
+    }
+  }
+}

@@ -1,0 +1,218 @@
+{
+  "batchId": "demo-2026-08-10-v1",
+  "endpoint": "https://seiseki-api-staging.tokyo-odh-129.workers.dev",
+  "startedAt": "2026-08-10T08:26:13.509Z",
+  "completedAt": "2026-08-10T08:26:53.286Z",
+  "items": [
+    {
+      "key": "demo-2026-08-10-v1-01",
+      "id": "r_43d4012a191c43ce8b80ad3e6ea260a2",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-02",
+      "id": "r_5780a7a648b746aeb403772fa3e8119a",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-03",
+      "id": "r_6f7a0e68b93243eca54691fceacf154c",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-04",
+      "id": "r_1cee2a937b72452d983c753166be4af0",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-05",
+      "id": "r_734f6e487ce04a96960b7e60bfb3d321",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-06",
+      "id": "r_f5385e20e212424898e6484e56613838",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-07",
+      "id": "r_b178b0cb26da4c0c89e220e1d68a6202",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-08",
+      "id": "r_14ce1d386aa74ee9ba3e8c4527ccb3fa",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-09",
+      "id": "r_c0746d60ee2b4a9fa58c3448a8016d75",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-10",
+      "id": "r_1a1c8ba54530445f823cd357e4cdba7d",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-11",
+      "id": "r_932ea2c94a4543bfa002d2ec7e810c1d",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-12",
+      "id": "r_06b247d8e0c3499dab21d6d728629440",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-13",
+      "id": "r_11c3aec7bc6a4cfd80605805ce732f00",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-14",
+      "id": "r_23a4a5ab8f3a45398318947d8f5e3c43",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-15",
+      "id": "r_58d77941e0ec44f6936db0652c6f0dfc",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-16",
+      "id": "r_48a5f2eafc294c1c8c1c3eb37c54f15d",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-17",
+      "id": "r_3b5f9c513fc748a1823bf55cf68e5108",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-18",
+      "id": "r_de243eef1b334af08cc16b2fcc8451a7",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-19",
+      "id": "r_0613077e5e074f63a3b112399734edf1",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-20",
+      "id": "r_903f5a5df8c04e4983b192c40f2d4298",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-21",
+      "id": "r_aea5cd9286f74bb4badc441f4cdfe20a",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-22",
+      "id": "r_08847285ea3a4be4aa80e0faef85ba89",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-23",
+      "id": "r_faead1850eaa4463abe008dbea0c0fbb",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-24",
+      "id": "r_1fcc91ced2794ea68ac856ee06288e2d",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-25",
+      "id": "r_7802440888da404e8a4bfcfc90037449",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-26",
+      "id": "r_f0acf5b9b8524cc6bf5ce8c101e31321",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-27",
+      "id": "r_547fbe854dc44ace81165118202b31cd",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-28",
+      "id": "r_cbab9f8f9124402499ab9285a26b1912",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-29",
+      "id": "r_1dc5bc4b19b3412cb05e8510df91fa15",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    },
+    {
+      "key": "demo-2026-08-10-v1-30",
+      "id": "r_4a2e8077dce443c08da5305e8f5668e1",
+      "analysisStatus": "completed",
+      "chunks": 1,
+      "errorCode": null
+    }
+  ]
+}

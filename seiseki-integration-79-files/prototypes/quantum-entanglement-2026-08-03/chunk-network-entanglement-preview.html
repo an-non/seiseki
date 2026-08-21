@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>意見ネットワーク 量子もつれ観測</title>
+  <style>
+    :root {
+      color-scheme:dark;
+      --paper:#03060b;
+      --ink:#f1fdff;
+      --sub:#91a4b7;
+      --rule:#1d3850;
+      --cyan:#2eeaff;
+      --violet:#8095ff;
+      --gold:#ffc247;
+    }
+    * { box-sizing:border-box; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:var(--paper); color:var(--ink); }
+    body {
+      font-family:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+      background-image:
+        linear-gradient(rgba(46,234,255,.018) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(113,136,255,.018) 1px,transparent 1px);
+      background-size:32px 32px;
+    }
+    button { font:inherit; letter-spacing:0; }
+    #scene { position:fixed; inset:0; }
+    canvas { display:block; width:100%; height:100%; }
+    header { position:fixed; z-index:6; top:20px; left:24px; pointer-events:none; }
+    h1 {
+      margin:0;
+      color:var(--ink);
+      font-family:"Shippori Mincho","Yu Mincho","Noto Serif JP",serif;
+      font-size:25px;
+      letter-spacing:0;
+      text-shadow:0 0 18px rgba(46,234,255,.28);
+    }
+    .legend { display:flex; flex-wrap:wrap; gap:11px; margin-top:8px; color:var(--sub); font-size:11px; }
+    .legend span { display:inline-flex; align-items:center; gap:6px; }
+    .dot { width:8px; height:8px; border-radius:50%; box-shadow:0 0 8px currentColor; }
+    .dot.near { color:#000080; background:currentColor; outline:1px solid #7188ff; }
+    .dot.far { color:#a8b4d8; background:currentColor; }
+    .ring { width:10px; height:10px; border:1px solid var(--cyan); border-radius:50%; box-shadow:0 0 8px var(--cyan); }
+    .controls {
+      position:fixed;
+      z-index:7;
+      top:92px;
+      left:24px;
+      display:flex;
+      align-items:center;
+      gap:4px;
+      padding:4px;
+      border:1px solid rgba(46,234,255,.18);
+      border-radius:6px;
+      background:rgba(3,8,14,.72);
+      backdrop-filter:blur(8px);
+    }
+    .controls button {
+      min-width:48px;
+      height:30px;
+      padding:0 9px;
+      border:1px solid transparent;
+      border-radius:4px;
+      background:transparent;
+      color:var(--sub);
+      cursor:pointer;
+    }
+    .controls button:hover,
+    .controls button:focus-visible { color:var(--ink); border-color:rgba(46,234,255,.3); outline:none; }
+    .controls button[aria-pressed="true"] { color:var(--ink); background:rgba(113,136,255,.2); border-color:rgba(128,149,255,.44); }
+    .controls .observe { min-width:32px; width:32px; padding:0; color:var(--cyan); font-size:19px; }
+    .controls .divider { width:1px; height:18px; margin:0 3px; background:rgba(46,234,255,.2); }
+    .status {
+      position:fixed;
+      z-index:6;
+      top:22px;
+      right:24px;
+      color:var(--sub);
+      font:11px/1.6 "IBM Plex Mono",Consolas,monospace;
+      text-align:right;
+      white-space:pre-line;
+      pointer-events:none;
+    }
+    .details {
+      position:fixed;
+      z-index:8;
+      right:20px;
+      bottom:20px;
+      width:min(350px,calc(100% - 40px));
+      min-height:112px;
+      max-height:min(260px,calc(100vh - 190px));
+      overflow:auto;
+      padding:14px 15px;
+      border:1px solid var(--rule);
+      border-radius:6px;
+      background:rgba(5,10,17,.9);
+      box-shadow:0 0 28px rgba(46,234,255,.08);
+      backdrop-filter:blur(10px);
+    }
+    .details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }
+    .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
+    .details .generated { color:var(--ink); font-size:12px; }
+    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }
+    .details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
+    .details dt { color:var(--sub); }
+    .details dd { margin:0; overflow-wrap:anywhere; }
+    .loading {
+      position:fixed;
+      z-index:9;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      color:var(--cyan);
+      font:12px/1.5 "IBM Plex Mono",Consolas,monospace;
+      text-shadow:0 0 14px rgba(46,234,255,.65);
+      pointer-events:none;
+    }
+    .loading[hidden] { display:none; }
+    @media (max-width:700px) {
+      header { top:14px; left:15px; right:15px; }
+      h1 { font-size:20px; }
+      .legend { max-width:280px; gap:6px 10px; }
+      .controls { top:82px; left:14px; max-width:calc(100% - 28px); overflow-x:auto; }
+      .controls button { min-width:43px; padding:0 7px; }
+      .status { top:auto; right:13px; bottom:148px; font-size:9px; line-height:1.45; }
+      .status .optional { display:none; }
+      .details { right:11px; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }
+    }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "/node_modules/three/build/three.module.js", "three/addons/": "/node_modules/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <div id="scene" aria-label="政治を中心とする量子もつれ意見ネットワーク"></div>
+  <header>
+    <h1>意見ネットワーク 量子もつれ観測</h1>
+    <div class="legend" aria-label="表示凡例">
+      <span><i class="dot near"></i>中心寄り</span>
+      <span><i class="dot far"></i>外寄り</span>
+      <span><i class="ring"></i>量子もつれノード</span>
+    </div>
+  </header>
+  <nav class="controls" aria-label="観測軸">
+    <button type="button" data-model="correlated" aria-pressed="true" title="共有乱数による古典相関">相関</button>
+    <button type="button" data-model="amplitude" aria-pressed="false" title="二量子ビットの複素振幅とBorn則">量子式</button>
+    <span class="divider" aria-hidden="true"></span>
+    <button type="button" data-basis="overall" aria-pressed="true">総合</button>
+    <button type="button" data-basis="urgency" aria-pressed="false">切実度</button>
+    <button type="button" data-basis="motivation" aria-pressed="false">意欲</button>
+    <button type="button" data-basis="validity" aria-pressed="false">妥当性</button>
+    <button type="button" class="observe" id="observe" aria-label="全体を再観測" title="全体を再観測">↻</button>
+  </nav>
+  <div class="status" id="status"></div>
+  <aside class="details" id="details" aria-live="polite">
+    <h2>政治</h2>
+    <p>5,000件の観測投影</p>
+  </aside>
+  <div class="loading" id="loading" role="status">観測投影を構築中</div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import {
+      createEntanglementModel,
+      deduplicateNodes,
+      distanceGradientValue,
+      generatePrototypeCandidates,
+      observeAmplitudeEntanglement,
+      observeEntanglement
+    } from "./quantum-entanglement-engine.mjs";
+
+    const host = document.getElementById("scene");
+    const details = document.getElementById("details");
+    const loading = document.getElementById("loading");
+    const status = document.getElementById("status");
+    const observeButton = document.getElementById("observe");
+    const modelButtons = [...document.querySelectorAll("[data-model]")];
+    const basisButtons = [...document.querySelectorAll("[data-basis]")];
+    const searchParams = new URLSearchParams(location.search);
+    const requested = Number(searchParams.get("count"));
+    const count = Math.max(240, Math.min(5000, Number.isFinite(requested) && requested > 0 ? requested : 5000));
+    const duplicateCount = Math.max(1, Math.round(count * 0.08));
+    const observationSeed = searchParams.get("seed") || "prototype-5000";
+    const basisLabels = { overall:"総合", urgency:"切実度", motivation:"意欲", validity:"妥当性" };
+    let basis = basisLabels[searchParams.get("basis")] ? searchParams.get("basis") : "overall";
+    let observationMode = searchParams.get("mode") === "amplitude" ? "amplitude" : "correlated";
+    let epoch = 0;
+
+    const categoryDefinitions = [
+      { id:"livelihood", label:"暮らし・社会", topics:["生活費","住宅","社会保障","年金"] },
+      { id:"work", label:"仕事・産業", topics:["雇用","働き方","農業","観光"] },
+      { id:"people", label:"教育・福祉", topics:["子育て","教育","医療","介護"] },
+      { id:"infrastructure", label:"地域・基盤", topics:["交通","防災","地域","人口減少"] },
+      { id:"environment", label:"環境・資源", topics:["環境","エネルギー","食料","文化"] },
+      { id:"governance", label:"統治・国際", topics:["行政DX","税制","外交","安全保障"] }
+    ];
+    const topics = categoryDefinitions.flatMap(category => category.topics.map((label, index) => ({
+      id:`${category.id}-${index}`,
+      label,
+      categoryId:category.id,
+      categoryLabel:category.label
+    })));
+    const topicById = new Map(topics.map(topic => [topic.id, topic]));
+
+    function hash32(value) {
+      let hash = 2166136261;
+      for (const character of String(value)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+      return hash >>> 0;
+    }
+    function random01(value) {
+      let state = hash32(value) || 0x9e3779b9;
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return (state >>> 0) / 4294967296;
+    }
+    function directionFor(value) {
+      const longitude = random01(`${value}|longitude`) * Math.PI * 2;
+      const vertical = random01(`${value}|latitude`) * 2 - 1;
+      const radial = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+      return new THREE.Vector3(radial * Math.cos(longitude), vertical, radial * Math.sin(longitude));
+    }
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, character => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"
+      })[character]);
+    }
+    const proximityColorStops = [new THREE.Color("#a8b4d8"), new THREE.Color("#7188ff"), new THREE.Color("#000080")];
+    function proximityColor(value) {
+      const scaled = clamp(value, 0, 1) * 2;
+      return scaled <= 1
+        ? proximityColorStops[0].clone().lerp(proximityColorStops[1], scaled)
+        : proximityColorStops[1].clone().lerp(proximityColorStops[2], scaled - 1);
+    }
+    function labelSprite(text, color, scale = 1) {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = 512;
+      canvas.height = 96;
+      context.font = "700 34px sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.shadowColor = color;
+      context.shadowBlur = 14;
+      context.fillStyle = "#f1fdff";
+      context.fillText(text, canvas.width / 2, canvas.height / 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthWrite:false }));
+      sprite.scale.set(6.2 * scale, 1.16 * scale, 1);
+      return sprite;
+    }
+    function makeLineSegments(color, opacity) {
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent:true,
+        opacity,
+        depthWrite:false,
+        blending:THREE.AdditiveBlending
+      });
+      const lines = new THREE.LineSegments(new THREE.BufferGeometry(), material);
+      lines.renderOrder = 0;
+      return lines;
+    }
+
+    const rawCandidates = generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount });
+    const uniqueNodes = deduplicateNodes(rawCandidates);
+    const model = createEntanglementModel(uniqueNodes);
+    const sourceById = model.nodeById;
+    const nodeIndexById = new Map(model.nodes.map((node, index) => [node.id, index]));
+    function calculateProjection(options) {
+      return observationMode === "amplitude"
+        ? observeAmplitudeEntanglement(model, options)
+        : observeEntanglement(model, options);
+    }
+    let projection = calculateProjection({ basis, seed:observationSeed, epoch });
+    let projectionById = new Map(projection.nodes.map(node => [node.id, node]));
+    let groupById = new Map(projection.groups.map(group => [group.id, group]));
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#03060b");
+    scene.fog = new THREE.FogExp2("#03060b", .012);
+    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 180);
+    camera.position.set(0, 11, 70);
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:"high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    host.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = .065;
+    controls.minDistance = 13;
+    controls.maxDistance = 110;
+
+    scene.add(new THREE.HemisphereLight("#dffcff", "#101124", 2.1));
+    const keyLight = new THREE.DirectionalLight("#ffffff", 2.2);
+    keyLight.position.set(11, 16, 13);
+    scene.add(keyLight);
+
+    const root = new THREE.Mesh(
+      new THREE.SphereGeometry(1.28, 30, 22),
+      new THREE.MeshStandardMaterial({
+        color:"#000080",
+        emissive:"#2eeaff",
+        emissiveIntensity:.52,
+        roughness:.28,
+        metalness:.12,
+        depthTest:false
+      })
+    );
+    root.userData = { type:"root" };
+    root.renderOrder = 8;
+    scene.add(root);
+    const rootLabel = labelSprite("政治", "#2eeaff", 1.05);
+    rootLabel.position.set(0, 1.95, 0);
+    rootLabel.material.depthTest = false;
+    rootLabel.renderOrder = 9;
+    scene.add(rootLabel);
+
+    const topicPositions = topics.map(topic => directionFor(`topic|${topic.id}`).multiplyScalar(33.5));
+    const topicGeometry = new THREE.SphereGeometry(.34, 12, 8);
+    const topicMaterial = new THREE.MeshBasicMaterial({
+      color:"#ffc247",
+      transparent:true,
+      opacity:.55,
+      depthWrite:false
+    });
+    const topicInstances = new THREE.InstancedMesh(topicGeometry, topicMaterial, topics.length);
+    topicInstances.userData = { type:"topics" };
+    const matrixHelper = new THREE.Object3D();
+    topicPositions.forEach((position, index) => {
+      matrixHelper.position.copy(position);
+      matrixHelper.scale.setScalar(1);
+      matrixHelper.updateMatrix();
+      topicInstances.setMatrixAt(index, matrixHelper.matrix);
+    });
+    topicInstances.instanceMatrix.needsUpdate = true;
+    topicInstances.renderOrder = 2;
+    scene.add(topicInstances);
+
+    const opinionGeometry = new THREE.SphereGeometry(.56, 6, 4);
+    const opinionMaterial = new THREE.MeshBasicMaterial({
+      color:"#ffffff",
+      vertexColors:true,
+      transparent:true,
+      opacity:.7,
+      depthWrite:false
+    });
+    const opinionInstances = new THREE.InstancedMesh(opinionGeometry, opinionMaterial, model.nodes.length);
+    opinionInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    opinionInstances.userData = { type:"opinions" };
+    opinionInstances.renderOrder = 3;
+    const renderPositions = projection.nodes.map(node => new THREE.Vector3(node.position.x, node.position.y, node.position.z));
+    let startPositions = renderPositions.map(position => position.clone());
+    let targetPositions = renderPositions.map(position => position.clone());
+    const opinionScales = model.nodes.map(node => .2 + Math.sqrt(node.urgency / 100) * .11);
+    function updateOpinionInstances(positionMix = 1) {
+      projection.nodes.forEach((node, index) => {
+        if (positionMix < 1) renderPositions[index].lerpVectors(startPositions[index], targetPositions[index], positionMix);
+        else renderPositions[index].copy(targetPositions[index]);
+        matrixHelper.position.copy(renderPositions[index]);
+        matrixHelper.scale.setScalar(opinionScales[index]);
+        matrixHelper.updateMatrix();
+        opinionInstances.setMatrixAt(index, matrixHelper.matrix);
+      });
+      opinionInstances.instanceMatrix.needsUpdate = true;
+    }
+    function updateOpinionColors() {
+      projection.nodes.forEach((node, index) => {
+        opinionInstances.setColorAt(index, proximityColor(distanceGradientValue(node.distance, projection.bounds)));
+      });
+      opinionInstances.instanceColor.needsUpdate = true;
+    }
+    updateOpinionInstances();
+    updateOpinionColors();
+    scene.add(opinionInstances);
+
+    const entanglementGeometry = new THREE.TorusGeometry(.43, .075, 6, 18);
+    const entanglementMaterial = new THREE.MeshBasicMaterial({
+      color:"#2eeaff",
+      transparent:true,
+      opacity:.78,
+      depthWrite:false,
+      blending:THREE.AdditiveBlending
+    });
+    const entanglementInstances = new THREE.InstancedMesh(
+      entanglementGeometry,
+      entanglementMaterial,
+      projection.groups.length
+    );
+    entanglementInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    entanglementInstances.userData = { type:"entanglement" };
+    entanglementInstances.renderOrder = 4;
+    const groupRenderPositions = projection.groups.map(group => new THREE.Vector3(
+      group.position.x,
+      group.position.y,
+      group.position.z
+    ));
+    let groupStartPositions = groupRenderPositions.map(position => position.clone());
+    let groupTargetPositions = groupRenderPositions.map(position => position.clone());
+    function updateEntanglementInstances(positionMix = 1) {
+      projection.groups.forEach((group, index) => {
+        if (positionMix < 1) groupRenderPositions[index].lerpVectors(
+          groupStartPositions[index],
+          groupTargetPositions[index],
+          positionMix
+        );
+        else groupRenderPositions[index].copy(groupTargetPositions[index]);
+        matrixHelper.position.copy(groupRenderPositions[index]);
+        matrixHelper.rotation.set(group.groupBit ? Math.PI / 2 : 0, group.groupBit ? .4 : -.4, group.groupBit ? .3 : -.3);
+        matrixHelper.scale.setScalar(group.groupBit ? 1.08 : .84);
+        matrixHelper.updateMatrix();
+        entanglementInstances.setMatrixAt(index, matrixHelper.matrix);
+      });
+      entanglementInstances.instanceMatrix.needsUpdate = true;
+    }
+    updateEntanglementInstances();
+    scene.add(entanglementInstances);
+
+    const relationLines = makeLineSegments("#4ee9ff", .04);
+    scene.add(relationLines);
+    let relationEndpointIndices = [];
+    function rebuildRelationGeometry() {
+      relationEndpointIndices = projection.relations.map(relation => ({
+        left:nodeIndexById.get(relation.leftId),
+        right:nodeIndexById.get(relation.rightId)
+      })).filter(indices => Number.isInteger(indices.left) && Number.isInteger(indices.right));
+      relationLines.geometry.dispose();
+      relationLines.geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(relationEndpointIndices.length * 6);
+      relationLines.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+      updateRelationPositions();
+    }
+    function updateRelationPositions() {
+      const attribute = relationLines.geometry.getAttribute("position");
+      if (!attribute) return;
+      relationEndpointIndices.forEach((indices, index) => {
+        const left = renderPositions[indices.left];
+        const right = renderPositions[indices.right];
+        attribute.setXYZ(index * 2, left.x, left.y, left.z);
+        attribute.setXYZ(index * 2 + 1, right.x, right.y, right.z);
+      });
+      attribute.needsUpdate = true;
+      relationLines.geometry.computeBoundingSphere();
+    }
+    rebuildRelationGeometry();
+
+    const activeLines = makeLineSegments("#f4ffff", .82);
+    activeLines.renderOrder = 5;
+    scene.add(activeLines);
+    const highlight = new THREE.Mesh(
+      new THREE.SphereGeometry(.7, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color:"#eaffff",
+        transparent:true,
+        opacity:.88,
+        depthWrite:false,
+        blending:THREE.AdditiveBlending
+      })
+    );
+    highlight.visible = false;
+    highlight.renderOrder = 6;
+    scene.add(highlight);
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2(2, 2);
+    let pointerDirty = false;
+    let hovered = null;
+    let selected = { type:"root" };
+    let lastObservationSummary = null;
+    let transitionStartedAt = 0;
+    let transitioning = false;
+    const transitionDuration = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 950;
+
+    function setPointer(event) {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.x = (event.clientX - bounds.left) / bounds.width * 2 - 1;
+      pointer.y = -(event.clientY - bounds.top) / bounds.height * 2 + 1;
+      pointerDirty = true;
+    }
+    function hitFromPointer() {
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects([
+        opinionInstances,
+        entanglementInstances,
+        topicInstances,
+        root
+      ], false)[0];
+      if (!hit) return null;
+      if (hit.object === opinionInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"opinion", index:hit.instanceId, id:model.nodes[hit.instanceId].id };
+      }
+      if (hit.object === entanglementInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"entanglement", index:hit.instanceId, id:projection.groups[hit.instanceId].id };
+      }
+      if (hit.object === topicInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"topic", index:hit.instanceId, id:topics[hit.instanceId].id };
+      }
+      return { type:"root" };
+    }
+    function selectionPosition(item) {
+      if (!item || item.type === "root") return new THREE.Vector3();
+      if (item.type === "opinion") return renderPositions[item.index];
+      if (item.type === "entanglement") return groupRenderPositions[item.index];
+      return topicPositions[item.index];
+    }
+    function relationsForSelection(item) {
+      if (!item || item.type === "root") return [];
+      if (item.type === "opinion") {
+        return projection.relations.filter(relation => relation.leftId === item.id || relation.rightId === item.id);
+      }
+      if (item.type === "entanglement") {
+        return projection.relations.filter(relation => relation.groupId === item.id);
+      }
+      const memberIds = new Set(projection.nodes
+        .filter(node => node.observedTopicId === item.id)
+        .map(node => node.id));
+      return projection.relations.filter(relation => memberIds.has(relation.leftId) && memberIds.has(relation.rightId));
+    }
+    function updateActiveLines() {
+      const points = [];
+      for (const relation of relationsForSelection(selected).slice(0, 180)) {
+        points.push(
+          renderPositions[nodeIndexById.get(relation.leftId)],
+          renderPositions[nodeIndexById.get(relation.rightId)]
+        );
+      }
+      if (selected?.type === "opinion") {
+        const node = projectionById.get(selected.id);
+        const topicIndex = topics.findIndex(topic => topic.id === node.observedTopicId);
+        points.push(renderPositions[selected.index], topicPositions[topicIndex]);
+      } else if (selected?.type === "entanglement") {
+        const group = groupById.get(selected.id);
+        const anchor = groupRenderPositions[selected.index];
+        for (const id of group.memberIds.slice(0, 120)) points.push(anchor, renderPositions[nodeIndexById.get(id)]);
+      }
+      activeLines.geometry.dispose();
+      activeLines.geometry = new THREE.BufferGeometry().setFromPoints(points);
+    }
+    function renderDetails(item) {
+      if (!item || item.type === "root") {
+        const result = lastObservationSummary
+          ? `<p class="result">再観測 ${lastObservationSummary.nodeCount.toLocaleString("ja-JP")}件 / 所属変更 ${lastObservationSummary.topicChanges.toLocaleString("ja-JP")}件 / 平均距離差 ${lastObservationSummary.meanDistanceDelta.toFixed(2)}</p>`
+          : "";
+        details.innerHTML = `<h2>政治</h2><p>${projection.nodes.length.toLocaleString("ja-JP")}件の観測投影</p>${result}<dl><dt>計算方式</dt><dd>${observationMode === "amplitude" ? "複素振幅・Born則" : "古典相関"}</dd><dt>観測軸</dt><dd>${basisLabels[basis]}</dd><dt>観測番号</dt><dd>${epoch}</dd><dt>観測シード</dt><dd>${escapeHtml(observationSeed)}</dd></dl>`;
+        return;
+      }
+      if (item.type === "opinion") {
+        const source = sourceById.get(item.id);
+        const observed = projectionById.get(item.id);
+        const originalTopic = topicById.get(source.topicId);
+        const observedTopic = topicById.get(observed.observedTopicId);
+        details.innerHTML = `<h2>${escapeHtml(observedTopic.label)}</h2><p>${escapeHtml(source.text)}</p><dl><dt>元の所属</dt><dd>${escapeHtml(originalTopic.label)}</dd><dt>観測所属</dt><dd>${escapeHtml(observedTopic.label)}</dd><dt>中心距離</dt><dd>${observed.distance.toFixed(2)}</dd><dt>重複統合</dt><dd>${source.occurrenceCount}件</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+        return;
+      }
+      if (item.type === "entanglement") {
+        const group = groupById.get(item.id);
+        const result = lastObservationSummary?.groupId === group.id
+          ? `<p class="result">このノードを再観測 / 所属変更 ${lastObservationSummary.topicChanges.toLocaleString("ja-JP")}件 / 平均距離差 ${lastObservationSummary.meanDistanceDelta.toFixed(2)}</p>`
+          : "";
+        const quantum = group.quantumState;
+        const quantumRows = quantum
+          ? `<dt>論理状態</dt><dd>${Math.cos(quantum.schmidtAngle).toFixed(3)}|00&gt; + e<sup>iφ</sup>${Math.sin(quantum.schmidtAngle).toFixed(3)}|11&gt;</dd><dt>観測結果</dt><dd>${quantum.outcome} (${(quantum.selectedProbability * 100).toFixed(1)}%)</dd><dt>もつれ度</dt><dd>${quantum.concurrence.toFixed(3)}</dd><dt>量子情報量</dt><dd>${quantum.entanglementEntropy.toFixed(3)} bit</dd>`
+          : `<dt>観測枝</dt><dd>${group.groupBit}</dd>`;
+        details.innerHTML = `<h2>量子もつれノード ${item.index + 1}</h2><p class="generated">${escapeHtml(group.derivedContent.text)}</p>${result}<dl><dt>計算方式</dt><dd>${quantum ? "複素振幅・Born則" : "古典相関"}</dd><dt>観測軸</dt><dd>${basisLabels[basis]}</dd><dt>構成意見</dt><dd>${group.memberIds.length}件</dd><dt>文章素材</dt><dd>${group.derivedContent.sourceNodeIds.length}件</dd>${quantumRows}<dt>グループ</dt><dd>${escapeHtml(group.key)}</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+        return;
+      }
+      const topic = topicById.get(item.id);
+      const memberCount = projection.nodes.filter(node => node.observedTopicId === item.id).length;
+      details.innerHTML = `<h2>${escapeHtml(topic.label)}</h2><p>${escapeHtml(topic.categoryLabel)}</p><dl><dt>観測所属</dt><dd>${memberCount}件</dd><dt>関係</dt><dd>${relationsForSelection(item).length}件</dd></dl>`;
+    }
+    function updateStatus() {
+      const merged = rawCandidates.length - model.nodes.length;
+      status.innerHTML =
+        `入力  ${rawCandidates.length.toLocaleString("ja-JP")}件\n` +
+        `重複統合  ${merged.toLocaleString("ja-JP")}件\n` +
+        `固有ノード  ${model.nodes.length.toLocaleString("ja-JP")}件\n` +
+        `もつれノード  ${projection.groups.length}件\n` +
+        `観測関係  ${projection.relations.length.toLocaleString("ja-JP")}本\n` +
+        `計算方式  ${observationMode === "amplitude" ? "複素振幅・Born則" : "古典相関"}\n` +
+        `<span class="optional">観測シード  ${escapeHtml(observationSeed)}:${epoch}</span>`;
+    }
+    function refreshSelection() {
+      if (selected?.type === "opinion") selected.index = nodeIndexById.get(selected.id);
+      if (selected?.type === "entanglement") selected.index = projection.groups.findIndex(group => group.id === selected.id);
+      updateActiveLines();
+      renderDetails(selected);
+    }
+    function summarizeObservation(previousProjection, nextProjection, groupId) {
+      const previousById = new Map(previousProjection.nodes.map(node => [node.id, node]));
+      const targetIds = groupId
+        ? new Set(model.groups.find(group => group.id === groupId).memberIds)
+        : null;
+      let nodeCount = 0;
+      let topicChanges = 0;
+      let distanceDelta = 0;
+      for (const node of nextProjection.nodes) {
+        if (targetIds && !targetIds.has(node.id)) continue;
+        const previous = previousById.get(node.id);
+        if (!previous) continue;
+        nodeCount += 1;
+        if (previous.observedTopicId !== node.observedTopicId) topicChanges += 1;
+        distanceDelta += Math.abs(previous.distance - node.distance);
+      }
+      return {
+        groupId,
+        nodeCount,
+        topicChanges,
+        meanDistanceDelta: distanceDelta / Math.max(1, nodeCount)
+      };
+    }
+    function mergeGroupProjection(nextProjection, groupId) {
+      const nextNodeById = new Map(nextProjection.nodes.map(node => [node.id, node]));
+      const groupMemberIds = new Set(model.groups.find(group => group.id === groupId).memberIds);
+      const nodes = projection.nodes.map(node => groupMemberIds.has(node.id) ? nextNodeById.get(node.id) : node);
+      const relations = [
+        ...projection.relations.filter(relation => relation.groupId !== groupId),
+        ...nextProjection.relations.filter(relation => relation.groupId === groupId)
+      ];
+      const nextGroup = nextProjection.groups.find(group => group.id === groupId);
+      const groups = projection.groups.map(group => group.id === groupId ? nextGroup : group);
+      return { ...nextProjection, nodes, relations, groups };
+    }
+    function applyObservation(nextProjection, groupId = null) {
+      lastObservationSummary = summarizeObservation(projection, nextProjection, groupId);
+      projection = groupId ? mergeGroupProjection(nextProjection, groupId) : nextProjection;
+      projectionById = new Map(projection.nodes.map(node => [node.id, node]));
+      groupById = new Map(projection.groups.map(group => [group.id, group]));
+      startPositions = renderPositions.map(position => position.clone());
+      targetPositions = projection.nodes.map(node => new THREE.Vector3(node.position.x, node.position.y, node.position.z));
+      groupStartPositions = groupRenderPositions.map(position => position.clone());
+      groupTargetPositions = projection.groups.map(group => new THREE.Vector3(group.position.x, group.position.y, group.position.z));
+      updateOpinionColors();
+      rebuildRelationGeometry();
+      transitionStartedAt = performance.now();
+      transitioning = transitionDuration > 0;
+      if (!transitioning) {
+        updateOpinionInstances();
+        updateEntanglementInstances();
+        updateRelationPositions();
+      }
+      refreshSelection();
+      updateStatus();
+      window.__ENTANGLEMENT_PROTOTYPE__.observationCount += 1;
+    }
+    function observeAll(nextBasis = basis) {
+      basis = nextBasis;
+      epoch += 1;
+      applyObservation(calculateProjection({
+        basis,
+        seed:observationSeed,
+        epoch
+      }));
+      basisButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.basis === basis)));
+    }
+    function observeGroup(groupId) {
+      epoch += 1;
+      const next = calculateProjection({ basis, seed:observationSeed, epoch });
+      applyObservation(next, groupId);
+    }
+
+    function changeObservationMode(nextMode) {
+      observationMode = nextMode === "amplitude" ? "amplitude" : "correlated";
+      observeAll();
+      modelButtons.forEach(button => button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.model === observationMode)
+      ));
+    }
+
+    renderer.domElement.addEventListener("pointermove", setPointer);
+    renderer.domElement.addEventListener("pointerleave", () => {
+      pointer.set(2, 2);
+      pointerDirty = true;
+    });
+    renderer.domElement.addEventListener("click", () => {
+      if (!hovered) return;
+      selected = { ...hovered };
+      if (selected.type === "root") observeAll();
+      else if (selected.type === "entanglement") observeGroup(selected.id);
+      else refreshSelection();
+    });
+    basisButtons.forEach(button => button.addEventListener("click", () => observeAll(button.dataset.basis)));
+    modelButtons.forEach(button => button.addEventListener("click", () => changeObservationMode(button.dataset.model)));
+    observeButton.addEventListener("click", () => observeAll());
+    basisButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.basis === basis)));
+    modelButtons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.model === observationMode)));
+
+    let relationFrame = 0;
+    function animate(now = performance.now()) {
+      requestAnimationFrame(animate);
+      root.rotation.y = now * .00018;
+      if (transitioning) {
+        const rawProgress = clamp((now - transitionStartedAt) / transitionDuration, 0, 1);
+        const progress = 1 - Math.pow(1 - rawProgress, 3);
+        updateOpinionInstances(progress);
+        updateEntanglementInstances(progress);
+        relationFrame += 1;
+        if (relationFrame % 2 === 0 || rawProgress >= 1) {
+          updateRelationPositions();
+          if (selected?.type !== "root") updateActiveLines();
+        }
+        if (rawProgress >= 1) transitioning = false;
+      }
+      if (pointerDirty) {
+        hovered = hitFromPointer();
+        pointerDirty = false;
+      }
+      const active = hovered || selected;
+      renderer.domElement.style.cursor = hovered ? "pointer" : "grab";
+      highlight.visible = Boolean(active);
+      if (active) {
+        highlight.position.copy(selectionPosition(active));
+        const scale = active.type === "root" ? 1.5 : active.type === "opinion" ? .38 : active.type === "entanglement" ? .62 : .48;
+        highlight.scale.setScalar(scale);
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    window.__ENTANGLEMENT_PROTOTYPE__ = {
+      ready:true,
+      rawCount:rawCandidates.length,
+      uniqueCount:model.nodes.length,
+      duplicateCount:rawCandidates.length - model.nodes.length,
+      groupCount:model.groups.length,
+      get basis() { return basis; },
+      get epoch() { return epoch; },
+      get relationCount() { return projection.relations.length; },
+      observationCount:0,
+      observe:observeAll
+    };
+    updateStatus();
+    renderDetails(selected);
+    loading.hidden = true;
+    animate();
+  </script>
+</body>
+</html>
