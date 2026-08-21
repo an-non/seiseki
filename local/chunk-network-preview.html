@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>チャンクネットワーク プレビュー</title>
+  <style>
+    :root { color-scheme:dark; --paper:#05070b; --ink:#eafaff; --sub:#91a4b7; --rule:#223044; --green:#17e6d1; --red:#f06bff; --slate:#7188ff; --gold:#ffc247; --select:#2eeaff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { background-color:var(--paper); background-image:linear-gradient(rgba(46,234,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(113,136,255,.025) 1px,transparent 1px); background-size:32px 32px; color:var(--ink); font-family:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif; }
+    main { width:min(980px,calc(100% - 32px)); margin:0 auto; padding:38px 0 52px; }
+    header { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:18px; }
+    h1 { margin:0; color:#f1fdff; font-family:"Shippori Mincho","Yu Mincho","Noto Serif JP",serif; font-size:clamp(24px,4vw,34px); letter-spacing:0; text-shadow:0 0 18px rgba(46,234,255,.28); }
+    .lead { margin:7px 0 0; color:var(--sub); font-size:13px; }
+    .meta { display:flex; flex-wrap:wrap; gap:7px; justify-content:flex-end; }
+    .pill { border:1px solid #29425a; padding:5px 9px; color:#b8cddd; font-size:11px; background:#0a1019; box-shadow:inset 0 0 10px rgba(46,234,255,.035); }
+    .panel { border-top:1px solid #2a6a78; border-bottom:1px solid #392b65; background:#090d14; padding:15px 14px 14px; box-shadow:0 0 28px rgba(46,234,255,.06),0 0 44px rgba(240,107,255,.035); }
+    .legend { display:flex; flex-wrap:wrap; align-items:center; gap:13px; margin:0 5px 10px; color:var(--sub); font-size:11px; }
+    .legend-item { display:inline-flex; align-items:center; gap:6px; }
+    .swatch { width:12px; height:12px; display:inline-block; border:1px solid rgba(234,250,255,.22); }
+    .gradient { width:106px; height:10px; display:inline-block; background:linear-gradient(90deg,#a8b4d8,#7188ff,#000080); border:1px solid rgba(46,234,255,.42); box-shadow:0 0 8px rgba(113,136,255,.28); }
+    .relation-key { width:12px; height:3px; display:inline-block; }
+    .relation-key.content { background:#17e6d1; box-shadow:0 0 6px #17e6d1; }
+    .relation-key.topic { background:#7188ff; box-shadow:0 0 6px #7188ff; }
+    .relation-key.target { background:#ffc247; box-shadow:0 0 6px #ffc247; }
+    .relation-key.category { background:#f06bff; box-shadow:0 0 6px #f06bff; }
+    .workspace { display:block; }
+    svg { width:100%; height:auto; display:block; background:#03060b; border:1px solid #17273a; }
+    .details { border-top:1px solid #22384c; padding:12px 5px 4px; min-height:120px; background:#080c13; }
+    .details h2 { margin:0 0 12px; font-size:13px; font-weight:700; }
+    .details p { margin:0 0 10px; color:var(--sub); font-size:12px; line-height:1.75; white-space:pre-wrap; }
+    .details dl { display:grid; grid-template-columns:68px 1fr; gap:5px 8px; margin:0; font-size:11px; }
+    .details dt { color:var(--sub); }
+    .details dd { margin:0; }
+    .relations { margin-top:14px; border-top:1px solid var(--rule); padding-top:11px; }
+    .relations h3 { margin:0 0 8px; font-size:12px; }
+    .relation-list { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
+    .relation-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:start; border-left:2px solid var(--slate); padding:5px 7px; background:#0c131d; font-size:11px; }
+    .relation-row.content { border-left-color:var(--green); }
+    .relation-row.island { border-left-color:var(--select); }
+    .relation-row.target { border-left-color:var(--gold); }
+    .relation-row.category { border-left-color:var(--red); }
+    .relation-row.fact { border-left-color:var(--sub); }
+    .relation-text { overflow-wrap:anywhere; line-height:1.45; }
+    .relation-reason { color:var(--sub); text-align:right; white-space:nowrap; }
+    .chunk-node { outline:none; }
+    .chunk-node { cursor:pointer; transition:opacity .32s ease; }
+    .node-visual { transform:scale(.82); transform-origin:0 0; transition:transform .52s cubic-bezier(.16,1,.3,1); }
+    .chunk-node:hover .node-visual, .chunk-node:focus-visible .node-visual { transform:scale(1.02); }
+    .chunk-node.selected .node-visual,
+    .chunk-node.selected:hover .node-visual,
+    .chunk-node.selected:focus-visible .node-visual { transform:scale(1.16); }
+    .dense-network .chunk-node:hover .node-visual, .dense-network .chunk-node:focus-visible .node-visual { transform:scale(1.45); }
+    .dense-network .chunk-node.selected .node-visual,
+    .dense-network .chunk-node.selected:hover .node-visual,
+    .dense-network .chunk-node.selected:focus-visible .node-visual { transform:scale(3.2); }
+    .chunk-node circle { fill-opacity:.42; transition:fill-opacity .3s ease,stroke .3s ease,stroke-width .3s ease; }
+    .chunk-node.selected circle { fill-opacity:1; stroke:var(--select); stroke-opacity:1; stroke-width:.9; }
+    .chunk-node text { pointer-events:none; }
+    #topic-links { pointer-events:none; }
+    #topic-links path { fill:none; stroke-linecap:round; filter:url(#topic-glow); }
+    #island-fields, #island-links { pointer-events:none; }
+    #island-fields ellipse { mix-blend-mode:screen; }
+    #island-links path, #island-links line { fill:none; stroke-linecap:round; filter:url(#relation-glow); }
+    #island-links line.parameter-backbone { filter:none; }
+    #links { pointer-events:none; }
+    #links line { stroke-linecap:round; filter:url(#relation-glow); }
+    #network.dense-relations #links line { filter:none; }
+    #root { cursor:pointer; filter:url(#root-glow); }
+    #annotation { pointer-events:none; }
+    #annotation line { stroke:#2eeaff; stroke-width:1.3; stroke-opacity:.84; filter:url(#relation-glow); }
+    #annotation rect { fill:#090f19; fill-opacity:.97; stroke:#2eeaff; stroke-width:1; }
+    #annotation .annotation-topic { fill:#2eeaff; font-size:9px; font-weight:700; }
+    #annotation .annotation-text { fill:#eafaff; font-size:10px; font-weight:700; }
+    .caption { margin:10px 5px 0; color:var(--sub); font-size:11px; line-height:1.7; }
+    @media (max-width:760px) {
+      main { width:min(100% - 18px,980px); padding-top:24px; }
+      header { display:block; }
+      .meta { justify-content:flex-start; margin-top:12px; }
+      .details { padding-top:13px; }
+    }
+    @media (prefers-reduced-motion:reduce) { .node-visual, .chunk-node circle { transition:none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>チャンクネットワーク</h1>
+        <p class="lead">自由記述から抽出した意見を、1件ずつのノードとして表示する別方式。線は本文の共通語を主軸に結ぶ。</p>
+      </div>
+      <div class="meta" aria-label="表示条件">
+        <span class="pill" id="node-count">ノード 全件</span>
+        <span class="pill" id="link-count">リンク --</span>
+        <span class="pill" id="layout-label">パラメータ放射</span>
+      </div>
+    </header>
+    <section class="panel" aria-label="チャンクネットワークのプレビュー">
+      <div class="legend" aria-label="凡例">
+        <span class="legend-item"><span class="gradient"></span><span id="parameter-legend">パラメータ（全体色・中心距離）</span></span>
+        <span class="legend-item"><span class="relation-key content"></span>本文の共通語（主）</span>
+        <span class="legend-item"><span class="relation-key topic"></span>トピック</span>
+        <span class="legend-item"><span class="relation-key target"></span>対象</span>
+        <span class="legend-item"><span class="relation-key category"></span>分類</span>
+        <span class="legend-item">感情値はリンク条件に使わず詳細表示</span>
+      </div>
+      <div class="workspace">
+        <svg id="network" viewBox="0 0 760 760" role="img" aria-label="自由記述チャンクのネットワーク図">
+          <defs>
+            <filter id="topic-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="3.2" result="blur"></feGaussianBlur>
+              <feMerge>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+            <filter id="relation-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="1.7" result="blur"></feGaussianBlur>
+              <feMerge>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+            <filter id="island-field-glow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="10"></feGaussianBlur>
+            </filter>
+            <filter id="root-glow" x="-50%" y="-60%" width="200%" height="220%">
+              <feGaussianBlur stdDeviation="4" result="blur"></feGaussianBlur>
+              <feMerge>
+                <feMergeNode in="blur"></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+          </defs>
+          <g id="field">
+            <g id="island-fields"></g>
+            <g id="island-links"></g>
+            <g id="topic-links"></g>
+            <g id="links"></g>
+            <g id="nodes"></g>
+            <g id="annotation" visibility="hidden"></g>
+          </g>
+          <g id="root">
+            <rect x="342" y="358" width="76" height="44" rx="8" fill="#000080" stroke="#2eeaff" stroke-width="2"></rect>
+            <text x="380" y="380" text-anchor="middle" dominant-baseline="central" font-size="16" font-weight="700" fill="#fff" font-family="Shippori Mincho, Yu Mincho, Noto Serif JP, serif">政治</text>
+          </g>
+        </svg>
+        <aside class="details" id="details" aria-live="polite">
+          <h2>チャンクの詳細</h2>
+          <p>ノードを選択すると、抽出された意見本文と接続理由を表示します。</p>
+        </aside>
+      </div>
+      <p class="caption">独立プレビュー。リンクは「本文の共通語」を主条件とし、トピック・対象・分類の一致を補助条件にする。既存の意見ネットワークや <code>tree-preview.html</code> には接続していません。</p>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const W = 760, H = 760, cx = W / 2, cy = H / 2;
+      const seedChunks = [
+        ["スタートアップ支援をもっと進めてほしい。", "雇用", "提言", .25, 66, "政府全般", ""],
+        ["減税で手取りを増やすべきだ。", "税制", "要望", -.35, 62, "財務省", "財務省"],
+        ["年金だけでは生活が苦しい。", "年金", "不満", -.78, 88, "厚生労働省", "厚生労働省"],
+        ["将来の支給水準を明示してほしい。", "年金", "要望", -.42, 76, "厚生労働省", "厚生労働省"],
+        ["保育無償化を全国一律にしてほしい。", "子育て", "要望", .18, 74, "政府全般", ""],
+        ["待機児童対策が遅すぎる。", "子育て", "不満", -.62, 81, "地方自治体", "自治体"],
+        ["政治資金の透明化を優先してほしい。", "政治改革", "提言", -.12, 69, "政府全般", ""],
+        ["与党は説明責任を果たすべきだ。", "政治改革", "要望", -.5, 72, "政党", "与党"],
+        ["防衛費の増額はやむを得ない。", "防衛", "評価", .3, 58, "政府全般", ""],
+        ["財源と使途の説明が不足している。", "防衛", "不満", -.55, 84, "政府全般", ""],
+        ["同盟の強化を支持する。", "外交", "評価", .62, 54, "政府全般", ""],
+        ["憲法の議論も前に進めてほしい。", "外交", "提言", .1, 63, "政党", "国会"],
+        ["再エネへの移行を加速してほしい。", "エネルギー", "提言", .42, 77, "環境省", "環境省"],
+        ["削減目標は野心が足りない。", "エネルギー", "不満", -.3, 71, "環境省", "環境省"],
+        ["物価高で生活が限界だ。", "物価", "不満", -.86, 92, "政府全般", ""],
+        ["消費税を下げて家計を守ってほしい。", "税制", "要望", -.58, 83, "財務省", "財務省"],
+        ["教員の長時間労働を改善してほしい。", "教育", "要望", -.2, 73, "文部科学省", "文部科学省"],
+        ["部活動改革を進めるべきだ。", "教育", "提言", .12, 61, "文部科学省", "文部科学省"],
+        ["地域医療の担い手を確保してほしい。", "医療", "要望", -.25, 79, "地方自治体", "自治体"],
+        ["介護職の処遇を改善してほしい。", "介護", "要望", -.48, 86, "厚生労働省", "厚生労働省"],
+        ["行政手続きをもっと簡単にしてほしい。", "行政DX", "提言", .22, 57, "政府全般", ""],
+        ["自治体のデジタル化を急いでほしい。", "行政DX", "提言", .3, 64, "地方自治体", "自治体"],
+        ["農業の収入を安定させてほしい。", "農業", "要望", -.15, 68, "農林水産省", "農林水産省"],
+        ["食料自給率を高めるべきだ。", "農業", "提言", .28, 60, "農林水産省", "農林水産省"]
+      ].map((row, i) => ({ id: "sample-" + i, text: row[0], topic: row[1], cat: row[2], emo: row[3], crit: row[4], valid: 56 + (i * 17) % 39, motiv: 44 + (i * 13) % 52, tt: row[5], tn: row[6], target: row[5] + "|" + row[6] }));
+      const searchParams = new URLSearchParams(location.search);
+      const requestedCount = Number(searchParams.get("count"));
+      const maxPreviewNodes = 50000;
+      const maxVisibleRelatedLinks = 30;
+      const requestedLayout = searchParams.get("layout");
+      const layoutMode = requestedLayout === "clustered" || requestedLayout === "radial" ? requestedLayout : "parameter";
+      document.getElementById("parameter-legend").textContent = layoutMode === "clustered"
+        ? "パラメータ（全体色・島内縦軸）"
+        : "パラメータ（全体色・中心距離）";
+      document.getElementById("layout-label").textContent = layoutMode === "clustered"
+        ? "群配置"
+        : layoutMode === "radial" ? "意味島" : "パラメータ放射";
+      const repeat = requestedCount > 0 ? Math.max(1, Math.ceil(Math.min(maxPreviewNodes, requestedCount) / seedChunks.length)) : 4;
+      const expanded = seedChunks.flatMap((seedChunk, seedIndex) => Array.from({ length: repeat }, (_, copy) => {
+        if (!copy) return { ...seedChunk };
+        const id = seedChunk.id + "-v" + copy;
+        const variation = seed(id + "|parameters");
+        const adjust = Math.round((variation - 0.5) * 18);
+        return {
+          ...seedChunk,
+          id: id,
+          text: seedChunk.text + " [" + (copy + 1) + "]",
+          crit: Math.max(0, Math.min(100, seedChunk.crit + adjust)),
+          valid: Math.max(0, Math.min(100, seedChunk.valid - adjust)),
+          motiv: Math.max(0, Math.min(100, seedChunk.motiv + Math.round(adjust / 2)))
+        };
+      }));
+      const raw = requestedCount > 0 ? expanded.slice(0, Math.min(maxPreviewNodes, requestedCount)) : expanded;
+      const denseMode = raw.length > 500;
+      const network = document.getElementById("network"), field = document.getElementById("field"), root = document.getElementById("root");
+      network.classList.toggle("dense-network", denseMode);
+      const islandFieldsLayer = document.getElementById("island-fields"), islandLinksLayer = document.getElementById("island-links"), topicLinksLayer = document.getElementById("topic-links"), linksLayer = document.getElementById("links"), nodesLayer = document.getElementById("nodes"), annotationLayer = document.getElementById("annotation"), details = document.getElementById("details");
+      const nodeCount = document.getElementById("node-count"), linkCount = document.getElementById("link-count");
+      const initialDetailsHtml = details.innerHTML;
+      function seed(value) { let h = 2166136261; for (const ch of String(value)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return (h >>> 0) / 4294967295; }
+      function textNormalize(value) { return String(value || "").normalize("NFKC").toLocaleLowerCase("ja-JP"); }
+      function semanticText(value) { return textNormalize(value).replace(/\s*\[\d+\]\s*$/, "").trim(); }
+      const wordSegmenter = typeof Intl !== "undefined" && Intl.Segmenter ? new Intl.Segmenter("ja", { granularity:"word" }) : null;
+      function contentTerms(value) {
+        const terms = new Set(), addRun = run => { if (!run || run.length < 2) return; terms.add(run); if (run.length <= 8) for (let i = 0; i + 1 < run.length; i++) terms.add(run.slice(i, i + 2)); };
+        const text = semanticText(value);
+        if (wordSegmenter) {
+          for (const part of wordSegmenter.segment(text)) {
+            const term = String(part.segment || "").trim();
+            if (part.isWordLike && term.length >= 2) terms.add(term);
+          }
+        }
+        for (const run of text.match(/[一-龯々〆ヵヶ]+/g) || []) addRun(run);
+        for (const run of text.match(/[ァ-ヶー]{2,}/g) || []) addRun(run);
+        for (const run of text.match(/[a-z0-9]{2,}/gi) || []) terms.add(run);
+        return [...terms];
+      }
+      function linkColor(kind) { return ({ content: "#17e6d1", island:"#42d9ff", topic: "#7188ff", target: "#ffc247", category: "#f06bff", fact: "#8ea1b8" })[kind] || "#7188ff"; }
+      const termDocumentFrequency = new Map();
+      for (const n of raw) {
+        n.semanticText = semanticText(n.text);
+        n.contentTerms = contentTerms(n.text);
+        n.termSet = new Set(n.contentTerms);
+        n.targetKey = String(n.target || "").replace(/^\|+|\|+$/g, "").trim();
+        for (const term of n.termSet) termDocumentFrequency.set(term, (termDocumentFrequency.get(term) || 0) + 1);
+        const values = [[n.crit, .5], [n.motiv, .3], [n.valid, .2]];
+        let total = 0, weights = 0;
+        for (const pair of values) { total += Math.max(0, Math.min(100, pair[0])) / 100 * pair[1]; weights += pair[1]; }
+        n.weight = weights ? total / weights : 0;
+      }
+      const indexById = new Map(raw.map((node, index) => [node.id, index]));
+      const nodeById = new Map(raw.map(node => [node.id, node]));
+      function addToIndex(index, key, id) {
+        if (!key) return;
+        if (!index.has(key)) index.set(key, new Set());
+        index.get(key).add(id);
+      }
+      const termIndex = new Map(), topicIndex = new Map(), targetIndex = new Map(), categoryIndex = new Map();
+      for (const node of raw) {
+        for (const term of node.termSet) addToIndex(termIndex, term, node.id);
+        addToIndex(topicIndex, node.topic || "その他", node.id);
+        addToIndex(targetIndex, node.targetKey, node.id);
+        addToIndex(categoryIndex, node.cat, node.id);
+      }
+      let minWeight = 1, maxWeight = 0;
+      for (const n of raw) { minWeight = Math.min(minWeight, n.weight); maxWeight = Math.max(maxWeight, n.weight); }
+      const weightSpan = maxWeight - minWeight;
+      for (const n of raw) n.weightView = weightSpan > 1e-9 ? (n.weight - minWeight) / weightSpan : .5;
+      const weightLevels = [...new Set(raw.map(node => node.weightView.toFixed(12)))]
+        .map(Number)
+        .sort((a, b) => b - a);
+      const weightLevelCenters = weightLevels.map(weight => 56 + Math.pow(1 - weight, 1.25) * (350 - 56));
+      const radiusRangeByWeight = new Map(weightLevels.map((weight, index) => {
+        const center = weightLevelCenters[index];
+        const inner = index ? (weightLevelCenters[index - 1] + center) / 2 : 44;
+        const outer = index < weightLevelCenters.length - 1 ? (center + weightLevelCenters[index + 1]) / 2 : 352;
+        const inset = Math.min(3, Math.max(0, (outer - inner) * .08));
+        return [weight.toFixed(12), { inner:inner + inset, outer:outer - inset }];
+      }));
+      const minimumIslandSize = denseMode ? Math.max(12, Math.ceil(raw.length * .0015)) : 2;
+      const islands = [];
+      function addIsland(type, label, ids, baseScore) {
+        if (!label || !ids || ids.size < minimumIslandSize) return;
+        const specificity = Math.log((raw.length + 1) / (ids.size + 1)) / Math.log(raw.length + 1);
+        islands.push({ id:type + ":" + label, type, label, sourceIds:ids, baseScore, score:Math.min(1, baseScore + specificity * .32), memberIds:[], primaryMemberIds:[] });
+      }
+      for (const [label, ids] of topicIndex) addIsland("topic", label, ids, .48);
+      [...targetIndex.entries()].sort((a, b) => b[1].size - a[1].size).slice(0, 12).forEach(([label, ids]) => addIsland("target", label.replace(/\|/g, " / "), ids, .58));
+      [...categoryIndex.entries()].sort((a, b) => b[1].size - a[1].size).slice(0, 8).forEach(([label, ids]) => addIsland("category", label, ids, .34));
+      [...termIndex.entries()]
+        .filter(([term, ids]) => term.length >= 2 && !/^\d+$/.test(term) && ids.size >= minimumIslandSize && ids.size <= raw.length * .35)
+        .sort((a, b) => {
+          const aidf = Math.log((raw.length + 1) / (a[1].size + 1));
+          const bidf = Math.log((raw.length + 1) / (b[1].size + 1));
+          return bidf - aidf || b[0].length - a[0].length || a[0].localeCompare(b[0], "ja");
+        })
+        .slice(0, 24)
+        .forEach(([label, ids]) => addIsland("term", label, ids, .66));
+      const islandTypeOrder = { topic:0, target:1, category:2, term:3 };
+      islands.sort((a, b) => islandTypeOrder[a.type] - islandTypeOrder[b.type] || b.sourceIds.size - a.sourceIds.size || a.label.localeCompare(b.label, "ja"));
+      const islandById = new Map(islands.map(island => [island.id, island]));
+      for (const node of raw) {
+        const memberships = islands
+          .filter(island => island.sourceIds.has(node.id))
+          .map(island => ({ islandId:island.id, type:island.type, label:island.label, score:island.score }))
+          .sort((a, b) => b.score - a.score || a.islandId.localeCompare(b.islandId));
+        const selectedMemberships = memberships.slice(0, 3);
+        const topicMembership = memberships.find(membership => membership.type === "topic");
+        if (topicMembership && !selectedMemberships.some(membership => membership.islandId === topicMembership.islandId)) {
+          if (selectedMemberships.length >= 3) selectedMemberships[selectedMemberships.length - 1] = topicMembership;
+          else selectedMemberships.push(topicMembership);
+        }
+        node.islandMemberships = selectedMemberships.sort((a, b) => b.score - a.score);
+        node.degree = node.islandMemberships.length;
+        for (const membership of node.islandMemberships) islandById.get(membership.islandId)?.memberIds.push(node.id);
+        const visualMembership = node.islandMemberships[0];
+        node.visualIslandId = visualMembership?.islandId || "";
+        islandById.get(node.visualIslandId)?.primaryMemberIds.push(node.id);
+      }
+      const visibleIslands = islands.filter(island => island.primaryMemberIds.length);
+      const islandSpanTotal = visibleIslands.reduce((sum, island) => sum + island.primaryMemberIds.length, 0) || 1;
+      let islandAngleCursor = -Math.PI / 2;
+      visibleIslands.forEach(island => {
+        island.angularSpan = Math.PI * 2 * island.primaryMemberIds.length / islandSpanTotal;
+        island.angle = islandAngleCursor + island.angularSpan / 2;
+        islandAngleCursor += island.angularSpan;
+      });
+      const clusterCenters = new Map();
+      if (layoutMode === "clustered") {
+        const orderedIslands = [...visibleIslands].sort((a, b) => b.primaryMemberIds.length - a.primaryMemberIds.length || a.id.localeCompare(b.id));
+        const maxIslandSize = Math.max(1, ...orderedIslands.map(island => island.primaryMemberIds.length));
+        const placed = [];
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+        function sourceAffinity(left, right) {
+          const smaller = left.sourceIds.size <= right.sourceIds.size ? left.sourceIds : right.sourceIds;
+          const larger = smaller === left.sourceIds ? right.sourceIds : left.sourceIds;
+          let shared = 0;
+          for (const id of smaller) if (larger.has(id)) shared++;
+          return shared / Math.max(1, Math.min(left.sourceIds.size, right.sourceIds.size));
+        }
+        for (const island of orderedIslands) {
+          const sizeRatio = Math.sqrt(island.primaryMemberIds.length / maxIslandSize);
+          const rx = 27 + sizeRatio * 42;
+          const ry = 22 + sizeRatio * 34;
+          let best = null;
+          for (let attempt = 0; attempt < 1400; attempt++) {
+            const reach = 86 + Math.sqrt(attempt / 1399) * 242;
+            const angle = attempt * goldenAngle + seed(island.id + "|cluster-angle") * Math.PI * 2;
+            const x = cx + Math.cos(angle) * reach;
+            const y = cy + Math.sin(angle) * reach;
+            const boundary = Math.max(0, rx + 16 - x, x + rx + 16 - W, ry + 16 - y, y + ry + 16 - H);
+            const rootOverlap = Math.max(0, 64 + Math.max(rx, ry) - Math.hypot(x - cx, y - cy));
+            let overlap = 0, relationDistance = 0;
+            for (const other of placed) {
+              const distance = Math.hypot(x - other.x, y - other.y);
+              overlap += Math.max(0, Math.max(rx, ry) + Math.max(other.rx, other.ry) + 10 - distance);
+              relationDistance += sourceAffinity(island, other.island) * distance;
+            }
+            const score = boundary * 1000 + rootOverlap * 1000 + overlap * 1000 + relationDistance * .035 + reach * .02;
+            if (!best || score < best.score) best = { island, x, y, rx, ry, score };
+          }
+          const localWeightLevels = [...new Set(island.primaryMemberIds.map(id => nodeById.get(id)?.weightView.toFixed(12)).filter(Boolean))]
+            .map(Number)
+            .sort((a, b) => b - a);
+          const localCenters = localWeightLevels.map((weight, index) => {
+            if (localWeightLevels.length <= 1) return 0;
+            return -best.ry * .8 + index / (localWeightLevels.length - 1) * best.ry * 1.6;
+          });
+          best.weightBands = new Map(localWeightLevels.map((weight, index) => {
+            const center = localCenters[index];
+            const top = index ? (localCenters[index - 1] + center) / 2 : -best.ry * .86;
+            const bottom = index < localCenters.length - 1 ? (center + localCenters[index + 1]) / 2 : best.ry * .86;
+            return [weight.toFixed(12), { top, bottom }];
+          }));
+          placed.push(best);
+          clusterCenters.set(island.id, best);
+        }
+      }
+      nodeCount.textContent = "ノード " + raw.length + "件";
+      linkCount.textContent = layoutMode === "parameter" ? "関係 選択時" : "島 " + visibleIslands.length + "群";
+      const maxDegree = Math.max(1, ...raw.map(n => n.degree));
+      const positions = raw.map(node => {
+        const cluster = clusterCenters.get(node.visualIslandId);
+        if (cluster) {
+          const horizontalUnit = (
+            seed(node.id + "|cluster-x-a")
+            + seed(node.id + "|cluster-x-b")
+            + seed(node.id + "|cluster-x-c")
+            + seed(node.id + "|cluster-x-d")
+          ) / 4 - .5;
+          const weightBand = cluster.weightBands.get(node.weightView.toFixed(12));
+          const localY = weightBand
+            ? weightBand.top + (weightBand.bottom - weightBand.top) * seed(node.id + "|cluster-y-band")
+            : 0;
+          const verticalRatio = Math.min(1, Math.abs(localY) / Math.max(1, cluster.ry * .9));
+          const horizontalEnvelope = .34 + Math.sqrt(Math.max(0, 1 - verticalRatio * verticalRatio)) * .66;
+          const localX = horizontalUnit * 2.35 * cluster.rx * horizontalEnvelope;
+          return { x:cluster.x + localX, y:cluster.y + localY };
+        }
+        const randomAngle = seed(node.id + "|angle") * Math.PI * 2;
+        const visualIsland = islandById.get(node.visualIslandId);
+        const radiusRange = radiusRangeByWeight.get(node.weightView.toFixed(12));
+        const r = radiusRange
+          ? radiusRange.inner + (radiusRange.outer - radiusRange.inner) * seed(node.id + "|radius-within-level")
+          : 56 + Math.pow(1 - node.weightView, 1.25) * (350 - 56);
+        if (layoutMode === "parameter") return { x:cx + r * Math.cos(randomAngle), y:cy + r * Math.sin(randomAngle) };
+        const radialProgress = (r - 44) / (352 - 44);
+        const angularNoise = (
+          seed(node.id + "|radial-x-a")
+          + seed(node.id + "|radial-x-b")
+          + seed(node.id + "|radial-x-c")
+          + seed(node.id + "|radial-x-d")
+        ) / 4 - .5;
+        const islandCurve = visualIsland ? (seed(visualIsland.id + "|radial-curve") - .5) * visualIsland.angularSpan * 1.2 : 0;
+        const islandPhase = visualIsland ? seed(visualIsland.id + "|radial-phase") * Math.PI * 2 : 0;
+        const angle = visualIsland
+          ? visualIsland.angle
+            + angularNoise * visualIsland.angularSpan * 1.5
+            + islandCurve * (radialProgress - .5)
+            + Math.sin(radialProgress * Math.PI * 2 + islandPhase) * visualIsland.angularSpan * .16
+          : randomAngle;
+        return { x:cx + r * Math.cos(angle), y:cy + r * Math.sin(angle) };
+      });
+      function networkLineWidth(score) { return .72 + Math.max(0, Math.min(1, score)) * .48; }
+      function islandColor(type) {
+        return ({ topic:"#7188ff", target:"#ffc247", category:"#f06bff", term:"#17e6d1" })[type] || "#7188ff";
+      }
+      const representativeByIsland = new Map();
+      for (const island of islands) {
+        if (!island.primaryMemberIds.length) continue;
+        const indices = island.primaryMemberIds.map(id => indexById.get(id)).filter(index => index != null);
+        const centroid = indices.reduce((sum, index) => ({ x:sum.x + positions[index].x, y:sum.y + positions[index].y }), { x:0, y:0 });
+        centroid.x /= indices.length;
+        centroid.y /= indices.length;
+        const covariance = indices.reduce((sum, index) => {
+          const dx = positions[index].x - centroid.x, dy = positions[index].y - centroid.y;
+          sum.xx += dx * dx;
+          sum.yy += dy * dy;
+          sum.xy += dx * dy;
+          return sum;
+        }, { xx:0, yy:0, xy:0 });
+        covariance.xx /= indices.length;
+        covariance.yy /= indices.length;
+        covariance.xy /= indices.length;
+        const trace = covariance.xx + covariance.yy;
+        const spread = Math.sqrt(Math.max(0, (covariance.xx - covariance.yy) ** 2 + 4 * covariance.xy ** 2));
+        const major = Math.max(0, (trace + spread) / 2);
+        const minor = Math.max(0, (trace - spread) / 2);
+        island.geometry = {
+          x:centroid.x,
+          y:centroid.y,
+          rx:Math.max(28, Math.min(96, Math.sqrt(major) * 1.08 + 12)),
+          ry:Math.max(12, Math.min(42, Math.sqrt(minor) * 1.08 + 10)),
+          rotation:Math.atan2(2 * covariance.xy, covariance.xx - covariance.yy) * 90 / Math.PI
+        };
+        const representativeIndex = indices.reduce((best, index) => {
+          const point = positions[index], bestPoint = positions[best];
+          const distance = (point.x - centroid.x) ** 2 + (point.y - centroid.y) ** 2;
+          const bestDistance = (bestPoint.x - centroid.x) ** 2 + (bestPoint.y - centroid.y) ** 2;
+          return distance < bestDistance ? index : best;
+        }, indices[0]);
+        representativeByIsland.set(island.id, representativeIndex);
+      }
+      const islandFieldsFragment = document.createDocumentFragment();
+      for (const island of islands) {
+        const geometry = island.geometry;
+        if (!geometry) continue;
+        const transform = "rotate(" + geometry.rotation.toFixed(2) + " " + geometry.x.toFixed(2) + " " + geometry.y.toFixed(2) + ")";
+        const color = islandColor(island.type);
+        islandFieldsFragment.appendChild(el("ellipse", {
+          cx:geometry.x.toFixed(2),
+          cy:geometry.y.toFixed(2),
+          rx:geometry.rx.toFixed(2),
+          ry:geometry.ry.toFixed(2),
+          transform,
+          fill:color,
+          "fill-opacity":(.018 + island.score * .018).toFixed(3),
+          filter:"url(#island-field-glow)"
+        }));
+      }
+      islandFieldsLayer.replaceChildren(islandFieldsFragment);
+      const islandRelations = [];
+      const islandMemberSets = new Map(islands.map(island => [island.id, new Set(island.memberIds)]));
+      const minimumShared = denseMode ? Math.max(3, Math.ceil(raw.length * .0005)) : 1;
+      for (let leftIndex = 0; leftIndex < islands.length; leftIndex++) {
+        const left = islands[leftIndex], leftSet = islandMemberSets.get(left.id);
+        if (!left.geometry || !leftSet.size) continue;
+        for (let rightIndex = leftIndex + 1; rightIndex < islands.length; rightIndex++) {
+          const right = islands[rightIndex], rightSet = islandMemberSets.get(right.id);
+          if (!right.geometry || !rightSet.size) continue;
+          const smaller = leftSet.size <= rightSet.size ? leftSet : rightSet;
+          const larger = smaller === leftSet ? rightSet : leftSet;
+          let shared = 0;
+          for (const id of smaller) if (larger.has(id)) shared++;
+          if (shared < minimumShared) continue;
+          const overlap = shared / Math.min(leftSet.size, rightSet.size);
+          const jaccard = shared / (leftSet.size + rightSet.size - shared);
+          const score = overlap * .72 + jaccard * .28;
+          if (score >= .08) islandRelations.push({ left, right, shared, score });
+        }
+      }
+      islandRelations.sort((a, b) => b.score - a.score || b.shared - a.shared || (a.left.id + a.right.id).localeCompare(b.left.id + b.right.id));
+      const islandDegree = new Map();
+      const selectedIslandRelations = [];
+      for (const relation of islandRelations) {
+        const leftDegree = islandDegree.get(relation.left.id) || 0;
+        const rightDegree = islandDegree.get(relation.right.id) || 0;
+        if (leftDegree >= 3 || rightDegree >= 3) continue;
+        selectedIslandRelations.push(relation);
+        islandDegree.set(relation.left.id, leftDegree + 1);
+        islandDegree.set(relation.right.id, rightDegree + 1);
+      }
+      const islandLinksFragment = document.createDocumentFragment();
+      for (const island of visibleIslands) {
+        const hubIndex = representativeByIsland.get(island.id);
+        if (hubIndex == null) continue;
+        const hub = positions[hubIndex];
+        const spokeCount = Math.min(10, Math.max(3, Math.ceil(Math.sqrt(island.primaryMemberIds.length) / 3)));
+        const spokeIndices = island.primaryMemberIds
+          .map(id => indexById.get(id))
+          .filter(index => index != null && index !== hubIndex)
+          .sort((left, right) => seed(raw[left].id + "|backbone") - seed(raw[right].id + "|backbone"))
+          .slice(0, spokeCount);
+        for (const spokeIndex of spokeIndices) {
+          const point = positions[spokeIndex];
+          const line = el("line", {
+            x1:hub.x.toFixed(2),
+            y1:hub.y.toFixed(2),
+            x2:point.x.toFixed(2),
+            y2:point.y.toFixed(2),
+            stroke:islandColor(island.type),
+            "stroke-opacity":.19,
+            "stroke-width":networkLineWidth(island.score)
+          });
+          const title = el("title", {});
+          title.textContent = island.label + " / 同じ表示島";
+          line.appendChild(title);
+          islandLinksFragment.appendChild(line);
+        }
+      }
+      for (const relation of selectedIslandRelations) {
+        const a = relation.left.geometry, b = relation.right.geometry;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const length = Math.max(1, Math.hypot(dx, dy));
+        const bend = (seed(relation.left.id + "|" + relation.right.id) - .5) * 38;
+        const controlX = (a.x + b.x) / 2 - dy / length * bend;
+        const controlY = (a.y + b.y) / 2 + dx / length * bend;
+        const path = el("path", {
+          d:"M " + a.x.toFixed(2) + " " + a.y.toFixed(2) + " Q " + controlX.toFixed(2) + " " + controlY.toFixed(2) + " " + b.x.toFixed(2) + " " + b.y.toFixed(2),
+          stroke:"#8095ff",
+          "stroke-opacity":Math.min(.42, .1 + relation.score * .34).toFixed(3),
+          "stroke-width":networkLineWidth(relation.score)
+        });
+        const title = el("title", {});
+        title.textContent = relation.left.label + " ↔ " + relation.right.label + " / 共有 " + relation.shared + "件";
+        path.appendChild(title);
+        islandLinksFragment.appendChild(path);
+      }
+      islandLinksLayer.replaceChildren(islandLinksFragment);
+      const topicLinksFragment = document.createDocumentFragment();
+      islands.forEach(island => {
+        const representativeIndex = representativeByIsland.get(island.id);
+        if (representativeIndex == null) return;
+        const point = positions[representativeIndex];
+        const dx = point.x - cx, dy = point.y - cy;
+        const length = Math.max(1, Math.hypot(dx, dy));
+        const bend = (seed(island.id + "|curve") - .5) * 76;
+        const controlX = (cx + point.x) / 2 - dy / length * bend;
+        const controlY = (cy + point.y) / 2 + dx / length * bend;
+        const path = el("path", {
+          d:"M " + cx + " " + cy + " Q " + controlX.toFixed(2) + " " + controlY.toFixed(2) + " " + point.x.toFixed(2) + " " + point.y.toFixed(2),
+          stroke:"#42d9ff",
+          "stroke-opacity":Math.min(.58, .28 + island.score * .3),
+          "stroke-width":networkLineWidth(island.score)
+        });
+        topicLinksFragment.appendChild(path);
+      });
+      topicLinksLayer.replaceChildren(topicLinksFragment);
+      if (layoutMode === "parameter") {
+        islandFieldsLayer.replaceChildren();
+        islandLinksLayer.replaceChildren();
+        topicLinksLayer.replaceChildren();
+      }
+      let selectedLinks = [];
+      function termWeight(term) { return 1 + Math.log((raw.length + 1) / ((termDocumentFrequency.get(term) || 0) + 1)); }
+      function evaluateRelation(a, b) {
+        const relations = [];
+        const sameVisualIsland = layoutMode !== "parameter" && Boolean(a.visualIslandId && a.visualIslandId === b.visualIslandId);
+        if (sameVisualIsland) {
+          const island = islandById.get(a.visualIslandId);
+          relations.push({ kind:"island", label:"同じ表示島", detail:island?.label || "", weight:.16 });
+        }
+        const sharedTerms = [...a.termSet].filter(term => b.termSet.has(term));
+        const sharedWeight = sharedTerms.reduce((sum, term) => sum + termWeight(term), 0);
+        const allTerms = new Set([...a.termSet, ...b.termSet]);
+        const unionWeight = [...allTerms].reduce((sum, term) => sum + termWeight(term), 0) || 1;
+        const exactText = a.semanticText.length >= 4 && a.semanticText === b.semanticText;
+        const contentScore = exactText ? .72 : sharedWeight / unionWeight * .68;
+        if (contentScore >= .08) relations.push({ kind:"content", label:exactText ? "本文一致" : "本文類似", detail:sharedTerms.sort((x, y) => termWeight(y) - termWeight(x)).slice(0, 4).join("・"), weight:contentScore });
+        if (a.targetKey && a.targetKey === b.targetKey) relations.push({ kind:"target", label:"同じ対象", detail:a.targetKey.replace(/\|/g, " / "), weight:.18 });
+        if (a.topic && a.topic === b.topic) relations.push({ kind:"topic", label:"同じトピック", detail:a.topic, weight:.08 });
+        if (a.cat && a.cat === b.cat) relations.push({ kind:"category", label:"同じ分類", detail:a.cat, weight:.06 });
+        const sharedIslandIds = a.islandMemberships.filter(left => b.islandMemberships.some(right => right.islandId === left.islandId));
+        const nonTopicIsland = layoutMode === "parameter" ? null : sharedIslandIds.find(membership => membership.type !== "topic");
+        if (nonTopicIsland) relations.push({ kind:"fact", label:"同じ評価島", detail:nonTopicIsland.label, weight:.11 });
+        const parameterSimilarity = 1 - (Math.abs(a.crit - b.crit) + Math.abs(a.motiv - b.motiv) + Math.abs(a.valid - b.valid)) / 300;
+        if (parameterSimilarity >= .82) relations.push({ kind:"fact", label:"パラメータ近似", detail:Math.round(parameterSimilarity * 100) + "%", weight:.05 * parameterSimilarity });
+        const hasEvidence = sameVisualIsland || exactText || contentScore >= .14 || (a.targetKey && a.targetKey === b.targetKey) || Boolean(nonTopicIsland);
+        const score = relations.reduce((sum, relation) => sum + relation.weight, 0);
+        if (!hasEvidence || score < .2) return null;
+        relations.sort((x, y) => y.weight - x.weight || x.kind.localeCompare(y.kind));
+        return { a, b, score, sameVisualIsland, primary:relations[0].kind, relations, reasons:relations.map(relation => relation.detail ? relation.label + ": " + relation.detail : relation.label) };
+      }
+      function relatedLinksFor(node) {
+        const candidateIds = new Set();
+        for (const id of islandById.get(node.visualIslandId)?.primaryMemberIds || []) candidateIds.add(id);
+        for (const membership of node.islandMemberships) {
+          for (const id of islandById.get(membership.islandId)?.memberIds || []) candidateIds.add(id);
+        }
+        for (const term of node.termSet) for (const id of termIndex.get(term) || []) candidateIds.add(id);
+        for (const id of targetIndex.get(node.targetKey) || []) candidateIds.add(id);
+        for (const id of categoryIndex.get(node.cat) || []) candidateIds.add(id);
+        candidateIds.delete(node.id);
+        const ranked = [...candidateIds]
+          .map(id => evaluateRelation(node, nodeById.get(id)))
+          .filter(Boolean)
+          .sort((a, b) => b.score - a.score || a.b.id.localeCompare(b.b.id));
+        if (layoutMode === "parameter") return ranked.slice(0, maxVisibleRelatedLinks);
+        const sameIsland = ranked.filter(link => link.sameVisualIsland);
+        const crossIsland = ranked.filter(link => !link.sameVisualIsland);
+        const selected = [...sameIsland.slice(0, 20), ...crossIsland.slice(0, 10)];
+        if (selected.length < maxVisibleRelatedLinks) {
+          const selectedIds = new Set(selected.map(link => link.b.id));
+          for (const link of ranked) {
+            if (selected.length >= maxVisibleRelatedLinks) break;
+            if (!selectedIds.has(link.b.id)) {
+              selected.push(link);
+              selectedIds.add(link.b.id);
+            }
+          }
+        }
+        return selected.sort((a, b) => b.score - a.score || a.b.id.localeCompare(b.b.id));
+      }
+      let persistentRelationCount = 0;
+      function renderParameterBackbone() {
+        if (layoutMode !== "parameter") return;
+        const fragment = document.createDocumentFragment();
+        const anchorCount = Math.min(raw.length, Math.max(80, Math.ceil(Math.sqrt(raw.length) * 2.4)));
+        const anchors = [];
+        for (let anchorIndex = 0; anchorIndex < anchorCount; anchorIndex++) {
+          const start = Math.floor(anchorIndex * raw.length / anchorCount);
+          const span = Math.max(1, Math.floor(raw.length / anchorCount));
+          const nodeIndex = Math.min(raw.length - 1, start + Math.floor(seed("backbone|" + anchorIndex) * span));
+          anchors.push(raw[nodeIndex]);
+        }
+        let relationCount = 0;
+        for (let leftIndex = 0; leftIndex < anchors.length; leftIndex++) {
+          for (let rightIndex = leftIndex + 1; rightIndex < anchors.length; rightIndex++) {
+            const link = evaluateRelation(anchors[leftIndex], anchors[rightIndex]);
+            if (!link) continue;
+            const a = positions[indexById.get(link.a.id)], b = positions[indexById.get(link.b.id)];
+            const line = el("line", {
+              class:"parameter-backbone",
+              x1:a.x.toFixed(2),
+              y1:a.y.toFixed(2),
+              x2:b.x.toFixed(2),
+              y2:b.y.toFixed(2),
+              stroke:linkColor(link.primary),
+              "stroke-opacity":Math.min(.16, .055 + link.score * .095).toFixed(3),
+              "stroke-width":(networkLineWidth(link.score) * .65).toFixed(3)
+            });
+            const title = el("title", {});
+            title.textContent = link.reasons.join(" / ");
+            line.appendChild(title);
+            fragment.appendChild(line);
+            relationCount++;
+          }
+        }
+        islandLinksLayer.replaceChildren(fragment);
+        persistentRelationCount = relationCount;
+        linkCount.textContent = "関係 " + persistentRelationCount + "本";
+      }
+      renderParameterBackbone();
+      function renderSelectedLinks(node) {
+        linksLayer.replaceChildren();
+        selectedLinks = relatedLinksFor(node);
+        network.classList.toggle("dense-relations", selectedLinks.length > 500);
+        for (const link of selectedLinks) {
+          const ai = indexById.get(link.a.id), bi = indexById.get(link.b.id), a = positions[ai], b = positions[bi];
+          const line = el("line", { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:linkColor(link.primary), "stroke-opacity":.88, "stroke-width":networkLineWidth(link.score) });
+          const title = el("title", {}); title.textContent = link.reasons.join(" / "); line.appendChild(title); linksLayer.appendChild(line);
+        }
+        linkCount.textContent = layoutMode === "parameter"
+          ? "選択 " + selectedLinks.length + " / 常時 " + persistentRelationCount
+          : "関係 " + selectedLinks.length + " / 島 " + visibleIslands.length;
+      }
+      function weightColor(value) { const t = Math.max(0, Math.min(1, Number(value) || 0)); const low = [168, 180, 216], high = [0, 0, 128]; const rgb = low.map((v, i) => Math.round(v + (high[i] - v) * t)); return "#" + rgb.map(v => ("0" + v.toString(16)).slice(-2)).join(""); }
+      function el(tag, attrs) { const e = document.createElementNS(SVG_NS, tag); for (const key in attrs) e.setAttribute(key, attrs[key]); return e; }
+      function labelLines(text) { return text.length > 13 ? [text.slice(0, 13), text.slice(13, 26) + (text.length > 26 ? "..." : "")] : [text]; }
+      function escapeHtml(value) { return String(value == null ? "" : value).replace(/[&<>\"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch])); }
+      function detailsHtml(n, relations) {
+        const allRelated = [...relations].sort((a, b) => b.score - a.score);
+        const related = allRelated.slice(0, 12).map(link => { const other = link.a === n ? link.b : link.a; const reason = link.relations.map(r => r.detail ? r.label + ": " + r.detail : r.label).join(" / "); return "<li class=\"relation-row " + link.primary + "\"><span class=\"relation-text\">" + escapeHtml(other.text) + "</span><span class=\"relation-reason\">" + escapeHtml(reason) + "</span></li>"; }).join("");
+        const relationBlock = allRelated.length ? "<section class=\"relations\"><h3>リンクの根拠（" + Math.min(12, allRelated.length) + "件表示）</h3><ul class=\"relation-list\">" + related + "</ul></section>" : "<section class=\"relations\"><h3>リンクの根拠</h3><p>本文や属性が一致する相手はありません。</p></section>";
+        const memberships = n.islandMemberships.map(membership => membership.label + " " + Math.round(membership.score * 100)).join(" / ");
+        const membershipRow = layoutMode === "parameter" ? "" : "<dt>所属島</dt><dd>" + escapeHtml(memberships || "なし") + "</dd>";
+        return "<h2>チャンクの詳細</h2><p>" + escapeHtml(n.text) + "</p><dl><dt>トピック</dt><dd>" + escapeHtml(n.topic) + "</dd>" + membershipRow + "<dt>分類</dt><dd>" + escapeHtml(n.cat) + "</dd><dt>対象</dt><dd>" + escapeHtml(n.tn || n.tt || "なし") + "</dd><dt>切実度</dt><dd>" + n.crit + " / 100</dd><dt>意欲</dt><dd>" + n.motiv + " / 100</dd><dt>妥当性</dt><dd>" + n.valid + " / 100</dd><dt>感情値</dt><dd>" + Math.round((n.emo + 1) * 50) + " / 100</dd><dt>表示関係</dt><dd>" + allRelated.length + "件</dd></dl>" + relationBlock;
+      }
+      function renderAnnotation(node) {
+        const point = positions[indexById.get(node.id)];
+        const boxWidth = 174, boxHeight = 54, gap = 18;
+        const placeRight = point.x < cx;
+        const boxX = Math.max(8, Math.min(W - boxWidth - 8, placeRight ? point.x + gap : point.x - gap - boxWidth));
+        const boxY = Math.max(8, Math.min(H - boxHeight - 8, point.y - boxHeight / 2));
+        const anchorX = placeRight ? boxX : boxX + boxWidth;
+        const anchorY = Math.max(boxY + 8, Math.min(boxY + boxHeight - 8, point.y));
+        const connector = el("line", { x1:point.x, y1:point.y, x2:anchorX, y2:anchorY });
+        const box = el("rect", { x:boxX, y:boxY, width:boxWidth, height:boxHeight, rx:5 });
+        const topic = el("text", { x:boxX + 10, y:boxY + 14, class:"annotation-topic" });
+        const islandLabel = layoutMode === "parameter"
+          ? node.topic || "その他"
+          : node.islandMemberships.slice(0, 2).map(membership => membership.label).join(" / ") || node.topic || "その他";
+        topic.textContent = islandLabel.length > 24 ? islandLabel.slice(0, 24) + "..." : islandLabel;
+        const text = el("text", { x:boxX + 10, y:boxY + 31, class:"annotation-text" });
+        labelLines(node.text).forEach((line, index) => {
+          const span = el("tspan", { x:boxX + 10, dy:index ? 12 : 0 });
+          span.textContent = line;
+          text.appendChild(span);
+        });
+        annotationLayer.replaceChildren(connector, box, topic, text);
+        annotationLayer.setAttribute("visibility", "visible");
+      }
+      const nodesFragment = document.createDocumentFragment();
+      const nodeRefs = raw.map((n, i) => {
+        const group = el("g", { class: "chunk-node", tabindex: 0, "data-node-id": n.id, "data-weight-view":n.weightView.toFixed(12), "data-island-id":n.visualIslandId, transform: "translate(" + positions[i].x.toFixed(2) + " " + positions[i].y.toFixed(2) + ")" });
+        const visual = el("g", { class: "node-visual" });
+        const densityScale = denseMode ? .2 : 1;
+        const radius = (7 + Math.sqrt(n.crit / 100) * 10 + (layoutMode === "parameter" ? 0 : n.degree / maxDegree * 5)) * densityScale;
+        const circle = el("circle", { r: radius, fill: weightColor(n.weightView), stroke: "#8095ff", "stroke-opacity":.72, "stroke-width": denseMode ? .5 : 1.6 });
+        visual.appendChild(circle);
+        if (!denseMode) {
+          const text = el("text", { y: radius + 12, "text-anchor": "middle", "font-size": 10, "font-weight": 700, fill: "#eafaff", "font-family": "Zen Kaku Gothic New, Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif" });
+          labelLines(n.text).forEach((line, k) => { const t = el("tspan", { x: 0, dy: k ? 12 : 0 }); t.textContent = line; text.appendChild(t); });
+          visual.appendChild(text);
+        }
+        const title = el("title", {});
+        title.textContent = layoutMode === "parameter"
+          ? n.text + " / " + n.topic
+          : n.text + " / " + n.topic + " / 所属島 " + n.degree;
+        group.append(title, visual);
+        nodesFragment.appendChild(group);
+        return { group, node: n };
+      });
+      nodesLayer.appendChild(nodesFragment);
+      const nodeRefById = new Map(nodeRefs.map(ref => [ref.node.id, ref]));
+      let selectedId = "", selectedRef = null;
+      function nodeGroupFromEvent(event) {
+        const target = event.target instanceof Element ? event.target.closest(".chunk-node") : null;
+        return target && nodesLayer.contains(target) ? target : null;
+      }
+      function selectNode(id) {
+        const node = nodeById.get(id), ref = nodeRefById.get(id);
+        if (!node || !ref) return;
+        if (selectedId === id) {
+          clearSelection();
+          return;
+        }
+        if (selectedRef) selectedRef.group.classList.remove("selected");
+        selectedRef = ref;
+        selectedId = id;
+        ref.group.classList.add("selected");
+        nodesLayer.appendChild(ref.group);
+        renderSelectedLinks(node);
+        renderAnnotation(node);
+        details.innerHTML = detailsHtml(node, selectedLinks);
+      }
+      function clearSelection() {
+        if (selectedRef) selectedRef.group.classList.remove("selected");
+        selectedRef = null;
+        selectedId = "";
+        annotationLayer.setAttribute("visibility", "hidden");
+        annotationLayer.replaceChildren();
+        linksLayer.replaceChildren();
+        selectedLinks = [];
+        network.classList.remove("dense-relations");
+        linkCount.textContent = layoutMode === "parameter" ? "関係 " + persistentRelationCount + "本" : "島 " + visibleIslands.length + "群";
+        details.innerHTML = initialDetailsHtml;
+      }
+      nodesLayer.addEventListener("click", event => {
+        const group = nodeGroupFromEvent(event);
+        if (!group) return;
+        event.stopPropagation();
+        selectNode(group.getAttribute("data-node-id"));
+      });
+      nodesLayer.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const group = nodeGroupFromEvent(event);
+        if (!group) return;
+        event.preventDefault();
+        event.stopPropagation();
+        selectNode(group.getAttribute("data-node-id"));
+      });
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let networkExpanded = false;
+      function expandNetwork() {
+        if (networkExpanded) return;
+        networkExpanded = true;
+        const duration = reduce ? 0 : 4000;
+        const started = performance.now();
+        function frame(now) {
+          const progress = duration ? Math.min(1, (now - started) / duration) : 1;
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const scale = .08 + .92 * eased;
+          field.setAttribute("transform", "translate(" + cx + " " + cy + ") scale(" + scale + ") translate(" + -cx + " " + -cy + ")");
+          const inset = 220 * (1 - eased);
+          network.setAttribute("viewBox", inset + " " + inset + " " + (760 - inset * 2) + " " + (760 - inset * 2));
+          if (progress < 1) requestAnimationFrame(frame);
+          else field.removeAttribute("transform");
+        }
+        requestAnimationFrame(frame);
+      }
+      root.setAttribute("role", "button");
+      root.setAttribute("tabindex", "0");
+      root.addEventListener("click", expandNetwork);
+      root.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          expandNetwork();
+        }
+      });
+      network.setAttribute("viewBox", "220 220 320 320");
+      field.setAttribute("transform", "translate(" + cx + " " + cy + ") scale(.08) translate(" + -cx + " " + -cy + ")");
+    })();
+  </script>
+</body>
+</html>

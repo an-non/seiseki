@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1280" viewBox="0 0 1900 1280" role="img" aria-labelledby="title desc">
+  <title id="title">声析 Cloudflare D1 ER図</title>
+  <desc id="desc">Cloudflare D1候補のresponses、answers、opinion_chunks、app_config、rate_limitsの列、制約、外部キー、API利用関係を示す。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#263a63"/></marker>
+    <marker id="arrowRead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#245a8d"/></marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#172126" flood-opacity=".12"/></filter>
+    <style>
+      .title{font:700 30px 'Yu Gothic UI',sans-serif;fill:#172126}.sub{font:400 13px 'Yu Gothic UI',sans-serif;fill:#5d6970}
+      .gt{font:700 18px 'Yu Gothic UI',sans-serif;fill:#fff}.bt{font:700 13px 'Yu Gothic UI',sans-serif;fill:#172126}
+      .body{font:400 12px 'Yu Gothic UI',sans-serif;fill:#4f5b62}.type{font:400 11px Consolas,'Yu Gothic UI',sans-serif;fill:#607078}
+      .key{font:700 11px Consolas,'Yu Gothic UI',sans-serif;fill:#9a3d44}.note{font:400 11px 'Yu Gothic UI',sans-serif;fill:#657178}
+      .rel{fill:none;stroke:#263a63;stroke-width:2.5}.api{fill:none;stroke:#245a8d;stroke-width:1.8;stroke-dasharray:7 5;marker-end:url(#arrowRead)}
+    </style>
+  </defs>
+  <rect width="1900" height="1280" fill="#f5f7f8"/>
+
+  <path d="M26 22H630V90L608 116H26Z" fill="#fff" stroke="#263a63" stroke-width="3" filter="url(#shadow)"/>
+  <text x="52" y="60" class="title">声析 Cloudflare D1 ER図</text>
+  <text x="52" y="88" class="sub">migrations/0001_initial.sql 実装準拠</text>
+
+  <rect x="675" y="34" width="1190" height="68" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="698" y="59" class="bt">状態：ローカルSQLite互換テスト済み / Remote D1未接続</text>
+  <text x="698" y="82" class="body">wrangler.jsonc の database_id はプレースホルダー。以下は実装済みmigrationの構造であり、本番データの存在を示さない。</text>
+
+  <!-- API strip -->
+  <rect x="35" y="141" width="1830" height="88" rx="12" fill="#e8f0f7" stroke="#245a8d"/>
+  <text x="58" y="171" class="bt">Worker APIからの利用</text>
+  <rect x="240" y="158" width="300" height="52" fill="#fff" stroke="#245a8d"/>
+  <text x="255" y="180" class="bt">POST /api/responses</text><text x="255" y="198" class="note">responses + answersをbatch INSERT</text>
+  <rect x="560" y="158" width="300" height="52" fill="#fff" stroke="#245a8d"/>
+  <text x="575" y="180" class="bt">GET /api/responses/:id</text><text x="575" y="198" class="note">responsesの最小メタデータ</text>
+  <rect x="880" y="158" width="300" height="52" fill="#fff" stroke="#245a8d"/>
+  <text x="895" y="180" class="bt">DELETE /api/responses/:id</text><text x="895" y="198" class="note">親1行削除・子をcascade</text>
+  <rect x="1200" y="158" width="300" height="52" fill="#fff" stroke="#245a8d"/>
+  <text x="1215" y="180" class="bt">GET /api/stats</text><text x="1215" y="198" class="note">3テーブルを固定SQLで集計</text>
+  <rect x="1520" y="158" width="300" height="52" fill="#fff" stroke="#245a8d"/>
+  <text x="1535" y="180" class="bt">GET /api/health</text><text x="1535" y="198" class="note">SELECT 1で接続確認</text>
+
+  <!-- Independent tables -->
+  <g filter="url(#shadow)">
+    <rect x="44" y="293" width="425" height="304" fill="#fff" stroke="#596a72" stroke-width="2"/>
+    <rect x="44" y="293" width="425" height="48" fill="#596a72"/>
+    <text x="66" y="324" class="gt">app_config</text>
+    <text x="66" y="372" class="key">PK</text><text x="105" y="372" class="bt">key</text><text x="290" y="372" class="type">TEXT</text>
+    <line x1="66" y1="387" x2="447" y2="387" stroke="#d6dde0"/>
+    <text x="105" y="416" class="bt">value_json</text><text x="290" y="416" class="type">TEXT NOT NULL</text>
+    <text x="105" y="460" class="bt">updated_at</text><text x="290" y="460" class="type">INTEGER NOT NULL</text>
+    <rect x="66" y="489" width="381" height="81" fill="#eef1f3"/>
+    <text x="82" y="516" class="note">CHECK: key 1..40文字</text>
+    <text x="82" y="539" class="note">CHECK: value_json は valid JSON</text>
+    <text x="82" y="562" class="note">現Workerに取得・更新APIは未実装</text>
+
+    <rect x="44" y="665" width="425" height="265" fill="#fff" stroke="#596a72" stroke-width="2"/>
+    <rect x="44" y="665" width="425" height="48" fill="#596a72"/>
+    <text x="66" y="696" class="gt">rate_limits</text>
+    <text x="66" y="744" class="key">PK1</text><text x="105" y="744" class="bt">bucket</text><text x="290" y="744" class="type">TEXT NOT NULL</text>
+    <text x="66" y="788" class="key">PK2</text><text x="105" y="788" class="bt">window_start</text><text x="290" y="788" class="type">INTEGER NOT NULL</text>
+    <text x="105" y="832" class="bt">count</text><text x="290" y="832" class="type">INTEGER DEFAULT 0</text>
+    <rect x="66" y="856" width="381" height="48" fill="#eef1f3"/>
+    <text x="82" y="878" class="note">複合PK: (bucket, window_start)</text>
+    <text x="82" y="897" class="note">migrationのみ。現在のWorker処理では未使用。</text>
+  </g>
+
+  <!-- responses -->
+  <g filter="url(#shadow)">
+    <rect x="556" y="293" width="560" height="825" fill="#fff" stroke="#176b5b" stroke-width="2"/>
+    <rect x="556" y="293" width="560" height="52" fill="#176b5b"/>
+    <text x="580" y="327" class="gt">responses</text>
+    <text x="1022" y="326" class="tag" style="font:700 11px 'Yu Gothic UI',sans-serif;fill:#fff">親エンティティ</text>
+
+    <text x="580" y="378" class="key">PK</text><text x="625" y="378" class="bt">id</text><text x="870" y="378" class="type">TEXT</text>
+    <text x="625" y="419" class="bt">created_at</text><text x="870" y="419" class="type">INTEGER NOT NULL</text>
+    <text x="625" y="460" class="bt">app_version</text><text x="870" y="460" class="type">TEXT DEFAULT ''</text>
+    <text x="625" y="501" class="bt">consent_version</text><text x="870" y="501" class="type">TEXT NOT NULL</text>
+    <text x="625" y="542" class="bt">consent_at</text><text x="870" y="542" class="type">INTEGER NOT NULL</text>
+    <line x1="580" y1="561" x2="1092" y2="561" stroke="#d6dde0"/>
+    <text x="625" y="590" class="bt">age</text><text x="870" y="590" class="type">TEXT NULL</text>
+    <text x="625" y="631" class="bt">gender</text><text x="870" y="631" class="type">TEXT NULL</text>
+    <text x="625" y="672" class="bt">region</text><text x="870" y="672" class="type">TEXT NULL</text>
+    <text x="625" y="713" class="bt">occupation</text><text x="870" y="713" class="type">TEXT NULL</text>
+    <text x="625" y="754" class="bt">party</text><text x="870" y="754" class="type">TEXT NULL</text>
+    <line x1="580" y1="773" x2="1092" y2="773" stroke="#d6dde0"/>
+    <text x="625" y="802" class="bt">free_text</text><text x="870" y="802" class="type">TEXT DEFAULT ''</text>
+    <text x="625" y="843" class="bt">analysis_status</text><text x="870" y="843" class="type">TEXT DEFAULT 'pending'</text>
+    <text x="625" y="884" class="bt">analysis_json</text><text x="870" y="884" class="type">TEXT NULL / JSON</text>
+    <text x="625" y="925" class="bt">demo_flag</text><text x="870" y="925" class="type">INTEGER DEFAULT 0</text>
+    <rect x="580" y="955" width="512" height="136" fill="#e7f1e6"/>
+    <text x="598" y="980" class="note">CHECK: id 12..64文字</text>
+    <text x="598" y="1003" class="note">CHECK: free_text 最大1500文字</text>
+    <text x="598" y="1026" class="note">analysis_status = pending / completed / failed</text>
+    <text x="598" y="1049" class="note">analysis_jsonはNULLまたはvalid JSON</text>
+    <text x="598" y="1072" class="note">demo_flag = 0 / 1</text>
+  </g>
+
+  <!-- answers -->
+  <g filter="url(#shadow)">
+    <rect x="1262" y="293" width="565" height="338" fill="#fff" stroke="#245a8d" stroke-width="2"/>
+    <rect x="1262" y="293" width="565" height="52" fill="#245a8d"/>
+    <text x="1286" y="327" class="gt">answers</text>
+    <text x="1286" y="379" class="key">PK/FK</text><text x="1352" y="379" class="bt">response_id</text><text x="1600" y="379" class="type">TEXT NOT NULL</text>
+    <text x="1286" y="423" class="key">PK</text><text x="1352" y="423" class="bt">qid</text><text x="1600" y="423" class="type">TEXT NOT NULL</text>
+    <text x="1352" y="467" class="bt">value</text><text x="1600" y="467" class="type">TEXT NOT NULL</text>
+    <rect x="1286" y="500" width="517" height="105" fill="#e8f0f7"/>
+    <text x="1304" y="526" class="note">複合PK: (response_id, qid)</text>
+    <text x="1304" y="550" class="note">FK → responses.id / ON DELETE CASCADE</text>
+    <text x="1304" y="574" class="note">qid 1..64文字 / value 1..60文字</text>
+    <text x="1304" y="598" class="note">INDEX: (qid, value)</text>
+  </g>
+
+  <!-- opinion chunks -->
+  <g filter="url(#shadow)">
+    <rect x="1262" y="693" width="565" height="486" fill="#fff" stroke="#b57a11" stroke-width="2"/>
+    <rect x="1262" y="693" width="565" height="52" fill="#b57a11"/>
+    <text x="1286" y="727" class="gt">opinion_chunks</text>
+    <text x="1286" y="779" class="key">PK</text><text x="1352" y="779" class="bt">id</text><text x="1600" y="779" class="type">INTEGER AUTOINCREMENT</text>
+    <text x="1286" y="817" class="key">FK</text><text x="1352" y="817" class="bt">response_id</text><text x="1600" y="817" class="type">TEXT NOT NULL</text>
+    <text x="1352" y="855" class="bt">created_at</text><text x="1600" y="855" class="type">INTEGER NOT NULL</text>
+    <text x="1352" y="893" class="bt">summary</text><text x="1600" y="893" class="type">TEXT NOT NULL</text>
+    <text x="1352" y="931" class="bt">category</text><text x="1600" y="931" class="type">TEXT / 5種</text>
+    <text x="1352" y="969" class="bt">topic</text><text x="1600" y="969" class="type">TEXT NOT NULL</text>
+    <text x="1352" y="1007" class="bt">target_type</text><text x="1600" y="1007" class="type">TEXT / 7種</text>
+    <text x="1352" y="1045" class="bt">target_name</text><text x="1600" y="1045" class="type">TEXT DEFAULT ''</text>
+    <text x="1352" y="1083" class="bt">emotion</text><text x="1600" y="1083" class="type">REAL -1..1</text>
+    <text x="1352" y="1121" class="bt">criticality</text><text x="1600" y="1121" class="type">INTEGER 0..100</text>
+    <text x="1352" y="1159" class="bt">fact_status</text><text x="1600" y="1159" class="type">意見 / 要検証</text>
+  </g>
+
+  <!-- Relations -->
+  <path d="M1116 410H1193V379H1262" class="rel"/>
+  <text x="1131" y="397" class="bt">1</text><text x="1237" y="369" class="bt">N</text>
+  <text x="1140" y="433" class="note">responses.id = answers.response_id</text>
+
+  <path d="M1116 835H1193V817H1262" class="rel"/>
+  <text x="1131" y="822" class="bt">1</text><text x="1237" y="807" class="bt">N</text>
+  <text x="1137" y="858" class="note">responses.id = opinion_chunks.response_id</text>
+
+  <!-- API arrows -->
+  <path d="M390 210V252H836V293" class="api"/>
+  <path d="M710 210V267H836V293" class="api"/>
+  <path d="M1030 210V276H836V293" class="api"/>
+  <path d="M1350 210V253H1544V293" class="api"/>
+
+  <!-- Missing implementation and indexes -->
+  <rect x="44" y="981" width="425" height="198" fill="#fae8ea" stroke="#9a3d44"/>
+  <text x="66" y="1012" class="bt">ER図上に存在しない機能</text>
+  <text x="66" y="1040" class="body">accounts / sessions / admins / audit_logs</text>
+  <text x="66" y="1065" class="body">questions正規化 / consent_versions</text>
+  <text x="66" y="1090" class="body">quantum_snapshots / nodes / relations</text>
+  <text x="66" y="1115" class="body">解析完了UPDATE・chunk INSERT処理</text>
+  <text x="66" y="1140" class="note">必要になるまで既存扱いせず、別migrationで追加する。</text>
+
+  <rect x="556" y="1160" width="560" height="81" fill="#eef1f3" stroke="#596a72"/>
+  <text x="578" y="1186" class="bt">responses INDEX</text>
+  <text x="578" y="1210" class="body">responses_created_at_idx (created_at DESC)</text>
+  <text x="578" y="1232" class="note">現在のGET metadata / DELETEは主キーidを利用。</text>
+
+  <rect x="1262" y="1197" width="565" height="45" fill="#fff3d9" stroke="#b57a11"/>
+  <text x="1282" y="1225" class="note">chunk indexes: topic / (target_type,target_name) / created_at DESC</text>
+
+  <text x="46" y="1260" class="note">凡例：PK=主キー / FK=外部キー。app_configとrate_limitsはresponses系から独立。従属2表は親削除時に物理削除される。</text>
+</svg>

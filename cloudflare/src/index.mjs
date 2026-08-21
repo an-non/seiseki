@@ -1,0 +1,282 @@
+import {
+  deleteResponse,
+  getBasicStats,
+  getResponseMetadata,
+  insertPendingResponse,
+  listPublicDemoResponses
+} from "./db.mjs";
+import { getResponseAnalysis } from "./db.mjs";
+import {
+  authenticateRequest,
+  deleteAccount,
+  getAccount,
+  linkResponseToAccount,
+  listAccountResponses,
+  loginAccount,
+  logoutAccount,
+  registerAccount,
+  updateAccount
+} from "./auth.mjs";
+import { analyzeStoredResponse } from "./analysis.mjs";
+import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
+import { createResponseId, normalizeSubmission, RequestError } from "./validation.mjs";
+
+const JSON_HEADERS = Object.freeze({
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff"
+});
+
+function allowedOrigin(request, env) {
+  const origin = request.headers.get("origin");
+  if (!origin) return null;
+  const allowed = String(env.ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+  return allowed.includes(origin) ? origin : "";
+}
+
+function corsHeaders(origin) {
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "access-control-allow-headers": "Authorization, Content-Type",
+    "access-control-max-age": "86400",
+    "vary": "Origin"
+  };
+}
+
+function withCors(response, origin) {
+  if (!origin) return response;
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsHeaders(origin))) headers.set(key, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...JSON_HEADERS, ...extraHeaders }
+  });
+}
+
+function routeId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})$/u);
+  return match ? match[1] : null;
+}
+
+function routeAnalysisId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/analysis$/u);
+  return match ? match[1] : null;
+}
+
+async function readJson(request) {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    throw new RequestError(415, "UNSUPPORTED_MEDIA_TYPE", "application/json is required");
+  }
+  const length = Number(request.headers.get("content-length") ?? 0);
+  if (length > 32 * 1024) {
+    throw new RequestError(413, "BODY_TOO_LARGE", "request body is too large");
+  }
+  try {
+    return await request.json();
+  } catch {
+    throw new RequestError(400, "INVALID_JSON", "request body is not valid JSON");
+  }
+}
+
+async function verifyTurnstile(body, request, env) {
+  if (!env.TURNSTILE_SECRET) {
+    if (String(env.TURNSTILE_REQUIRED).toLowerCase() === "true") {
+      throw new RequestError(503, "TURNSTILE_NOT_CONFIGURED", "Turnstile is required but not configured");
+    }
+    return;
+  }
+
+  const token = String(body.turnstileToken ?? "");
+  if (!token) throw new RequestError(400, "TURNSTILE_REQUIRED", "Turnstile token is required");
+  const form = new FormData();
+  form.set("secret", env.TURNSTILE_SECRET);
+  form.set("response", token);
+  form.set("idempotency_key", crypto.randomUUID());
+  const remoteIp = request.headers.get("CF-Connecting-IP");
+  if (remoteIp) form.set("remoteip", remoteIp);
+
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    body: form
+  });
+  const result = await response.json();
+  if (!result.success) throw new RequestError(403, "TURNSTILE_FAILED", "Turnstile verification failed");
+  if (env.TURNSTILE_HOSTNAME && result.hostname !== env.TURNSTILE_HOSTNAME) {
+    throw new RequestError(403, "TURNSTILE_HOSTNAME_MISMATCH", "Turnstile hostname did not match");
+  }
+}
+
+async function handleCreateResponse(request, env, ctx) {
+  const body = await readJson(request);
+  await verifyTurnstile(body, request, env);
+  const normalized = normalizeSubmission(body);
+  const questions = await loadQuestions(env.DB);
+  if (!validateAnswersAgainstQuestions(normalized.answers, questions, normalized.demoFlag)) {
+    throw new RequestError(400, "INVALID_ANSWER", "answers do not match the active questions");
+  }
+  const account = await authenticateRequest(env.DB, request, false);
+  const response = {
+    ...normalized,
+    id: createResponseId(),
+    createdAt: Date.now()
+  };
+  await insertPendingResponse(env.DB, response, snapshotQuestions(questions));
+  if (account) await linkResponseToAccount(env.DB, account.id, response.id);
+  if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() === "true" && ctx) {
+    const dispatch = async () => {
+      if (env.ANALYSIS_QUEUE?.send) {
+        try {
+          await env.ANALYSIS_QUEUE.send({ type: "analyze-response", responseId: response.id });
+          return;
+        } catch (error) {
+          console.error(JSON.stringify({
+            event: "analysis_enqueue_failed",
+            responseId: response.id,
+            error: String(error?.message ?? "unknown").slice(0, 160)
+          }));
+        }
+      }
+      await analyzeStoredResponse(env, response.id);
+    };
+    ctx.waitUntil(dispatch().catch(error => {
+      console.error(JSON.stringify({
+        event: "analysis_failed",
+        responseId: response.id,
+        error: String(error?.message ?? "unknown").slice(0, 160)
+      }));
+    }));
+  }
+  return json({
+    id: response.id,
+    status: "stored",
+    analysisStatus: "pending"
+  }, 201);
+}
+
+async function handleRequest(request, env, ctx) {
+  if (!env.DB) throw new RequestError(503, "DB_NOT_BOUND", "D1 binding DB is not configured");
+  const url = new URL(request.url);
+
+  if (request.method === "GET" && url.pathname === "/api/health") {
+    const row = await env.DB.prepare("SELECT 1 AS ok").first();
+    return json({ status: row?.ok === 1 ? "ok" : "degraded", database: "d1" });
+  }
+  if (request.method === "GET" && url.pathname === "/api/config") {
+    return json({ questions: await loadQuestions(env.DB) });
+  }
+  if (request.method === "POST" && url.pathname === "/api/responses") {
+    return handleCreateResponse(request, env, ctx);
+  }
+  if (request.method === "GET" && url.pathname === "/api/stats") {
+    return json(await getBasicStats(env.DB), 200, { "cache-control": "public, max-age=0, s-maxage=60" });
+  }
+  if (request.method === "GET" && url.pathname === "/api/demo-responses") {
+    return json({ responses: await listPublicDemoResponses(env.DB) }, 200, {
+      "cache-control": "public, max-age=0, s-maxage=60"
+    });
+  }
+  if (request.method === "POST" && url.pathname === "/api/accounts/register") {
+    return json(await registerAccount(env.DB, await readJson(request), env.PASSWORD_ITERATIONS), 201);
+  }
+  if (request.method === "POST" && url.pathname === "/api/accounts/login") {
+    return json(await loginAccount(env.DB, await readJson(request)));
+  }
+  if (url.pathname === "/api/accounts/me") {
+    const account = await authenticateRequest(env.DB, request, true);
+    if (request.method === "GET") return json(await getAccount(env.DB, account));
+    if (request.method === "PATCH") {
+      return json(await updateAccount(env.DB, account, await readJson(request), env.PASSWORD_ITERATIONS));
+    }
+    if (request.method === "DELETE") {
+      await deleteAccount(env.DB, account, await readJson(request));
+      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+    }
+  }
+  if (request.method === "POST" && url.pathname === "/api/accounts/logout") {
+    const account = await authenticateRequest(env.DB, request, true);
+    await logoutAccount(env.DB, account);
+    return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+  }
+  if (request.method === "GET" && url.pathname === "/api/accounts/me/responses") {
+    const account = await authenticateRequest(env.DB, request, true);
+    return json({ responses: await listAccountResponses(env.DB, account.id) });
+  }
+
+  const analysisId = routeAnalysisId(url.pathname);
+  if (analysisId && request.method === "GET") {
+    const analysis = await getResponseAnalysis(env.DB, analysisId);
+    if (!analysis) throw new RequestError(404, "NOT_FOUND", "response was not found");
+    return json(analysis);
+  }
+
+  const id = routeId(url.pathname);
+  if (id && request.method === "GET") {
+    const response = await getResponseMetadata(env.DB, id);
+    if (!response) throw new RequestError(404, "NOT_FOUND", "response was not found");
+    return json(response);
+  }
+  if (id && request.method === "DELETE") {
+    const deleted = await deleteResponse(env.DB, id);
+    if (!deleted) throw new RequestError(404, "NOT_FOUND", "response was not found");
+    return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+  }
+
+  throw new RequestError(404, "NOT_FOUND", "route was not found");
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const origin = allowedOrigin(request, env);
+    if (request.headers.has("origin") && !origin) {
+      return json({ error: "ORIGIN_NOT_ALLOWED", message: "request origin is not allowed" }, 403);
+    }
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    }
+    try {
+      return withCors(await handleRequest(request, env, ctx), origin);
+    } catch (error) {
+      if (error instanceof RequestError) {
+        return withCors(json({ error: error.code, message: error.message }, error.status), origin);
+      }
+      console.error("request failed", error);
+      return withCors(json({ error: "INTERNAL_ERROR", message: "request failed" }, 500), origin);
+    }
+  },
+
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const body = message.body;
+      const responseId = body?.type === "analyze-response" ? String(body.responseId ?? "") : "";
+      if (!/^r_[A-Za-z0-9_-]{12,62}$/u.test(responseId)) {
+        console.warn(JSON.stringify({ event: "analysis_queue_invalid_message", messageId: message.id }));
+        message.ack();
+        continue;
+      }
+      try {
+        await analyzeStoredResponse(env, responseId);
+        message.ack();
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "analysis_queue_failed",
+          responseId,
+          error: String(error?.message ?? "unknown").slice(0, 160)
+        }));
+        message.retry({ delaySeconds: Math.min(60, Math.max(1, Number(message.attempts ?? 1) * 5)) });
+      }
+    }
+  }
+};
