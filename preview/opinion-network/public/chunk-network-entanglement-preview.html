@@ -91,8 +91,8 @@
     .controls button[aria-pressed="true"] { color:#142d74; background:rgba(54,87,214,.1); border-color:rgba(54,87,214,.3); }
     .controls .observe { min-width:32px; width:32px; padding:0; color:var(--cyan); font-size:19px; }
     .controls .divider { width:1px; height:18px; margin:0 3px; background:rgba(46,234,255,.2); }
-    .provenance { position:fixed; z-index:7; left:18px; top:78px; max-width:min(620px,calc(100vw - 36px)); padding:8px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--sub); font-size:11px; line-height:1.45; backdrop-filter:blur(12px); }
-    .provenance strong { color:var(--text); font-weight:650; }
+    .provenance { position:fixed; z-index:7; left:24px; top:136px; max-width:min(620px,calc(100vw - 36px)); padding:8px 11px; border:1px solid var(--rule); border-radius:9px; background:var(--panel); color:var(--sub); font-size:11px; line-height:1.45; backdrop-filter:blur(12px); }
+    .provenance strong { color:var(--ink); font-weight:650; }
     .status {
       position:fixed;
       z-index:6;
@@ -108,7 +108,8 @@
       position:fixed;
       z-index:8;
       right:20px;
-      bottom:20px;
+      top:96px;
+      bottom:auto;
       width:min(350px,calc(100% - 40px));
       min-height:112px;
       max-height:min(260px,calc(100vh - 190px));
@@ -167,14 +168,17 @@
       .legend { max-width:280px; gap:6px 10px; }
       .controls { top:82px; left:14px; max-width:calc(100% - 28px); overflow-x:auto; }
       .controls button { min-width:43px; padding:0 7px; }
-      .provenance { position:fixed; z-index:7; left:18px; top:78px; max-width:min(620px,calc(100vw - 36px)); padding:8px 11px; border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--sub); font-size:11px; line-height:1.45; backdrop-filter:blur(12px); }
-    .provenance strong { color:var(--text); font-weight:650; }
+      .provenance { position:fixed; z-index:7; left:14px; top:124px; max-width:calc(100vw - 28px); padding:8px 10px; border:1px solid var(--rule); border-radius:9px; background:var(--panel); color:var(--sub); font-size:10px; line-height:1.4; backdrop-filter:blur(12px); }
+    .provenance strong { color:var(--ink); font-weight:650; }
     .status { top:auto; right:13px; bottom:148px; font-size:9px; line-height:1.45; }
       .status .optional { display:none; }
-      .details { right:11px; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }
+      .details { right:11px; top:auto; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }
       .trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:10px 12px; }
     }
   </style>
+  <script type="importmap">
+    { "imports": { "three": "/node_modules/three/build/three.module.js", "three/addons/": "/node_modules/three/examples/jsm/" } }
+  </script>
 </head>
 <body>
   <div id="scene" aria-label="政治を中心とする量子もつれ意見ネットワーク"></div>
@@ -210,16 +214,27 @@
   </aside>
   <div class="loading" id="loading" role="status">観測投影を構築中</div>
 
+  <script>
+    window.addEventListener("error", (event) => {
+      const el = document.getElementById("loading");
+      if (el) { el.hidden = false; el.textContent = `表示初期化エラー: ${event.message || "module load failed"}`; }
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      const el = document.getElementById("loading");
+      if (el) { el.hidden = false; el.textContent = `表示初期化エラー: ${event.reason?.message || event.reason || "promise rejected"}`; }
+    });
+  </script>
+
   <script type="module">
-    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js";
-    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/controls/OrbitControls.js";
-    import { LineMaterial } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineMaterial.js";
-    import { LineSegments2 } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegments2.js";
-    import { LineSegmentsGeometry } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegmentsGeometry.js";
-    import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/EffectComposer.js";
-    import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/RenderPass.js";
-    import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/UnrealBloomPass.js";
-    import { OutputPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/OutputPass.js";
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+    import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+    import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+    import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
     import {
       createEntanglementModel,
       deduplicateNodes,
