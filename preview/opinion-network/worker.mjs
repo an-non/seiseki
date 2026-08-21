@@ -1,45 +1,55 @@
 const compactPanelCss = `
 <style id="seiseki-panel-size-adjustment">
   .details {
-    width:min(292px,calc(100% - 40px)) !important;
-    min-height:92px !important;
-    max-height:min(210px,calc(100vh - 190px)) !important;
-    padding:10px 12px !important;
+    width:min(260px,calc(100% - 40px)) !important;
+    min-height:82px !important;
+    max-height:min(180px,calc(100vh - 190px)) !important;
+    padding:8px 10px !important;
   }
-  .details h2 { margin-bottom:5px !important; font-size:12px !important; }
-  .details p { font-size:10px !important; line-height:1.55 !important; }
-  .details .generated { font-size:11px !important; }
-  .details .result { margin-top:6px !important; font-size:9px !important; line-height:1.45 !important; }
+  .details h2 { margin-bottom:4px !important; font-size:10px !important; line-height:1.35 !important; }
+  .details p { font-size:8.5px !important; line-height:1.45 !important; }
+  .details .generated { font-size:9px !important; line-height:1.45 !important; }
+  .details .result { margin-top:5px !important; font-size:8px !important; line-height:1.38 !important; }
   .details dl {
-    grid-template-columns:64px 1fr !important;
-    gap:3px 7px !important;
-    margin-top:8px !important;
-    font-size:10px !important;
+    grid-template-columns:56px 1fr !important;
+    gap:2px 6px !important;
+    margin-top:6px !important;
+    font-size:8.5px !important;
+    line-height:1.4 !important;
   }
   .trace {
-    width:min(390px,calc(100% - 350px)) !important;
-    height:min(40vh,360px) !important;
-    max-height:calc(100vh - 260px) !important;
-    font-size:9px !important;
-    line-height:1.45 !important;
+    width:min(320px,calc(100% - 300px)) !important;
+    height:min(31vh,280px) !important;
+    max-height:calc(100vh - 300px) !important;
+    padding-right:0 !important;
+    font-size:8px !important;
+    line-height:1.38 !important;
   }
   .trace header {
     justify-content:flex-start !important;
-    margin-bottom:5px !important;
+    margin-bottom:4px !important;
+    font-size:8px !important;
+    line-height:1.35 !important;
   }
   .trace header span:last-child {
     display:none !important;
   }
+  .trace pre {
+    max-width:320px !important;
+    padding-right:0 !important;
+  }
   @media (max-width:700px) {
     .details {
       width:calc(100% - 22px) !important;
-      min-height:92px !important;
-      max-height:118px !important;
+      min-height:82px !important;
+      max-height:106px !important;
+      padding:8px 10px !important;
     }
     .trace {
       width:calc(100% - 22px) !important;
-      height:min(32vh,250px) !important;
-      max-height:min(32vh,250px) !important;
+      height:min(27vh,220px) !important;
+      max-height:min(27vh,220px) !important;
+      font-size:8px !important;
     }
   }
 </style>`;
