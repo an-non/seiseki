@@ -1,145 +1,135 @@
-name: Deploy and record opinion preview status
+name: Verify SEISEKI quantum app integration
 
 on:
   push:
     branches:
-      - feature/opinion-network-preview
+      - feature/quantum-app-integration
     paths:
-      - preview/opinion-network/DEPLOY_TRIGGER
+      - integration/VERIFY_TRIGGER
 
 permissions:
   contents: write
 
 jobs:
-  deploy-and-record:
+  verify-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
         with:
-          ref: feature/opinion-network-preview
+          ref: feature/quantum-app-integration
           fetch-depth: 0
 
-      - name: Check Cloudflare credentials presence
-        id: credentials
-        shell: bash
-        env:
-          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Apply relations1400 compact panel baseline
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("preview/opinion-network/public/chunk-network-entanglement-preview.html")
-          s = p.read_text()
-
-          replacements = {
-            'width:min(350px,calc(100% - 40px));': 'width:min(260px,calc(100% - 40px));',
-            'min-height:112px;': 'min-height:82px;',
-            'max-height:min(260px,calc(100vh - 190px));': 'max-height:min(180px,calc(100vh - 190px));',
-            'padding:14px 15px;': 'padding:8px 10px;',
-            '.details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }': '.details h2 { margin:0 0 4px; color:var(--ink); font-size:10px; line-height:1.35; }',
-            '.details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }': '.details p { margin:0; color:var(--sub); font-size:8.5px; line-height:1.45; }',
-            '.details .generated { color:var(--ink); font-size:12px; }': '.details .generated { color:var(--ink); font-size:9px; line-height:1.45; }',
-            '.details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }': '.details .result { margin-top:5px; color:var(--cyan); font:8px/1.38 "IBM Plex Mono",Consolas,monospace; }',
-            '.details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }': '.details dl { display:grid; grid-template-columns:56px 1fr; gap:2px 6px; margin:6px 0 0; font-size:8.5px; line-height:1.4; }',
-            'width:min(470px,calc(100% - 410px));': 'width:min(320px,calc(100% - 300px));',
-            'height:min(56vh,540px);': 'height:min(31vh,280px);',
-            'max-height:calc(100vh - 210px);': 'max-height:calc(100vh - 300px);',
-            'font:10px/1.55 "IBM Plex Mono",Consolas,monospace;': 'font:8px/1.38 "IBM Plex Mono",Consolas,monospace;',
-            '.trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }': '.trace header { position:static; display:flex; justify-content:flex-start; margin:0 0 4px; color:var(--cyan); font-size:8px; line-height:1.35; }',
-            '.trace header span:last-child { color:var(--sub); }': '.trace header span:last-child { display:none; }'
-          }
-          for old, new in replacements.items():
-              s = s.replace(old, new)
-
-          # Keep mobile compact too.
-          s = s.replace(
-              '.details { right:11px; top:auto; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }',
-              '.details { right:11px; top:auto; bottom:11px; width:calc(100% - 22px); min-height:82px; max-height:106px; padding:8px 10px; }'
-          )
-          s = s.replace(
-              '.trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:14px 15px; }',
-              '.trace { left:11px; bottom:127px; width:calc(100% - 22px); height:min(27vh,220px); max-height:min(27vh,220px); padding:8px 10px; font-size:8px; }'
-          )
-
-          assert 'const maxPersistentRelations = 1400;' in s
-          assert 'OBSERVATION TRACE' in s
-          assert 'width:min(320px,calc(100% - 300px));' in s
-          assert 'font:8px/1.38 "IBM Plex Mono",Consolas,monospace;' in s
-          assert '.trace header span:last-child { display:none; }' in s
-          p.write_text(s)
-          PY
-
-      - name: Prepare same-origin Three.js runtime assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
-          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
-          src="$tmp/package"
-          dst="preview/opinion-network/public/node_modules/three"
-          rm -rf "$dst"
-          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
-          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
-          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
-          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
-          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
-          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
-          test -s "$dst/build/three.module.js"
-
-      - name: Deploy isolated Cloudflare preview
-        if: steps.credentials.outputs.ready == 'true'
-        id: deploy
+      - name: Reconstruct integration source
+        id: reconstruct
         continue-on-error: true
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.45.0"
-          workingDirectory: preview/opinion-network
-          command: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d bootstrap
+          cat bootstrap/part-* > /tmp/seiseki-integration-source.b64
+          base64 --decode /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz
+          tar -tJf /tmp/seiseki-integration-source.tar.xz >/dev/null
+          tar -xJf /tmp/seiseki-integration-source.tar.xz -C .
+          echo "archive_sha256=$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Record deployment status
+      - name: Verify protected files and application tests
+        id: app_tests
+        if: steps.reconstruct.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f README.md
+          test -f DEPLOYMENT_SAFETY.md
+          test -d preview/opinion-network
+          grep -q 'without automatic Cloudflare deployment' README.md
+          grep -q 'Do not run D1 migrations' DEPLOYMENT_SAFETY.md
+          test ! -e .env
+          test ! -e cloudflare/.env.staging
+          test ! -d local/node_modules
+          test ! -d cloudflare/node_modules
+          test ! -d cloudflare/.wrangler
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify Cloudflare source only
+        id: cloudflare_tests
+        if: steps.reconstruct.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh install and staging Vite build
+        id: vite_build
+        if: steps.reconstruct.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          test -s dist/index.html
+          test -d dist/assets
+          echo "build_index_sha256=$(sha256sum dist/index.html | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          find dist -maxdepth 2 -type f -print | sort
+
+      - name: Record verification result
         if: always()
         shell: bash
         env:
-          CREDS_READY: ${{ steps.credentials.outputs.ready }}
-          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
-          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+          RECONSTRUCT: ${{ steps.reconstruct.outcome }}
+          APP_TESTS: ${{ steps.app_tests.outcome }}
+          CLOUDFLARE_TESTS: ${{ steps.cloudflare_tests.outcome }}
+          VITE_BUILD: ${{ steps.vite_build.outcome }}
+          ARCHIVE_SHA: ${{ steps.reconstruct.outputs.archive_sha256 }}
+          BUILD_SHA: ${{ steps.vite_build.outputs.build_index_sha256 }}
         run: |
           set -euo pipefail
-          rm -rf preview/opinion-network/public/node_modules
-          {
-            echo "# Opinion network preview deployment"
-            echo
-            echo "- credentials_ready: ${CREDS_READY:-false}"
-            echo "- deploy_outcome: ${DEPLOY_OUTCOME:-not-run}"
-            echo "- deployment_url: ${DEPLOY_URL:-}"
-            echo "- worker: seiseki-opinion-network-preview"
-            echo "- source_branch: feature/opinion-network-preview"
-            echo "- trigger_commit: ${GITHUB_SHA}"
-            echo "- module_loading: same-origin-importmap"
-            echo "- ui_baseline: relations1400-compact-v2"
-            echo "- panel_source: html-direct"
-            echo "- demo_count_default: 5000"
-            echo "- existing_seiseki_staging_touched: false"
-            echo "- d1_migrations_run: false"
-          } > preview/opinion-network/DEPLOYMENT_STATUS.md
+          result=failure
+          if [ "$RECONSTRUCT" = success ] && [ "$APP_TESTS" = success ] && [ "$CLOUDFLARE_TESTS" = success ] && [ "$VITE_BUILD" = success ]; then
+            result=success
+          fi
+
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          cat > INTEGRATION_VERIFICATION.md <<EOF
+          # SEISEKI integration verification
+
+          - result: ${result}
+          - source_branch: feature/quantum-app-integration
+          - trigger_commit: ${GITHUB_SHA}
+          - source_archive_sha256: ${ARCHIVE_SHA:-unavailable}
+          - reconstruct_source: ${RECONSTRUCT:-unknown}
+          - application_tests: ${APP_TESTS:-unknown}
+          - cloudflare_source_tests: ${CLOUDFLARE_TESTS:-unknown}
+          - fresh_vite_staging_build: ${VITE_BUILD:-unknown}
+          - build_index_sha256: ${BUILD_SHA:-unavailable}
+          - cloudflare_deploy_run: false
+          - d1_migrations_run: false
+          - staging_worker_touched: false
+          - production_touched: false
+          EOF
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- preview/opinion-network/public/chunk-network-entanglement-preview.html preview/opinion-network/DEPLOYMENT_STATUS.md
-          if git diff --cached --quiet; then
-            exit 0
+          git add -- INTEGRATION_VERIFICATION.md
+
+          if [ "$result" = success ]; then
+            git add -- .gitignore AGENTS.md CHANGELOG.md HANDOFF.md app cloudflare core docs legacy local production prototypes scripts tests
+            git rm -r --ignore-unmatch bootstrap
           fi
-          git commit -m "Apply compact relations1400 preview UI"
-          git push origin HEAD:feature/opinion-network-preview
+
+          git commit -m "Record SEISEKI integration verification ${result}"
+          git push origin HEAD:feature/quantum-app-integration
+
+          if [ "$result" != success ]; then
+            exit 1
+          fi
