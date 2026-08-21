@@ -1,0 +1,115 @@
+name: Verify SEISEKI quantum app integration
+
+on:
+  push:
+    branches:
+      - feature/quantum-app-integration
+    paths:
+      - integration/VERIFY_TRIGGER
+
+permissions:
+  contents: write
+
+jobs:
+  verify-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Reconstruct integration source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d bootstrap
+          cat bootstrap/part-* > /tmp/seiseki-integration-source.b64
+          base64 --decode /tmp/seiseki-integration-source.b64 > /tmp/seiseki-integration-source.tar.xz
+          tar -tJf /tmp/seiseki-integration-source.tar.xz >/dev/null
+          tar -xJf /tmp/seiseki-integration-source.tar.xz -C .
+          printf 'archive_sha256=%s\n' "$(sha256sum /tmp/seiseki-integration-source.tar.xz | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Verify protected repository files remain intact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f README.md
+          test -f DEPLOYMENT_SAFETY.md
+          test -d preview/opinion-network
+          grep -q 'without automatic Cloudflare deployment' README.md
+          grep -q 'Do not run D1 migrations' DEPLOYMENT_SAFETY.md
+
+      - name: Verify source safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .env
+          test ! -e cloudflare/.env.staging
+          test ! -d local/node_modules
+          test ! -d cloudflare/node_modules
+          test ! -d cloudflare/.wrangler
+          test ! -d local/.wrangler
+          test -f cloudflare/migrations/0001_initial.sql
+          test -f cloudflare/migrations/0002_accounts_and_analysis.sql
+          test -f cloudflare/migrations/0003_staging_kdf_range.sql
+          test -f cloudflare/migrations/0004_response_question_context.sql
+
+      - name: Verify application source and routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify Cloudflare source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh install and staging Vite build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          test -s dist/index.html
+          test -d dist/assets
+          find dist -maxdepth 2 -type f -print | sort
+          printf 'build_index_sha256=%s\n' "$(sha256sum dist/index.html | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Record successful verification and commit expanded source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          cat > INTEGRATION_VERIFICATION.md <<EOF
+          # SEISEKI integration verification
+
+          - result: success
+          - source_branch: feature/quantum-app-integration
+          - trigger_commit: ${GITHUB_SHA}
+          - source_archive_sha256: ${archive_sha256}
+          - fresh_vite_staging_build: success
+          - build_index_sha256: ${build_index_sha256}
+          - cloudflare_deploy_run: false
+          - d1_migrations_run: false
+          - staging_worker_touched: false
+          - production_touched: false
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- .gitignore AGENTS.md CHANGELOG.md HANDOFF.md app cloudflare core docs legacy local production prototypes scripts tests INTEGRATION_VERIFICATION.md
+          git rm -r --ignore-unmatch bootstrap
+          git commit -m "Verify and expand SEISEKI quantum app integration"
+          git push origin HEAD:feature/quantum-app-integration
