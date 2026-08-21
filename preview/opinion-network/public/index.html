@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SEISEKI 意見ネットワーク確認版</title>
+  <script>
+    (() => {
+      const target = new URL('./chunk-network-entanglement-preview.html', window.location.href);
+      target.search = window.location.search;
+      target.hash = window.location.hash;
+      window.location.replace(target.href);
+    })();
+  </script>
+</head>
+<body>
+  <p><a id="fallback" href="./chunk-network-entanglement-preview.html">意見ネットワーク確認版を開く</a></p>
+  <script>
+    const link = document.getElementById('fallback');
+    const target = new URL(link.getAttribute('href'), window.location.href);
+    target.search = window.location.search;
+    target.hash = window.location.hash;
+    link.href = target.href;
+  </script>
+</body>
+</html>
