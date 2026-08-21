@@ -32,6 +32,104 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Restore original SEISEKI module loading and layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("preview/opinion-network/public/chunk-network-entanglement-preview.html")
+          s = p.read_text()
+
+          cdn = '''    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js";
+              import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/controls/OrbitControls.js";
+              import { LineMaterial } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineMaterial.js";
+              import { LineSegments2 } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegments2.js";
+              import { LineSegmentsGeometry } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/lines/LineSegmentsGeometry.js";
+              import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/EffectComposer.js";
+              import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/RenderPass.js";
+              import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/UnrealBloomPass.js";
+              import { OutputPass } from "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/postprocessing/OutputPass.js";'''
+          bare = '''    import * as THREE from "three";
+              import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+              import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+              import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+              import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+              import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+              import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+              import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+              import { OutputPass } from "three/addons/postprocessing/OutputPass.js";'''
+          if cdn in s:
+              s = s.replace(cdn, bare, 1)
+
+          importmap = '''  <script type="importmap">
+              { "imports": { "three": "/node_modules/three/build/three.module.js", "three/addons/": "/node_modules/three/examples/jsm/" } }
+            </script>
+          '''
+          if '<script type="importmap">' not in s:
+              s = s.replace('</head>', importmap + '</head>', 1)
+
+          s = s.replace('.provenance { position:fixed; z-index:7; left:18px; top:78px;', '.provenance { position:fixed; z-index:7; left:24px; top:136px;')
+          s = s.replace('border:1px solid var(--line);', 'border:1px solid var(--rule);')
+          s = s.replace('.provenance strong { color:var(--text); font-weight:650; }', '.provenance strong { color:var(--ink); font-weight:650; }')
+          s = s.replace('right:20px;\n      bottom:20px;', 'right:20px;\n      top:96px;\n      bottom:auto;', 1)
+          s = s.replace('.details { right:11px; bottom:11px;', '.details { right:11px; top:auto; bottom:11px;')
+
+          media_marker = '      .controls button { min-width:43px; padding:0 7px; }\n'
+          if media_marker in s:
+              start = s.index(media_marker) + len(media_marker)
+              next_strong = s.find('    .provenance strong', start)
+              if next_strong != -1:
+                  block = s[start:next_strong]
+                  import re
+                  block = re.sub(r'\.provenance \{[^}]*\}', '.provenance { position:fixed; z-index:7; left:14px; top:124px; max-width:calc(100vw - 28px); padding:8px 10px; border:1px solid var(--rule); border-radius:9px; background:var(--panel); color:var(--sub); font-size:10px; line-height:1.4; backdrop-filter:blur(12px); }', block, count=1)
+                  s = s[:start] + block + s[next_strong:]
+
+          error_hook = '''  <script>
+              window.addEventListener("error", (event) => {
+                const el = document.getElementById("loading");
+                if (el) { el.hidden = false; el.textContent = `表示初期化エラー: ${event.message || "module load failed"}`; }
+              });
+              window.addEventListener("unhandledrejection", (event) => {
+                const el = document.getElementById("loading");
+                if (el) { el.hidden = false; el.textContent = `表示初期化エラー: ${event.reason?.message || event.reason || "promise rejected"}`; }
+              });
+            </script>
+
+          '''
+          module_marker = '  <script type="module">'
+          if '表示初期化エラー:' not in s:
+              s = s.replace(module_marker, error_hook + module_marker, 1)
+
+          assert '<script type="importmap">' in s
+          assert 'import * as THREE from "three";' in s
+          assert 'cdn.jsdelivr.net/npm/three@0.185.1' not in s
+          p.write_text(s)
+          PY
+
+      - name: Prepare same-origin Three.js runtime assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
+          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
+          src="$tmp/package"
+          dst="preview/opinion-network/public/node_modules/three"
+          rm -rf "$dst"
+          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
+          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
+          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
+          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
+          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
+          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
+          test -s "$dst/build/three.module.js"
+          test -s "$dst/build/three.core.js"
+          test -s "$dst/examples/jsm/controls/OrbitControls.js"
+          grep -F 'from "three"' preview/opinion-network/public/chunk-network-entanglement-preview.html >/dev/null
+          grep -F '"three": "/node_modules/three/build/three.module.js"' preview/opinion-network/public/chunk-network-entanglement-preview.html >/dev/null
+
       - name: Deploy isolated Cloudflare preview
         if: steps.credentials.outputs.ready == 'true'
         id: deploy
@@ -53,6 +151,7 @@ jobs:
           DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
           set -euo pipefail
+          rm -rf preview/opinion-network/public/node_modules
           {
             echo "# Opinion network preview deployment"
             echo
@@ -62,11 +161,16 @@ jobs:
             echo "- worker: seiseki-opinion-network-preview"
             echo "- source_branch: feature/opinion-network-preview"
             echo "- trigger_commit: ${GITHUB_SHA}"
+            echo "- module_loading: same-origin-importmap"
+            echo "- demo_count_default: 5000"
             echo "- existing_seiseki_staging_touched: false"
             echo "- d1_migrations_run: false"
           } > preview/opinion-network/DEPLOYMENT_STATUS.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- preview/opinion-network/DEPLOYMENT_STATUS.md
-          git commit -m "Record opinion network preview deployment status"
+          git add -- preview/opinion-network/public/chunk-network-entanglement-preview.html preview/opinion-network/DEPLOYMENT_STATUS.md
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Restore original SEISEKI preview loading"
           git push origin HEAD:feature/opinion-network-preview
