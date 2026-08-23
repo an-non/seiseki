@@ -1,0 +1,11 @@
+# SEISEKI Safari 15 hotfix progress
+- outcome: incomplete
+- checkout: success
+- app_patch: success
+- quantum: success
+- deps: success
+- prod_build: success
+- prod_smoke: failure
+- staging_build: skipped
+- staging_smoke: skipped
+- record: skipped
