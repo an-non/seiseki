@@ -28,14 +28,14 @@ replaceOnce(
 src = src.replace(/\n\s*@import url\([^\n]+fonts\.googleapis\.com[^\n]+\);/u, "");
 
 src = src.replace(
-  /const QUANTUM_PREVIEW_URL = "https:\/\/seiseki-opinion-network-preview\.tokyo-odh-129\.workers\.dev\/chunk-network-entanglement-preview\.html\?count=5000&seed=prototype-5000&theme=dark&rev=[^"]+";/u,
-  'const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=5000&seed=prototype-5000&theme=dark&rev=mobile-touch-v3";'
+  /const QUANTUM_PREVIEW_URL = "https:\/\/seiseki-opinion-network-preview\.tokyo-odh-129\.workers\.dev\/chunk-network-entanglement-preview\.html\?count=(?:5000|10000)&seed=prototype-(?:5000|10000)&theme=dark&rev=[^"]+";/u,
+  'const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-10000-scale-v1";'
 );
 
-if (!src.includes('count=5000&seed=prototype-5000')) throw new Error("quantum 5000-node URL missing");
-if (!src.includes('rev=mobile-touch-v3')) throw new Error("quantum cache revision missing");
+if (!src.includes('count=10000&seed=prototype-10000')) throw new Error("quantum 10000-node URL missing");
+if (!src.includes('rev=quantum-10000-scale-v1')) throw new Error("quantum 10000 cache revision missing");
 if (src.includes('fonts.googleapis.com')) throw new Error("external Google font import still present");
 if (!src.includes('Hiragino Sans')) throw new Error("mobile-safe Japanese font stack missing");
 
 fs.writeFileSync(file, src);
-console.log("SEISEKI mobile UI font/cache patch applied");
+console.log("SEISEKI mobile UI + 10000-node quantum URL patch applied");
