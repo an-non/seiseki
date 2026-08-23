@@ -1,0 +1,112 @@
+name: Apply mobile UI fix and deploy staging
+
+on:
+  push:
+    branches:
+      - feature/quantum-app-integration
+    paths:
+      - scripts/apply-mobile-ui-fix.mjs
+      - .github/workflows/mobile-ui-staging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-mobile-ui-staging
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply mobile UI patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/build-app.mjs
+
+      - name: Verify mobile UI contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Hiragino Sans' core/ui.jsx
+          grep -q 'SFMono-Regular' core/ui.jsx
+          ! grep -q 'fonts.googleapis.com' core/ui.jsx
+          grep -q 'rev=mobile-touch-v3' core/ui.jsx
+          grep -q 'count=5000&seed=prototype-5000' core/ui.jsx
+          cmp app/seiseki.jsx local/src/App.jsx
+          grep -q 'seiseki-local-v1' app/seiseki.jsx
+          grep -q 'quantum: "/app/quantum"' app/seiseki.jsx
+
+      - name: Application tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify Cloudflare worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh staging build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          cd ..
+          test -s local/dist/index.html
+          test -f local/dist/model/manifest.json
+          grep -lq 'seiseki-api-staging' local/dist/assets/*.js
+          grep -lq 'mobile-touch-v3' local/dist/assets/*.js
+          grep -lq 'seiseki-local-v1' local/dist/assets/*.js
+
+      - name: Commit patched source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Make SEISEKI mobile typography and quantum cache stable"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Deploy to Cloudflare staging
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
+          printf '\n### Mobile UI staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- environment: `staging`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migrations: not run\n' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'Current Version ID|Uploaded' /tmp/deploy.log | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
