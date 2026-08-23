@@ -20,6 +20,7 @@ import {
 import { analyzeStoredResponse } from "./analysis.mjs";
 import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
 import { createResponseId, normalizeSubmission, RequestError } from "./validation.mjs";
+import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -92,15 +93,24 @@ async function readJson(request) {
 }
 
 async function verifyTurnstile(body, request, env) {
+  const required = String(env.TURNSTILE_REQUIRED).toLowerCase() === "true";
+  const token = String(body?.turnstileToken ?? "").trim();
+
   if (!env.TURNSTILE_SECRET) {
-    if (String(env.TURNSTILE_REQUIRED).toLowerCase() === "true") {
+    if (required) {
       throw new RequestError(503, "TURNSTILE_NOT_CONFIGURED", "Turnstile is required but not configured");
     }
     return;
   }
 
-  const token = String(body.turnstileToken ?? "");
-  if (!token) throw new RequestError(400, "TURNSTILE_REQUIRED", "Turnstile token is required");
+  /* Optional mode allows the current release client to submit without a widget.
+     If a token is supplied, it is still verified so the browser flow can be added
+     incrementally before enforcement is switched on. */
+  if (!token) {
+    if (required) throw new RequestError(400, "TURNSTILE_REQUIRED", "Turnstile token is required");
+    return;
+  }
+
   const form = new FormData();
   form.set("secret", env.TURNSTILE_SECRET);
   form.set("response", token);
@@ -120,6 +130,7 @@ async function verifyTurnstile(body, request, env) {
 }
 
 async function handleCreateResponse(request, env, ctx) {
+  await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.response);
   const body = await readJson(request);
   await verifyTurnstile(body, request, env);
   const normalized = normalizeSubmission(body);
@@ -189,10 +200,14 @@ async function handleRequest(request, env, ctx) {
     });
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/register") {
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register);
     return json(await registerAccount(env.DB, await readJson(request), env.PASSWORD_ITERATIONS), 201);
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
-    return json(await loginAccount(env.DB, await readJson(request)));
+    const body = await readJson(request);
+    const accountName = String(body?.name ?? "").normalize("NFKC").trim().toLowerCase();
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.login, accountName);
+    return json(await loginAccount(env.DB, body));
   }
   if (url.pathname === "/api/accounts/me") {
     const account = await authenticateRequest(env.DB, request, true);
