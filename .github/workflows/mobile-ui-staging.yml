@@ -30,42 +30,30 @@ jobs:
           ref: feature/quantum-app-integration
           fetch-depth: 0
 
-      - name: Skip until 10000-node patch source is present
-        id: gate
-        shell: bash
-        run: |
-          if grep -q 'count=10000&seed=prototype-10000' scripts/apply-mobile-ui-fix.mjs; then
-            echo 'ready=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'ready=false' >> "$GITHUB_OUTPUT"
-            echo '10000-node patch source not present yet; no staging write performed.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Apply mobile UI patch
-        if: steps.gate.outputs.ready == 'true'
+      - name: Apply production-prep UI patch
         shell: bash
         run: |
           set -euo pipefail
           node scripts/apply-mobile-ui-fix.mjs
           node scripts/build-app.mjs
 
-      - name: Verify mobile UI and 10000-node quantum contract
-        if: steps.gate.outputs.ready == 'true'
+      - name: Verify typography and quantum contract
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'Hiragino Sans' core/ui.jsx
+          grep -q 'const FONT_BODY = '\''"Hiragino Sans"' core/ui.jsx
+          grep -q 'const FONT_DISP = '\''"Hiragino Sans"' core/ui.jsx
           grep -q 'SFMono-Regular' core/ui.jsx
+          grep -q 'font-synthesis: none' core/ui.jsx
           ! grep -q 'fonts.googleapis.com' core/ui.jsx
-          grep -q 'rev=quantum-10000-scale-v1' core/ui.jsx
+          grep -q 'rev=quantum-stable-prodprep-v1' core/ui.jsx
           grep -q 'count=10000&seed=prototype-10000' core/ui.jsx
+          grep -q 'window.location.hostname.includes("staging")' core/ui.jsx
           cmp app/seiseki.jsx local/src/App.jsx
           grep -q 'seiseki-local-v1' app/seiseki.jsx
           grep -q 'quantum: "/app/quantum"' app/seiseki.jsx
-          grep -q 'count=10000&seed=prototype-10000' app/seiseki.jsx
 
       - name: Application tests
-        if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -76,7 +64,6 @@ jobs:
           node tests/quantum-entanglement-engine.test.mjs
 
       - name: Verify Cloudflare worker
-        if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -86,7 +73,6 @@ jobs:
           npm test
 
       - name: Fresh staging build
-        if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -97,12 +83,11 @@ jobs:
           test -s local/dist/index.html
           test -f local/dist/model/manifest.json
           grep -lq 'seiseki-api-staging' local/dist/assets/*.js
-          grep -lq 'quantum-10000-scale-v1' local/dist/assets/*.js
+          grep -lq 'quantum-stable-prodprep-v1' local/dist/assets/*.js
           grep -lq 'count=10000' local/dist/assets/*.js
           grep -lq 'seiseki-local-v1' local/dist/assets/*.js
 
       - name: Commit patched source
-        if: steps.gate.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -111,12 +96,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/ui.jsx app/seiseki.jsx local/src/App.jsx
           if ! git diff --cached --quiet; then
-            git commit -m "Use 10000-node quantum preview on staging"
+            git commit -m "Stabilize mobile typography for production prep"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
       - name: Inspect current Cloudflare staging deployment
-        if: steps.gate.outputs.ready == 'true'
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -131,7 +115,6 @@ jobs:
           printf '\nTarget: `seiseki-api-staging`; production and D1 migrations are excluded.\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy to Cloudflare staging
-        if: steps.gate.outputs.ready == 'true'
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -140,10 +123,9 @@ jobs:
         run: |
           set -euo pipefail
           npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
-          printf '\n### 10000-node quantum staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- environment: `staging`\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- quantum count: `10000`\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- spatial scaling: existing displayScale / radius / camera logic\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '\n### Production-prep staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- typography: Hiragino-first / no external fonts\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- quantum: stable relation rendering / 10000 nodes\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- D1 migrations: not run\n' >> "$GITHUB_STEP_SUMMARY"
           grep -E 'Current Version ID|Uploaded' /tmp/deploy.log | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
