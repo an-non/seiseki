@@ -1,4 +1,4 @@
-name: Recover and redeploy opinion network preview
+name: Recover mobile quantum preview safely
 
 on:
   push:
@@ -16,9 +16,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  recover-verify-deploy:
+  recover-mobile-verify-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout preview branch with history
         uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
           ref: feature/opinion-network-preview
           fetch-depth: 0
 
-      - name: Record GitHub state and restore last known-good 3D preview
+      - name: Record GitHub state and restore known-good 3D source
         shell: bash
         run: |
           set -euo pipefail
@@ -34,28 +34,39 @@ jobs:
           GOOD_BLOB=f19b67d1b978a93edfaf96a5519b0a2e9ee2ac64
           FILE=preview/opinion-network/public/chunk-network-entanglement-preview.html
 
-          printf '### Preview recovery preflight\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- current GitHub HEAD: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- last known-good commit: `%s`\n' "$GOOD_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          printf '### Quantum preview preflight\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- GitHub HEAD before deploy: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- known-good commit: `%s`\n' "$GOOD_COMMIT" >> "$GITHUB_STEP_SUMMARY"
           printf -- '- commits since known-good: `%s`\n' "$(git rev-list --count "$GOOD_COMMIT"..HEAD)" >> "$GITHUB_STEP_SUMMARY"
           printf -- '- changed paths since known-good:\n' >> "$GITHUB_STEP_SUMMARY"
           git diff --name-only "$GOOD_COMMIT"..HEAD | sed 's/^/  - `/' | sed 's/$/`/' >> "$GITHUB_STEP_SUMMARY"
 
           git checkout "$GOOD_COMMIT" -- "$FILE"
-          ACTUAL_BLOB="$(git hash-object "$FILE")"
-          test "$ACTUAL_BLOB" = "$GOOD_BLOB" || {
-            echo "known-good preview blob mismatch: $ACTUAL_BLOB" >&2
-            exit 1
-          }
-
+          test "$(git hash-object "$FILE")" = "$GOOD_BLOB"
           grep -q 'Math.min(5000' "$FILE"
           grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' "$FILE"
+          grep -q 'loading.hidden = true' "$FILE"
+          grep -q 'animate();' "$FILE"
+
+      - name: Apply mobile-only UI and tap fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          node preview/opinion-network/scripts/apply-mobile-fix.mjs
+          FILE=preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'Math.min(5000' "$FILE"
+          grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' "$FILE"
+          grep -q 'setPointer(event);' "$FILE"
+          grep -q 'hovered = hitFromPointer();' "$FILE"
+          grep -q '.trace { display:none; }' "$FILE"
+          grep -q 'font-size:12px; line-height:1; white-space:nowrap' "$FILE"
+          grep -q 'Hiragino Sans' "$FILE"
           grep -q 'loading.hidden = true' "$FILE"
           grep -q 'animate();' "$FILE"
           node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
           node --check preview/opinion-network/worker.mjs
 
-      - name: Commit exact known-good preview HTML
+      - name: Commit mobile-safe preview source
         shell: bash
         run: |
           set -euo pipefail
@@ -63,9 +74,29 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/public/chunk-network-entanglement-preview.html
           if ! git diff --cached --quiet; then
-            git commit -m "Restore last known-good quantum 3D preview"
+            git commit -m "Restore 3D preview and apply mobile-safe controls"
             git push origin HEAD:feature/opinion-network-preview
           fi
+
+      - name: Prepare exact same-origin Three.js runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
+          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
+          src="$tmp/package"
+          dst="preview/opinion-network/public/node_modules/three"
+          rm -rf "$dst"
+          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
+          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
+          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
+          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
+          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
+          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
+          test -s "$dst/build/three.module.js"
+          test -s "$dst/examples/jsm/postprocessing/UnrealBloomPass.js"
+          printf -- '- Three.js runtime prepared: `0.185.1`\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Inspect current Cloudflare preview deployments
         id: inspect
@@ -77,14 +108,14 @@ jobs:
           workingDirectory: preview/opinion-network
           command: deployments list
 
-      - name: Record Cloudflare pre-deploy state
+      - name: Record Cloudflare state before write
         shell: bash
         run: |
-          printf '\n### Cloudflare pre-deploy state\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '\n### Cloudflare before deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' '${{ steps.inspect.outputs.command-output }}' | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
-          printf '\nOnly `seiseki-opinion-network-preview` is targeted. SEISEKI staging API, D1 and production are not part of this workflow.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '\nTarget is only `seiseki-opinion-network-preview`. SEISEKI staging API, D1, queues and production are excluded.\n' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Deploy isolated preview defensively
+      - name: Deploy preview with conflict guard
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
@@ -94,14 +125,41 @@ jobs:
           workingDirectory: preview/opinion-network
           command: deploy --strict
 
-      - name: Report recovery deployment
+      - name: Record successful deployment
         shell: bash
         run: |
-          printf '\n### Recovery deployment\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- worker: `seiseki-opinion-network-preview`\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- restored preview blob: `f19b67d1b978a93edfaf96a5519b0a2e9ee2ac64`\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- known-good source commit: `80254a7826b9bb5dbfa10707852382204dbb8ef8`\n' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          rm -rf preview/opinion-network/public/node_modules
+          cat > preview/opinion-network/DEPLOYMENT_STATUS.md <<EOF
+          # Opinion network preview deployment
+
+          - credentials_ready: true
+          - deploy_outcome: success
+          - deployment_url: ${{ steps.deploy.outputs.deployment-url }}
+          - worker: seiseki-opinion-network-preview
+          - source_branch: feature/opinion-network-preview
+          - source_head: $(git rev-parse HEAD)
+          - known_good_base: 80254a7826b9bb5dbfa10707852382204dbb8ef8
+          - runtime_three: 0.185.1
+          - module_loading: same-origin-importmap
+          - mobile_ui: enabled
+          - mobile_tap_raycast: enabled
+          - demo_count_default: 5000
+          - cloudflare_conflict_guard: strict
+          - existing_seiseki_staging_touched: false
+          - d1_migrations_run: false
+          - production_touched: false
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add preview/opinion-network/DEPLOYMENT_STATUS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record recovered mobile quantum preview deployment"
+            git push origin HEAD:feature/opinion-network-preview
+          fi
+
+          printf '\n### Deployment complete\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- preview URL: `%s`\n' '${{ steps.deploy.outputs.deployment-url }}' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- SEISEKI staging API touched: `false`\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- D1 migrations: `none`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- Three.js: `0.185.1` same-origin runtime\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production touched: `false`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migrations: `none`\n' >> "$GITHUB_STEP_SUMMARY"
