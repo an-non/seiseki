@@ -1,0 +1,30 @@
+{
+ "version": "2026-08-19",
+ "total": 21590104,
+ "files": [
+  {
+   "key": "tok",
+   "url": "/model/tok-data-v40k.json",
+   "bytes": 586678,
+   "sha256": "2cd362a6e30c0aa6b336314d6eec66df9bb51cfebb03f5d6d1879d9849de912a"
+  },
+  {
+   "key": "enc",
+   "url": "/model/encoder-int8-v40k.bin",
+   "bytes": 19894720,
+   "sha256": "d287b77d03d3d18f2bb0db0d26e92ee60c18b51e511ddd5ae278669ddd0c5a6b"
+  },
+  {
+   "key": "head",
+   "url": "/model/head-krr-full.bin",
+   "bytes": 1101292,
+   "sha256": "201c093e3deb8778f92c635025a8ee67bb7d721c87e7c69c735c846fc204f26d"
+  },
+  {
+   "key": "wasm",
+   "url": "/model/kernel.wasm",
+   "bytes": 7414,
+   "sha256": "c9de32f0fd046cee0674c283603621f30fbcb5f4cb75b6be07369f21df1a2aae"
+  }
+ ]
+}

@@ -7,6 +7,12 @@
   </head>
   <body style="margin:0">
     <div id="root"></div>
+    <!-- 声析 ローカルモデル。main.jsx より先に読む（グローバルとして参照するため）。
+         受け取り（20.6MB）はここでは始まらない。SeisekiLocalBridge.begin() を呼んだときだけ。 -->
+    <script src="/model/store-fallback.js"></script>
+    <script src="/model/model-store.js"></script>
+    <script src="/model/local-client.js"></script>
+    <script src="/model/bootstrap.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

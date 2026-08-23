@@ -185,6 +185,17 @@ function sanitizeAnalysis(a) {
   };
   const engine = cleanStr(a.engine, 24);
   if (engine) out.engine = engine;
+  /* cap: どの値が学習して出したもので、どれが規則の目安か。
+     これを落とすと、測っていない値と測った値が画面で同じ顔になる */
+  if (a.cap && typeof a.cap === "object") {
+    const pick = k => (Array.isArray(a.cap[k]) ? a.cap[k].slice(0, 16).map(v => cleanStr(v, 20)).filter(Boolean) : []);
+    const cap = { learned: pick("learned"), rule: pick("rule"), none: pick("none") };
+    if (cap.learned.length || cap.rule.length || cap.none.length) out.cap = cap;
+  }
+  /* 7帯（band）は pol から再計算できるが、持っていれば持ち回る */
+  if (Number.isInteger(a.params && a.params.emo && a.params.emo.band)) {
+    out.params.emo.band = clamp(a.params.emo.band, 0, 6);
+  }
   const cs = Array.isArray(a.chunks) ? a.chunks : [];
   for (const c of cs) {
     if (out.chunks.length >= 6) break;
@@ -1124,6 +1135,171 @@ const DEMO_RESPONSES = [
   }
 ];
 
+/* 声析 ローカルモデルの橋渡し
+ *
+ *   ui.jsx から触るのはここ1本だけ。
+ *
+ *   決めごと（2026-08-21 改訂）:
+ *     ・受け取り(20.6MB)は「画面から明示的に頼まれたとき」だけ始める。
+ *       判定のついでに勝手に始めない。
+ *     ・判定のときは待たない。まだ使えなければ、その場で従来の規則解析へ落とす。
+ *     ・「持っているか」は置き場を実際に見て答える。旗を別に持たない
+ *       （キャッシュだけ消えたときに嘘になるため）。
+ *
+ *   前提: index.html で次を先に読み込んでおくこと
+ *     store-fallback.js / model-store.js / local-client.js / bootstrap.js
+ *
+ *   使い方（ui.jsx 側）:
+ *     SeisekiLocalBridge.resume();                  // 起動時。受け取り済みなら読み込むだけ
+ *     SeisekiLocalBridge.status()                   // {state, have, total}
+ *     SeisekiLocalBridge.begin({onState,onProgress,onError})   // ［受け取る］を押されたとき
+ *     SeisekiLocalBridge.cancel()                   // ［中止］
+ *     SeisekiLocalBridge.remove()                   // ［削除］
+ *     await SeisekiLocalBridge.analyze(resp, questions, heuristicAnalysis)
+ */
+var SeisekiLocalBridge = (function () {
+  'use strict';
+
+  var ENGINE = 'seiseki-local-v1';       // sanitizeAnalysis の engine 上限は24字
+  var MODEL_BASE = '/model/';
+  /* 別レーンが黙り込んだときの打ち切り。
+     local-client.js の約束は別レーンからの返事でしか解けないので、
+     返事が来なければ送信ボタンが永久に戻らない。ここで必ず断ち切る。 */
+  var ANALYZE_TIMEOUT_MS = 20000;
+  var boot = null;
+  var lastError = null;
+  var opts = {};
+
+  function available() {
+    return typeof SeisekiBootstrap !== 'undefined'
+        && typeof SeisekiModelStore !== 'undefined'
+        && typeof SeisekiLocalClient !== 'undefined';
+  }
+
+  /* 器だけ作る。ここでは受け取りも読み込みも始まらない */
+  function getBoot(o) {
+    if (o) {
+      for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) opts[k] = o[k];
+    }
+    if (!boot && available()) {
+      boot = SeisekiBootstrap.create({
+        manifestUrl: MODEL_BASE + 'manifest.json',
+        workerUrl: MODEL_BASE + 'worker.js',
+        onState: function (s, st) { if (opts.onState) opts.onState(s, st); },
+        onProgress: function (d, t) { if (opts.onProgress) opts.onProgress(d, t); },
+        onError: function (e) { lastError = e; if (opts.onError) opts.onError(e); }
+      });
+    }
+    return boot;
+  }
+
+  /* いま端末が持っている量。受け取りは始めない。
+     state は 'unsupported' / 'none' / 'partial' / 'ready' */
+  function status() {
+    var b = getBoot();
+    if (!b) return Promise.resolve({ state: 'unsupported', have: 0, total: 0 });
+    return b.status().catch(function (e) {
+      lastError = e;
+      return { state: 'none', have: 0, total: 0 };
+    });
+  }
+
+  /* ［受け取る］を押されたときだけ呼ぶ。失敗しても投げない（画面を壊さない） */
+  function begin(o) {
+    var b = getBoot(o);
+    if (!b) { lastError = { code: 'unsupported' }; return Promise.resolve(null); }
+    return b.begin();
+  }
+
+  /* 起動時に呼ぶ。すでに受け取り済みのときだけ、別レーンへ読み込む。
+     まだ持っていなければ何もしない（勝手に20.6MBを取りに行かない）。 */
+  function resume(o) {
+    if (o) getBoot(o);
+    if (!available()) return Promise.resolve(null);
+    return status().then(function (s) {
+      if (s && s.state === 'ready') return begin();
+      return null;
+    }).catch(function () { return null; });
+  }
+
+  function state() { return boot ? boot.state : 'none'; }
+  function error() { return lastError; }
+  function cancel() { if (boot) boot.cancel(); }
+  function retry() { return boot ? boot.retry().catch(function () { return null; }) : begin(); }
+
+  /* この調査そのものの対象。住民は自分の自治体名を書かないことが多く、規則では拾えない */
+  function defaultTarget() { return opts.defaultTarget || null; }
+
+  /* 判定できる状態か。ここが false なら analyze は規則解析へ落とす */
+  function ready() { return !!boot && boot.state === 'ready'; }
+
+  /* 本体。fallback は従来の heuristicAnalysis をそのまま渡してもらう。
+     使えないときは待たずに即座に fallback を返す。 */
+  function analyze(resp, questions, fallback) {
+    var text = String((resp && resp.free) || '');
+    var fb = function () {
+      return Promise.resolve(fallback ? fallback(resp, questions) : null);
+    };
+    if (!text.trim()) return fb();
+    if (!available()) return fb();
+    if (!ready()) return fb();            /* 受け取っていない・読み込み中 → 待たない */
+
+    var settled = false;
+    var timer = null;
+    var guard = new Promise(function (res) {
+      timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        lastError = { code: 'timeout', message: '端末内の解析が時間内に終わりませんでした' };
+        res(fb());
+      }, ANALYZE_TIMEOUT_MS);
+    });
+
+    var work = boot.ready().then(function (client) {
+      if (!client) return fb();
+      return client.analyze(text, {
+        mode: 'response',
+        maxChunks: 5,
+        defaultTarget: defaultTarget()
+      }).then(function (a) {
+        if (!a) return fb();
+        a.engine = ENGINE;
+        a.ai = false;                     // AIではない、と画面に伝える
+        return a;
+      });
+    }).catch(function (e) {
+      lastError = e;
+      return fb();
+    }).then(function (r) {
+      settled = true;
+      if (timer) clearTimeout(timer);
+      return r;
+    });
+
+    /* 先に決まったほうを採る。打ち切られても、あとから返事が来たら黙って捨てる。 */
+    return Promise.race([work, guard]);
+  }
+
+  function remove() {
+    if (!boot) { var b = getBoot(); if (!b) return Promise.resolve(); }
+    return boot.remove().catch(function (e) { lastError = e; });
+  }
+
+  return {
+    ENGINE: ENGINE,
+    available: available, status: status, resume: resume,
+    begin: begin, cancel: cancel, retry: retry, remove: remove,
+    ready: ready, state: state, error: error, analyze: analyze,
+    setDefaultTarget: function (t) { opts.defaultTarget = t; }
+  };
+})();
+
+/* ここには module.exports を書かない。
+   このファイルは build-app.mjs が App.jsx へ連結するため、バンドラが
+   ESM の中の CommonJS とみなして毎回警告を出す（動作に害は無いが、
+   本当の警告が埋もれる）。Node での検査は tests/local-bridge.test.js が
+   ファイルを読んで評価する形にしてある。 */
+
 /* Independent chunk-level network model. It does not change the topic network. */
 function chunkNodeSeed(value) {
   let h = 2166136261;
@@ -1493,7 +1669,12 @@ async function cloudApiRequest(path, options) {
 }
 
 async function cloudCreateInitialResponse(resp, token) {
-  if (!cloudApiEnabled() || resp.seq !== 1) return null;
+  if (!cloudApiEnabled()) return null;
+  /* 追記(seq=2)は「自由記述の続き」。1200字に収まらなかった分や、2回目の記述にあたる。
+     属性と選択回答は元の回答で既に数えているので、サーバーへは送らない
+     (送るとサーバー側の集計で同じ人を二度数えることになる)。
+     アカウントへの紐付けは authorization ヘッダで行われるので、追記も同じ口座に付く。 */
+  const isAdd = resp.seq === 2;
   const freeQids = new Set(Array.isArray(resp.freeQids) ? resp.freeQids : []);
   const answers = Object.fromEntries(
     Object.entries(resp.answers || {}).filter(([qid]) => !freeQids.has(qid))
@@ -1501,8 +1682,8 @@ async function cloudCreateInitialResponse(resp, token) {
   const payload = {
     appVersion: resp.ver,
     consent: { accepted: true, version: resp.consent.version, at: resp.consent.ts },
-    demo: resp.demo || {},
-    answers,
+    demo: isAdd ? {} : (resp.demo || {}),
+    answers: isAdd ? {} : answers,
     freeText: resp.free || "",
     demoFlag: resp.demoFlag === true
   };
@@ -1880,9 +2061,26 @@ async function rebuildAgg(onProg, options) {
 
 /* ---------- 解析呼び出し(APIレス互換アダプタ) ----------
    呼び出し側の境界を残し、将来サーバー解析へ差し替えられるようにする。
-   現行版は入力を外部送信せず、必ず端末内の規則解析だけを使う。 */
+   入力は外部送信しない。端末内で完結する。
+     1) 声析ローカルモデル（20.6MB・学習した値）
+     2) 受け取れていない/対応していない端末 → 従来の規則解析 */
 async function callAI(resp, questions) {
+  if (typeof SeisekiLocalBridge !== "undefined" && SeisekiLocalBridge.available()) {
+    return SeisekiLocalBridge.analyze(resp, questions, heuristicAnalysis);
+  }
   return heuristicAnalysis(resp, questions);
+}
+
+/* 端末内解析の種別。画面の注記を出し分けるために使う */
+const SEISEKI_LOCAL_ENGINE = "seiseki-local-v1";
+function isLocalEngine(an) {
+  return !!an && (an.engine === LOCAL_ANALYSIS_ENGINE || an.engine === SEISEKI_LOCAL_ENGINE);
+}
+function localEngineNote(an) {
+  if (!an) return null;
+  if (an.engine === SEISEKI_LOCAL_ENGINE) return "※ 端末内のモデルによる推定値です（AIより精度が落ちます）";
+  if (an.engine === LOCAL_ANALYSIS_ENGINE) return "※ 端末内の規則解析による推定値です";
+  return null;
 }
 
 /* ---------- デザイントークン(白書 × 計測器) ---------- */
@@ -2252,6 +2450,182 @@ function AccountMenu({ session, goto, onLogout }) {
   );
 }
 
+/* ---------- オフライン解析用データ(端末内モデル) ----------
+   約20MB。受け取ると、通信が届かないときでも自由記述をこの端末で解析できる。
+   受け取りは利用者が[受け取る]を押したときだけ始まる。画面を開いただけでは始まらない。
+   「持っているか」は置き場を実際に見て判定するので、キャッシュを消せば未取得に戻る
+   (端末側に別の旗を置くと、キャッシュだけ消えたときに嘘になる)。 */
+const MODEL_SIZE_LABEL = "約20MB";
+
+function modelBridge() {
+  return (typeof SeisekiLocalBridge !== "undefined" && SeisekiLocalBridge.available())
+    ? SeisekiLocalBridge : null;
+}
+
+function modelStateLabel(st) {
+  const pct = st.total ? Math.round(100 * st.have / st.total) : 0;
+  if (st.state === "ready") return "利用可能";
+  if (st.state === "downloading") return "受信中 " + pct + "%";
+  if (st.state === "partial") return "途中まで受信 " + pct + "%";
+  return "未取得";
+}
+
+function useModelData() {
+  const [st, setSt] = useState({ state: "unknown", have: 0, total: 0 });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [justDone, setJustDone] = useState(false);   // この画面で受け取り終えたか
+  const alive = useRef(true);
+
+  function refresh() {
+    const b = modelBridge();
+    if (!b) { setSt({ state: "unsupported", have: 0, total: 0 }); return Promise.resolve(); }
+    return b.status().then(s => { if (alive.current) setSt(s); });
+  }
+  useEffect(() => {
+    alive.current = true;
+    refresh();
+    return () => { alive.current = false; };
+  }, []);
+
+  async function start() {
+    const b = modelBridge();
+    if (!b || busy) return;
+    setBusy(true); setMsg("");
+    setSt(prev => ({ state: "downloading", have: prev.have || 0, total: prev.total || 0 }));
+    await b.begin({
+      onProgress: (d, t) => { if (alive.current) setSt({ state: "downloading", have: d, total: t }); },
+      onError: e => { if (alive.current) setMsg((e && e.message) || "受け取れませんでした"); }
+    });
+    if (!alive.current) return;
+    setBusy(false);
+    await refresh();
+    if (alive.current) setJustDone(true);
+  }
+  function cancel() {
+    const b = modelBridge();
+    if (b) b.cancel();
+    setBusy(false);
+    refresh();
+  }
+  async function drop() {
+    const b = modelBridge();
+    if (!b || busy) return;
+    setBusy(true);
+    await b.remove();
+    if (!alive.current) return;
+    setBusy(false); setMsg(""); setJustDone(false);
+    await refresh();
+  }
+  return { st, busy, msg, justDone, start, cancel, drop, refresh };
+}
+
+/* プロフィール欄に置く操作盤。状態の確認・受け取り・中止・削除 */
+function ModelDataPanel() {
+  const m = useModelData();
+  if (m.st.state === "unknown" || m.st.state === "unsupported") return null;
+  const mb = v => (Number(v || 0) / 1048576).toFixed(1);
+  const pct = m.st.total ? (100 * m.st.have / m.st.total) : 0;
+  return (
+    <div style={{ borderTop: "1px solid " + C.rule, marginTop: 16, paddingTop: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>オフライン解析用データ</div>
+      <div style={{ fontSize: 11, color: C.sub, marginBottom: 8, lineHeight: 1.8 }}>
+        受け取ると、通信が届かないときでも自由記述をこの端末で解析できます({MODEL_SIZE_LABEL})。
+        受け取らなくても回答はできます。削除すればいつでも消せます。
+      </div>
+      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ fontSize: 12, fontFamily: FONT_MONO }}>{modelStateLabel(m.st)}</span>
+        {m.st.total ? <span style={{ fontSize: 11, color: C.sub }}>{mb(m.st.have)} / {mb(m.st.total)} MB</span> : null}
+      </div>
+      {m.st.state === "downloading" ? <MeterBar small label="受信中" value={pct} /> : null}
+      {m.msg ? <div role="alert" style={{ fontSize: 11, color: C.bengara, marginBottom: 8 }}>{m.msg}</div> : null}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {m.st.state !== "ready" && m.st.state !== "downloading"
+          ? <Btn small onClick={m.start} disabled={m.busy}>{m.st.state === "partial" ? "続きから受け取る" : "受け取る"}</Btn>
+          : null}
+        {m.st.state === "downloading" ? <Btn small kind="ghost" onClick={m.cancel}>中止</Btn> : null}
+        {m.st.have > 0 && m.st.state !== "downloading"
+          ? <Btn small kind="ghost" onClick={m.drop} disabled={m.busy}>削除</Btn> : null}
+      </div>
+    </div>
+  );
+}
+
+/* 登録・ログインの直後、ホームに出す誘い。[あとで]を押したら以後は出さない
+   (プロフィール欄からはいつでも受け取れる)。 */
+function ModelDataOffer({ session }) {
+  const m = useModelData();
+  const [hidden, setHidden] = useState(true);   // 問い合わせが返るまでは出さない
+  useEffect(() => {
+    let alive = true;
+    pGet("model:ask").then(v => { if (alive) setHidden(!!(v && v.declined)); });
+    return () => { alive = false; };
+  }, []);
+  if (!session || hidden) return null;
+  if (m.st.state === "unknown" || m.st.state === "unsupported") return null;
+  /* 受け取り終えたら、黙って消えずに一度だけ知らせる。
+     次に画面を開いたときは justDone が false なので、もう出ない。 */
+  if (m.st.state === "ready") {
+    if (!m.justDone) return null;
+    return (
+      <Card pad={12} style={{ marginBottom: 12, borderColor: C.green, background: C.greenSoft || C.soft }}>
+        <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+          <b>オフライン解析用データを受け取りました。</b>
+          <div style={{ color: C.sub }}>
+            通信が届かないときでも、この端末で自由記述を解析できます。
+            消したいときは「自分の回答・アカウント設定」から削除できます。
+          </div>
+        </div>
+      </Card>
+    );
+  }
+  const pct = m.st.total ? Math.round(100 * m.st.have / m.st.total) : 0;
+  const dl = m.st.state === "downloading";
+  return (
+    <Card pad={12} style={{ marginBottom: 12, borderColor: C.green, background: C.greenSoft || C.soft }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, flex: 1, minWidth: 220, lineHeight: 1.8 }}>
+          <b>オフライン解析用データを受け取りますか？({MODEL_SIZE_LABEL})</b>
+          <div style={{ color: C.sub }}>
+            受け取ると、通信が届かないときでも自由記述をこの端末で解析できます。
+            あとから「自分の回答・アカウント設定」でも受け取れます。
+          </div>
+          {dl ? <div style={{ color: C.sub }}>受信中 {pct}% …</div> : null}
+          {m.msg ? <div role="alert" style={{ color: C.bengara }}>{m.msg}</div> : null}
+        </div>
+        {dl ? <Btn small kind="ghost" onClick={m.cancel}>中止</Btn> : null}
+        {!dl ? <Btn small onClick={m.start} disabled={m.busy}>受け取る</Btn> : null}
+        {!dl ? <Btn small kind="ghost" onClick={async () => {
+          await pSet("model:ask", { declined: true, ts: Date.now() });
+          setHidden(true);
+        }}>あとで</Btn> : null}
+      </div>
+    </Card>
+  );
+}
+
+/* 端末内で解析したときの注記。規則解析だったときは、その旨と受け取りの入口も出す */
+function LocalEngineNote({ an }) {
+  const m = useModelData();
+  const offer = an && an.engine === LOCAL_ANALYSIS_ENGINE
+    && m.st.state !== "unknown" && m.st.state !== "unsupported" && m.st.state !== "ready";
+  const pct = m.st.total ? Math.round(100 * m.st.have / m.st.total) : 0;
+  return (
+    <div style={{ fontSize: 11, color: C.karashi, marginTop: 8, lineHeight: 1.8 }}>
+      <div>{localEngineNote(an)}</div>
+      {offer ? <div style={{ color: C.sub }}>
+        オフライン解析用データがまだありません。規則による簡易解析で表示しています。
+      </div> : null}
+      {offer && m.st.state === "downloading"
+        ? <div style={{ color: C.sub }}>受信中 {pct}% …</div> : null}
+      {offer && m.st.state !== "downloading"
+        ? <div style={{ marginTop: 6 }}>
+            <Btn small onClick={m.start} disabled={m.busy}>受け取る({MODEL_SIZE_LABEL})</Btn>
+          </div> : null}
+    </div>
+  );
+}
+
 function AccountSettings({ session, onUpdated }) {
   const [name, setName] = useState(session.name);
   const [currentPass, setCurrentPass] = useState("");
@@ -2301,6 +2675,7 @@ function AccountSettings({ session, onUpdated }) {
           {busy ? "更新しています…" : "変更を保存"}
         </Btn>
       </form>
+      <ModelDataPanel />
     </Card>
   );
 }
@@ -2380,6 +2755,9 @@ export default function App() {
         }
       }
       setReady(true);
+      /* すでにオフライン解析用データを受け取っている端末なら、裏で読み込んでおく。
+         持っていない端末では何も起きない(勝手に20.6MBを取りに行かない)。 */
+      if (typeof SeisekiLocalBridge !== "undefined") SeisekiLocalBridge.resume();
       if (storageDegraded()) {
         notify("保存領域に接続できないため、このセッション内のみデータを保持します");
       }
@@ -2524,6 +2902,7 @@ function Entry({ session, onAuthed, goto }) {
           登録・ログインすると回答の確認、追記、撤回ができます。閲覧だけなら登録は必要ありません。
         </div>
       </div>
+      <ModelDataOffer session={session} />
       {session ? (
         <Card>
           <div style={{ fontSize: 13, marginBottom: 14 }}>
@@ -2549,11 +2928,12 @@ function Entry({ session, onAuthed, goto }) {
 /* ============================================================
    ホーム
    ============================================================ */
-function Home({ agg, goto, hasDraft, myId }) {
+function Home({ agg, goto, hasDraft, myId, session }) {
   const chunkTotal = agg ? Object.values(agg.topics).reduce((s, t) => s + t.n, 0) : 0;
   const ov = agg ? overallParams(agg) : { n: 0 };
   return (
     <div>
+      <ModelDataOffer session={session} />
       <div style={{ padding: "34px 0 10px" }}>
         <Eyebrow>POLITICAL OPINION QUANTIZATION</Eyebrow>
         <h1 style={{ fontFamily: FONT_DISP, fontWeight: 700, fontSize: 30, lineHeight: 1.45, margin: "0 0 10px", color: C.ink }}>
@@ -2762,7 +3142,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let cloudAnalysisStatus = null;
     let cloudAnalysisMode = null;
     let remoteId = null;
-    if (base.seq === 1 && cloudApiEnabled()) {
+    /* 追記(seq=2)も同じ経路に載せる。解析はアカウントに紐付いたまま Cloudflare 側で行われる。 */
+    if (cloudApiEnabled()) {
       try {
         remoteId = await cloudCreateInitialResponse(base, session && session.token);
         const remote = await cloudWaitForResponseAnalysis(remoteId);
@@ -3099,7 +3480,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
               {an.attrs.map(a => <span key={a} style={{ fontSize: 11, padding: "2px 9px", borderRadius: 99, background: C.soft, color: C.sub }}>{a}</span>)}
             </div>
           ) : null}
-          {an.engine === LOCAL_ANALYSIS_ENGINE ? <div style={{ fontSize: 11, color: C.karashi, marginTop: 8 }}>※ 端末内の規則解析による推定値です</div> : null}
+          {isLocalEngine(an) ? <LocalEngineNote an={an} /> : null}
         </Card>
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>イデオロギー座標(推定)</div>
@@ -3169,7 +3550,7 @@ function Completion({ result, notify, goto, session }) {
               {an.attrs.map(a => <span key={a} style={{ fontSize: 11, padding: "2px 9px", borderRadius: 99, background: C.soft, color: C.sub }}>{a}</span>)}
             </div>
           ) : null}
-          {an.engine === LOCAL_ANALYSIS_ENGINE ? <div style={{ fontSize: 11, color: C.karashi, marginTop: 8 }}>※ 端末内の規則解析による推定値です</div> : null}
+          {isLocalEngine(an) ? <LocalEngineNote an={an} /> : null}
         </Card>
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>イデオロギー座標(推定)</div>
@@ -4191,11 +4572,14 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     const pubChunks = []
       .concat((an && an.chunks) || [])
       .concat((found.r2 && found.r2.analysis && found.r2.analysis.chunks) || []);
+    /* 全体平均は個人と同じ物差しに揃える。
+       ov.emo は極性(-1〜+1)のままなので、emoToPos で 0〜100 に写してから並べる。
+       これを忘れると「感情ポジ度 45 (全体 0)」のように、単位の違う数が並んでしまう。 */
     const rows = an ? [
-      ["感情ポジ度", emoToPos(an.params.emo.pol), ov ? ov.emo : null],
-      ["妥当性", an.params.valid, ov ? ov.valid : null],
-      ["切実度", an.params.crit, ov ? ov.crit : null],
-      ["意欲", an.params.motiv, ov ? ov.motiv : null]
+      ["感情ポジ度", emoToPos(an.params.emo.pol), ov ? emoToPos(ov.emo) : null, emoColor(an.params.emo.pol)],
+      ["妥当性", an.params.valid, ov ? ov.valid : null, null],
+      ["切実度", an.params.crit, ov ? ov.crit : null, C.karashi],
+      ["意欲", an.params.motiv, ov ? ov.motiv : null, C.slate]
     ] : [];
 
     return (
@@ -4266,18 +4650,20 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
               <Badge>感情: {an.params.emo.label}</Badge>
               <Badge>イデオロギー: 経済 {an.ideology.econ} / 社会 {an.ideology.soc}</Badge>
-              {an.engine === LOCAL_ANALYSIS_ENGINE ? <Badge>ローカル規則解析</Badge> : an.ai === false ? <Badge>旧簡易推定</Badge> : null}
+              {an.engine === SEISEKI_LOCAL_ENGINE ? <Badge>端末内モデル</Badge>
+                : an.engine === LOCAL_ANALYSIS_ENGINE ? <Badge>ローカル規則解析</Badge>
+                : an.ai === false ? <Badge>旧簡易推定</Badge> : null}
             </div>
+            {/* MeterBar が受け取るのは value。v では届かず、clamp(undefined) が
+                (0+100)/2 = 50 を返すため、どの項目も必ず 50 の半分バーになっていた。 */}
             {rows.map(row => (
-              <div key={row[0]} style={{ marginBottom: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
-                  <span>{row[0]}</span>
-                  <span style={{ fontFamily: FONT_MONO, color: C.sub }}>
-                    {Math.round(row[1])}{row[2] === null || row[2] === undefined ? "" : "(全体 " + Math.round(row[2]) + ")"}
-                  </span>
-                </div>
-                <MeterBar v={row[1]} />
-              </div>
+              <MeterBar
+                key={row[0]}
+                label={row[0]}
+                note={row[2] === null || row[2] === undefined ? "" : "全体 " + Math.round(row[2])}
+                value={row[1]}
+                color={row[3]}
+              />
             ))}
           </Card>
         ) : null}

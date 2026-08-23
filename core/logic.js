@@ -182,6 +182,17 @@ function sanitizeAnalysis(a) {
   };
   const engine = cleanStr(a.engine, 24);
   if (engine) out.engine = engine;
+  /* cap: どの値が学習して出したもので、どれが規則の目安か。
+     これを落とすと、測っていない値と測った値が画面で同じ顔になる */
+  if (a.cap && typeof a.cap === "object") {
+    const pick = k => (Array.isArray(a.cap[k]) ? a.cap[k].slice(0, 16).map(v => cleanStr(v, 20)).filter(Boolean) : []);
+    const cap = { learned: pick("learned"), rule: pick("rule"), none: pick("none") };
+    if (cap.learned.length || cap.rule.length || cap.none.length) out.cap = cap;
+  }
+  /* 7帯（band）は pol から再計算できるが、持っていれば持ち回る */
+  if (Number.isInteger(a.params && a.params.emo && a.params.emo.band)) {
+    out.params.emo.band = clamp(a.params.emo.band, 0, 6);
+  }
   const cs = Array.isArray(a.chunks) ? a.chunks : [];
   for (const c of cs) {
     if (out.chunks.length >= 6) break;
