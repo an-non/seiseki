@@ -1,0 +1,223 @@
+name: Rapid SEISEKI quantum/dashboard hotfix v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/rapid-quantum-dashboard-hotfix-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-rapid-hotfix-v2
+  cancel-in-progress: true
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout app branch
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Patch app dashboard and quantum route
+        id: app_patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/apply-production-dashboard-fix.mjs
+          node scripts/build-app.mjs
+          grep -q '/api/public-aggregate' cloudflare/src/index.mjs
+          grep -q 'cloudLoadPublicAggregate' core/ui.jsx
+          grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
+
+      - name: Copy stable quantum assets and remove 6048 cap
+        id: quantum_patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
+          mkdir -p local/public/quantum
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/public/quantum/chunk-network-entanglement-preview.html
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/public/quantum/quantum-entanglement-engine.mjs
+          node - <<'NODE'
+          const fs=require('fs');
+          const path='local/public/quantum/quantum-entanglement-engine.mjs';
+          let s=fs.readFileSync(path,'utf8');
+          const oldCap='  const capacity = topics.length * statements.length * targets.length * lenses.length;\n  if (uniqueCount > capacity) throw new RangeError(`uniqueCount must be ${capacity} or less`);';
+          const newCap='  const baseCapacity = topics.length * statements.length * targets.length * lenses.length;\n  const maximumSyntheticCount = 50000;\n  if (uniqueCount > maximumSyntheticCount) throw new RangeError(`uniqueCount must be ${maximumSyntheticCount} or less`);';
+          if(s.includes(oldCap)) s=s.replace(oldCap,newCap);
+          const oldLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    let cursor = index;';
+          const newLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    const variantIndex = Math.floor(index / baseCapacity);\n    let cursor = index % baseCapacity;';
+          if(s.includes(oldLoop)) s=s.replace(oldLoop,newLoop);
+          const oldText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。`,';
+          const newText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。${variantIndex ? ` 合成系列${variantIndex + 1}。` : ""}`,';
+          if(s.includes(oldText)) s=s.replace(oldText,newText);
+          if(!s.includes('const baseCapacity = topics.length * statements.length * targets.length * lenses.length')) throw new Error('baseCapacity patch failed');
+          if(!s.includes('const variantIndex = Math.floor(index / baseCapacity)')) throw new Error('variant patch failed');
+          if(!s.includes('合成系列${variantIndex + 1}')) throw new Error('unique text patch failed');
+          if(s.includes('uniqueCount must be ${capacity} or less')) throw new Error('old 6048 cap still present');
+          fs.writeFileSync(path,s);
+          NODE
+          node --check local/public/quantum/quantum-entanglement-engine.mjs
+          node --input-type=module - <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const q=await import(pathToFileURL(process.cwd()+'/local/public/quantum/quantum-entanglement-engine.mjs').href+'?v='+Date.now());
+          const topics=Array.from({length:24},(_,i)=>({id:`t${i}`,label:`topic${i}`,categoryId:`c${Math.floor(i/4)}`}));
+          const nodes=q.generatePrototypeCandidates(topics,{uniqueCount:10000,duplicateCount:0});
+          const unique=q.deduplicateNodes(nodes);
+          if(nodes.length!==10000||unique.length!==10000) throw new Error(`10000 verification failed ${nodes.length}/${unique.length}`);
+          console.log(`quantum generator verified ${nodes.length}/${unique.length}`);
+          NODE
+          grep -q 'prototype-10000' local/public/quantum/chunk-network-entanglement-preview.html
+          grep -q 'linewidth:1.55' local/public/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'relationMist' local/public/quantum/chunk-network-entanglement-preview.html
+
+      - name: Prepare Three.js runtime
+        id: runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
+          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
+          src="$tmp/package"
+          dst="local/public/node_modules/three"
+          rm -rf "$dst"
+          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
+          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
+          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
+          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
+          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
+          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
+
+      - name: Install dependencies
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local && npm ci --no-audit --no-fund
+          cd ../cloudflare && npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Deploy production
+        id: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
+          grep -q '合成系列' dist/quantum/quantum-entanglement-engine.mjs
+          cd ../cloudflare
+          npx wrangler deploy --strict
+
+      - name: Verify production
+        id: prod_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$PRODUCTION_URL/api/health" | tee /tmp/prod-health.json
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/prod-aggregate.json
+          curl -fsS "$PRODUCTION_URL/app/dashboard" > /tmp/prod-dashboard.html
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3" > /tmp/prod-quantum.html
+          curl -fsS "$PRODUCTION_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/prod-engine.mjs
+          grep -q '合成系列' /tmp/prod-engine.mjs
+          node - <<'NODE'
+          const fs=require('fs'); const h=JSON.parse(fs.readFileSync('/tmp/prod-health.json')); if(h.status!=='ok'||h.database!=='d1') throw new Error('prod health');
+          const a=JSON.parse(fs.readFileSync('/tmp/prod-aggregate.json')); if(!('total'in a)&&!('topics'in a)) throw new Error('prod aggregate');
+          NODE
+
+      - name: Deploy staging
+        id: staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist
+          cd local
+          VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build
+          grep -q '合成系列' dist/quantum/quantum-entanglement-engine.mjs
+          cd ../cloudflare
+          npx wrangler deploy --env staging --strict
+
+      - name: Verify staging
+        id: staging_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$STAGING_URL/api/health" | tee /tmp/stage-health.json
+          curl -fsS "$STAGING_URL/api/public-aggregate" > /tmp/stage-aggregate.json
+          curl -fsS "$STAGING_URL/app/dashboard" > /tmp/stage-dashboard.html
+          curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3" > /tmp/stage-quantum.html
+          curl -fsS "$STAGING_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/stage-engine.mjs
+          grep -q '合成系列' /tmp/stage-engine.mjs
+          node - <<'NODE'
+          const fs=require('fs'); const h=JSON.parse(fs.readFileSync('/tmp/stage-health.json')); if(h.status!=='ok'||h.database!=='d1') throw new Error('stage health');
+          const a=JSON.parse(fs.readFileSync('/tmp/stage-aggregate.json')); if(!('total'in a)&&!('topics'in a)) throw new Error('stage aggregate');
+          NODE
+
+      - name: Record success
+        id: record
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > RAPID_HOTFIX_STATUS.md <<EOF
+          # SEISEKI rapid quantum/dashboard hotfix
+          - outcome: success
+          - production_dashboard: ${PRODUCTION_URL}/app/dashboard
+          - production_quantum: ${PRODUCTION_URL}/app/quantum
+          - staging_dashboard: ${STAGING_URL}/app/dashboard
+          - staging_quantum: ${STAGING_URL}/app/quantum
+          - quantum_generator: 10000/10000 unique synthetic nodes verified
+          - quantum_old_cap_6048: removed
+          - dashboard_source: /api/public-aggregate
+          - d1_migrations: none
+          EOF
+          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RAPID_HOTFIX_STATUS.md core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-mobile-ui-fix.mjs scripts/apply-production-dashboard-fix.mjs
+          if ! git diff --cached --quiet; then
+            git commit -m "Complete rapid dashboard and quantum hotfix"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Record progress
+        if: ${{ always() && steps.record.outcome != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > RAPID_HOTFIX_PROGRESS.md <<EOF
+          # SEISEKI rapid quantum/dashboard hotfix progress
+          - outcome: incomplete
+          - checkout: ${{ steps.checkout.outcome }}
+          - app_patch: ${{ steps.app_patch.outcome }}
+          - quantum_patch: ${{ steps.quantum_patch.outcome }}
+          - runtime: ${{ steps.runtime.outcome }}
+          - deps: ${{ steps.deps.outcome }}
+          - production: ${{ steps.production.outcome }}
+          - prod_smoke: ${{ steps.prod_smoke.outcome }}
+          - staging: ${{ steps.staging.outcome }}
+          - staging_smoke: ${{ steps.staging_smoke.outcome }}
+          - record: ${{ steps.record.outcome }}
+          EOF
+          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add RAPID_HOTFIX_PROGRESS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record rapid hotfix v2 progress"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
