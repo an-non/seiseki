@@ -121,31 +121,26 @@ const oldRelationBlock = `    const relationLines = makeLineSegments(initialPale
     relationGlowLines.renderOrder = -1;
     scene.add(relationGlowLines);`;
 
-const newRelationBlock = `    /* Density-accumulating relation glow.
-       The three layers share identical endpoints: no spatial duplication, only
-       a broader additive footprint. Overlap therefore sums in the same pixels,
-       keeping isolated relations faint while dense crossings become brighter. */
-    const relationGlowProfile = Object.freeze({
+const newRelationBlock = `    /* Keep the original readable relation line, and add one very wide, very low-energy
+       additive mist layer on exactly the same geometry. A single relation barely glows;
+       dense crossings accumulate into a soft haze without washing out the nodes. */
+    const relationMistProfile = Object.freeze({
       referenceNodeDiameter:.32,
-      innerWorldWidth:.26,
-      outerWorldWidth:.48,
-      baseOpacityDark:.12,
-      baseOpacityLight:.18,
-      innerOpacityDark:.055,
-      innerOpacityLight:.045,
-      outerOpacityDark:.018,
-      outerOpacityLight:.014
+      worldWidth:.48,
+      opacityDark:.012,
+      opacityLight:.009,
+      colorScaleDark:.55,
+      colorScaleLight:.42
     });
-    const relationLines = makeLineSegments(
-      initialPalette.relation,
-      colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight
-    );
+    const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
-    const relationGlowMaterial = new LineMaterial({
-      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.28),
-      linewidth:relationGlowProfile.innerWorldWidth,
+    const relationMistMaterial = new LineMaterial({
+      color:new THREE.Color(initialPalette.relation).multiplyScalar(
+        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
+      ),
+      linewidth:relationMistProfile.worldWidth,
       transparent:true,
-      opacity:colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight,
+      opacity:colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight,
       depthWrite:false,
       worldUnits:true,
       alphaToCoverage:true,
@@ -153,47 +148,31 @@ const newRelationBlock = `    /* Density-accumulating relation glow.
       fog:false,
       toneMapped:false
     });
-    relationGlowMaterial.resolution.set(innerWidth, innerHeight);
-    const relationGlowLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowMaterial);
-    relationGlowLines.renderOrder = -1;
-    scene.add(relationGlowLines);
-    const relationGlowOuterMaterial = new LineMaterial({
-      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.08),
-      linewidth:relationGlowProfile.outerWorldWidth,
-      transparent:true,
-      opacity:colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight,
-      depthWrite:false,
-      worldUnits:true,
-      alphaToCoverage:true,
-      blending:THREE.AdditiveBlending,
-      fog:false,
-      toneMapped:false
-    });
-    relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
-    const relationGlowOuterLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowOuterMaterial);
-    relationGlowOuterLines.renderOrder = -2;
-    scene.add(relationGlowOuterLines);`;
+    relationMistMaterial.resolution.set(innerWidth, innerHeight);
+    const relationMistLines = new LineSegments2(new LineSegmentsGeometry(), relationMistMaterial);
+    relationMistLines.renderOrder = -1;
+    scene.add(relationMistLines);`;
 
 if (!html.includes(oldRelationBlock)) throw new Error("relation glow block not found");
 html = html.replace(oldRelationBlock, newRelationBlock);
 
 html = html.replace(
   `      relationGlowLines.geometry.dispose();\n      relationGlowLines.geometry = new LineSegmentsGeometry();\n      updateRelationPositions();`,
-  `      relationGlowLines.geometry.dispose();\n      relationGlowLines.geometry = new LineSegmentsGeometry();\n      relationGlowOuterLines.geometry.dispose();\n      relationGlowOuterLines.geometry = new LineSegmentsGeometry();\n      updateRelationPositions();`
+  `      relationMistLines.geometry.dispose();\n      relationMistLines.geometry = new LineSegmentsGeometry();\n      updateRelationPositions();`
 );
 html = html.replace(
   `      if (glowPositions.length) relationGlowLines.geometry.setPositions(glowPositions);`,
-  `      if (glowPositions.length) {\n        relationGlowLines.geometry.setPositions(glowPositions);\n        relationGlowOuterLines.geometry.setPositions(glowPositions);\n      }`
+  `      if (glowPositions.length) relationMistLines.geometry.setPositions(glowPositions);`
 );
 
 html = html.replace(
   `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;\n      relationGlowMaterial.color.set(palette.relation);\n      relationGlowMaterial.opacity = .04;\n      relationGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;\n      relationGlowMaterial.needsUpdate = true;`,
-  `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight;\n      relationGlowMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.28));\n      relationGlowMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight;\n      relationGlowMaterial.blending = THREE.AdditiveBlending;\n      relationGlowMaterial.needsUpdate = true;\n      relationGlowOuterMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.08));\n      relationGlowOuterMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight;\n      relationGlowOuterMaterial.blending = THREE.AdditiveBlending;\n      relationGlowOuterMaterial.needsUpdate = true;`
+  `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;\n      relationMistMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(\n        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight\n      ));\n      relationMistMaterial.opacity = colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight;\n      relationMistMaterial.blending = THREE.AdditiveBlending;\n      relationMistMaterial.needsUpdate = true;`
 );
 
 html = html.replace(
   `      relationGlowMaterial.resolution.set(innerWidth, innerHeight);`,
-  `      relationGlowMaterial.resolution.set(innerWidth, innerHeight);\n      relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);`
+  `      relationMistMaterial.resolution.set(innerWidth, innerHeight);`
 );
 
 const oldClick = `    renderer.domElement.addEventListener("pointermove", setPointer);
@@ -244,13 +223,14 @@ if (!html.includes('const nodeCountScale = Math.cbrt(Math.max(1, model.nodes.len
 if (!html.includes('displayRadiusBounds = Object.freeze({ min:14 * displayScale, max:72 * displayScale })')) throw new Error("existing radius scale missing");
 if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) throw new Error("tap raycast fix missing");
 if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
-if (!html.includes('const relationGlowProfile = Object.freeze')) throw new Error("relation density glow profile missing");
-if (!html.includes('referenceNodeDiameter:.32')) throw new Error("relation glow reference diameter missing");
-if (!html.includes('outerWorldWidth:.48')) throw new Error("relation glow outer width missing");
-if (!html.includes('const relationGlowOuterMaterial = new LineMaterial')) throw new Error("outer relation glow missing");
-if (!html.includes('relationGlowOuterLines.geometry.setPositions(glowPositions)')) throw new Error("shared outer glow geometry missing");
+if (!html.includes('const relationMistProfile = Object.freeze')) throw new Error("relation mist profile missing");
+if (!html.includes('worldWidth:.48')) throw new Error("relation mist width missing");
+if (!html.includes('opacityDark:.012')) throw new Error("relation mist opacity missing");
+if (!html.includes('const relationMistMaterial = new LineMaterial')) throw new Error("relation mist material missing");
+if (!html.includes('relationMistLines.geometry.setPositions(glowPositions)')) throw new Error("shared relation mist geometry missing");
+if (html.includes('relationGlowOuterMaterial')) throw new Error("strong outer glow still present");
 if (!html.includes('background:transparent; box-shadow:none; backdrop-filter:none;')) throw new Error("transparent trace style missing");
 if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
 fs.writeFileSync(file, html);
-console.log(`mobile quantum 10000-node density-glow fix applied: ${Buffer.byteLength(html)} bytes`);
+console.log(`mobile quantum 10000-node relation-mist fix applied: ${Buffer.byteLength(html)} bytes`);
