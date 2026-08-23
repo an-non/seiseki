@@ -22,7 +22,10 @@ window.storage = {
   }
 };
 
-/* stagingモードだけCloudflare APIへ同期する。通常のローカル起動は従来どおり。 */
+/* Cloudflare接続と表示モードは分離する。
+   APIが有効でもproductionではSTAGING警告を表示しない。 */
+const runtimeMode = String(import.meta.env.VITE_SEISEKI_RUNTIME_MODE || "local").toLowerCase();
+window.SEISEKI_RUNTIME_MODE = ["local", "staging", "production"].includes(runtimeMode) ? runtimeMode : "local";
 window.SEISEKI_API_CONFIG = {
   baseUrl: import.meta.env.VITE_SEISEKI_API_BASE || "",
   required: import.meta.env.VITE_SEISEKI_API_REQUIRED === "true"
