@@ -5,7 +5,7 @@ on:
     branches:
       - feat/local-llm-stage0-1
     paths:
-      - "local-llm-import/*.zip"
+      - "local-llm-import/RUN"
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   import-verify-commit:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Run local LLM import'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -26,10 +27,11 @@ jobs:
           ref: feat/local-llm-stage0-1
           fetch-depth: 0
 
-      - name: Locate and unpack uploaded payload
+      - name: Locate and unpack payload
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=unpack" >> "$GITHUB_ENV"
           mapfile -t archives < <(find local-llm-import -maxdepth 1 -type f -name '*.zip' -print | sort)
           test "${#archives[@]}" -eq 1
           rm -rf /tmp/seiseki-local-llm
@@ -38,10 +40,11 @@ jobs:
           test -d /tmp/seiseki-local-llm/localllm-files
           echo "LLM_SRC=/tmp/seiseki-local-llm/localllm-files" >> "$GITHUB_ENV"
 
-      - name: Verify received payload fingerprints
+      - name: Verify payload fingerprints
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=fingerprints" >> "$GITHUB_ENV"
           cd "$LLM_SRC"
           cat > /tmp/llm-sha256.txt <<'EOF'
           1169794c1993645ba4c2d76452112d078345858ad9bc2e7a179f02799606f09b  .github/workflows/deploy-staging.yml
@@ -72,10 +75,11 @@ jobs:
           EOF
           sha256sum -c /tmp/llm-sha256.txt
 
-      - name: Overlay local LLM integration onto quantum source
+      - name: Overlay local LLM source
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=overlay" >> "$GITHUB_ENV"
           cp -a "$LLM_SRC/.github/workflows/deploy-staging.yml" .github/workflows/deploy-staging.yml
           cp -a "$LLM_SRC/core/logic.js" core/logic.js
           cp -a "$LLM_SRC/core/ui.jsx" core/ui.jsx
@@ -111,20 +115,15 @@ jobs:
           SOFTWARE.
           EOF
           grep -qxF '**/dist/' .gitignore || printf '\n**/dist/\n' >> .gitignore
-          rm -rf local-llm-import
 
-      - name: Verify quantum integration was preserved
+      - name: Verify quantum integration and regenerate app
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=app-sync" >> "$GITHUB_ENV"
           grep -q '\["quantum", "量子観測"\]' core/ui.jsx
           grep -q 'quantum: "/app/quantum"' core/ui.jsx
           grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev' core/ui.jsx
-
-      - name: Regenerate app artifacts and verify source sync
-        shell: bash
-        run: |
-          set -euo pipefail
           node scripts/build-app.mjs
           grep -q 'seiseki-local-v1' app/seiseki.jsx
           grep -q 'quantum: "/app/quantum"' app/seiseki.jsx
@@ -134,16 +133,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=app-tests" >> "$GITHUB_ENV"
           node tests/test.js
           node tests/local-bridge.test.js
           node tests/page-routing.test.mjs
           node tests/balcheck.js app/seiseki.jsx
           node tests/quantum-entanglement-engine.test.mjs
 
-      - name: Verify Cloudflare source only
+      - name: Verify Cloudflare worker
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=worker-tests" >> "$GITHUB_ENV"
           cd cloudflare
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
@@ -156,6 +157,7 @@ jobs:
           VITE_SEISEKI_API_REQUIRED: 'false'
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=staging-build" >> "$GITHUB_ENV"
           cd local
           npm ci --no-audit --no-fund
           npm run build:staging
@@ -166,16 +168,50 @@ jobs:
           grep -lq 'seiseki-api-staging' local/dist/assets/*.js
           grep -lq 'seiseki-local-v1' local/dist/assets/*.js
           grep -q 'model-store.js' local/dist/index.html
-          rm -rf local/dist local/node_modules cloudflare/node_modules
 
       - name: Commit verified local LLM source
         shell: bash
         run: |
           set -euo pipefail
+          echo "IMPORT_STAGE=commit" >> "$GITHUB_ENV"
+          rm -rf local/dist local/node_modules cloudflare/node_modules local-llm-import
+          cat > IMPORT_RESULT.md <<EOF
+          # Local LLM import result
+
+          - result: success
+          - source: seisekiローカルLLM実ファイル20260822.zip
+          - quantum integration preserved: yes
+          - local LLM fingerprints: verified
+          - application tests: passed
+          - Cloudflare worker tests: passed
+          - staging build: passed
+          - Cloudflare deploy: not run
+          - D1 migrations: not run
+          - production: untouched
+          EOF
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- .gitignore .github/workflows/deploy-staging.yml core/logic.js core/ui.jsx core/seiseki-local-bridge.js scripts/build-app.mjs tests/local-bridge.test.js local/index.html local/.env.staging.example local/public/model app/seiseki.jsx local/src/App.jsx
-          git rm -r --ignore-unmatch local-llm-import
-          git status --short
+          git add -A -- .gitignore .github core scripts tests local app IMPORT_RESULT.md local-llm-import
           git commit -m "Integrate verified local LLM into SEISEKI quantum branch"
           git push origin HEAD:feat/local-llm-stage0-1
+
+      - name: Record failed import stage
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          cat > IMPORT_RESULT.md <<EOF
+          # Local LLM import result
+
+          - result: failed
+          - stage: ${IMPORT_STAGE:-unknown}
+          - Cloudflare deploy: not run
+          - D1 migrations: not run
+          - production: untouched
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add IMPORT_RESULT.md
+          git commit -m "Record local LLM import failure" || true
+          git push origin HEAD:feat/local-llm-stage0-1 || true
