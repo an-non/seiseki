@@ -244,7 +244,7 @@
   </section>
   <aside class="details" id="details" aria-live="polite">
     <h2>政治</h2>
-    <p>5,000件の観測投影</p>
+    <p>10,000件の観測投影</p>
   </aside>
   <div class="loading" id="loading" role="status">観測投影を構築中</div>
 
@@ -297,9 +297,9 @@
     let colorTheme = searchParams.get("theme") === "dark" ? "dark" : "light";
     document.documentElement.dataset.theme = colorTheme;
     const requested = Number(searchParams.get("count"));
-    const count = Math.max(240, Math.min(5000, Number.isFinite(requested) && requested > 0 ? requested : 5000));
+    const count = Math.max(240, Math.min(10000, Number.isFinite(requested) && requested > 0 ? requested : 10000));
     const duplicateCount = Math.max(1, Math.round(count * 0.08));
-    const observationSeed = searchParams.get("seed") || "prototype-5000";
+    const observationSeed = searchParams.get("seed") || "prototype-10000";
     const basisLabels = { overall:"総合", urgency:"切実度", motivation:"意欲", validity:"妥当性" };
     const basisWeights = {
       overall:[0.5, 0.3, 0.2],
