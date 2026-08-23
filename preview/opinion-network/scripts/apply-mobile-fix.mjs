@@ -121,26 +121,36 @@ const oldRelationBlock = `    const relationLines = makeLineSegments(initialPale
     relationGlowLines.renderOrder = -1;
     scene.add(relationGlowLines);`;
 
-const newRelationBlock = `    /* Keep the original readable relation line, and add one very wide, extremely low-energy
-       additive mist layer on exactly the same geometry. A single relation is nearly invisible;
-       only dense crossings accumulate into a soft haze. */
+const newRelationBlock = `    /* Wide relation mist with camera-distance attenuation.
+       The readable base line stays unchanged. The mist keeps its broad footprint at
+       long range, but its energy collapses as the camera approaches the network so
+       dense crossings do not wash the scene to white. */
     const relationMistProfile = Object.freeze({
       referenceNodeDiameter:.32,
       worldWidth:.48,
-      opacityDark:.006,
-      opacityLight:.0045,
-      colorScaleDark:.46,
-      colorScaleLight:.34
+      opacityDark:.0035,
+      opacityLight:.0025,
+      colorScaleDark:.38,
+      colorScaleLight:.28,
+      nearOpacityFloor:.06
     });
     const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
+    function relationMistOpacity() {
+      const baseOpacity = colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight;
+      const nearDistance = displayRadiusBounds.max * .72;
+      const farDistance = displayRadiusBounds.max * 2.1;
+      const normalized = clamp((camera.position.length() - nearDistance) / Math.max(1, farDistance - nearDistance), 0, 1);
+      const attenuation = relationMistProfile.nearOpacityFloor + (1 - relationMistProfile.nearOpacityFloor) * Math.pow(normalized, 1.7);
+      return baseOpacity * attenuation;
+    }
     const relationMistMaterial = new LineMaterial({
       color:new THREE.Color(initialPalette.relation).multiplyScalar(
         colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
       ),
       linewidth:relationMistProfile.worldWidth,
       transparent:true,
-      opacity:colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight,
+      opacity:relationMistOpacity(),
       depthWrite:false,
       worldUnits:true,
       alphaToCoverage:true,
@@ -167,7 +177,12 @@ html = html.replace(
 
 html = html.replace(
   `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;\n      relationGlowMaterial.color.set(palette.relation);\n      relationGlowMaterial.opacity = .04;\n      relationGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;\n      relationGlowMaterial.needsUpdate = true;`,
-  `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;\n      relationMistMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(\n        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight\n      ));\n      relationMistMaterial.opacity = colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight;\n      relationMistMaterial.blending = THREE.AdditiveBlending;\n      relationMistMaterial.needsUpdate = true;`
+  `      relationLines.material.color.set(palette.relation);\n      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;\n      relationMistMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(\n        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight\n      ));\n      relationMistMaterial.opacity = relationMistOpacity();\n      relationMistMaterial.blending = THREE.AdditiveBlending;\n      relationMistMaterial.needsUpdate = true;`
+);
+
+html = html.replace(
+  `      controls.update();\n      composer.render();`,
+  `      controls.update();\n      relationMistMaterial.opacity = relationMistOpacity();\n      composer.render();`
 );
 
 html = html.replace(
@@ -225,7 +240,10 @@ if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) thr
 if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
 if (!html.includes('const relationMistProfile = Object.freeze')) throw new Error("relation mist profile missing");
 if (!html.includes('worldWidth:.48')) throw new Error("relation mist width missing");
-if (!html.includes('opacityDark:.006')) throw new Error("relation mist opacity missing");
+if (!html.includes('opacityDark:.0035')) throw new Error("relation mist opacity missing");
+if (!html.includes('nearOpacityFloor:.06')) throw new Error("near distance attenuation missing");
+if (!html.includes('function relationMistOpacity()')) throw new Error("distance-adaptive mist missing");
+if (!html.includes('relationMistMaterial.opacity = relationMistOpacity();')) throw new Error("runtime mist attenuation missing");
 if (!html.includes('const relationMistMaterial = new LineMaterial')) throw new Error("relation mist material missing");
 if (!html.includes('relationMistLines.geometry.setPositions(glowPositions)')) throw new Error("shared relation mist geometry missing");
 if (html.includes('relationGlowOuterMaterial')) throw new Error("strong outer glow still present");
@@ -233,4 +251,4 @@ if (!html.includes('background:transparent; box-shadow:none; backdrop-filter:non
 if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
 fs.writeFileSync(file, html);
-console.log(`mobile quantum 10000-node ultra-light relation-mist fix applied: ${Buffer.byteLength(html)} bytes`);
+console.log(`mobile quantum 10000-node distance-adaptive relation-mist fix applied: ${Buffer.byteLength(html)} bytes`);
