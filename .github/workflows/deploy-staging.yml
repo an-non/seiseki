@@ -1,0 +1,154 @@
+# 声析 — staging へ出す
+#
+#   出るのは次の2通りだけです。main や feature への push では動きません。
+#     ① deploy/staging ブランチへ push したとき
+#     ② Actions タブから手動で起動し、confirm に deploy と入力したとき
+#
+#   必要な Secrets:
+#     CLOUDFLARE_API_TOKEN    Workers の編集権限を持つトークン
+#     CLOUDFLARE_ACCOUNT_ID   Cloudflare のアカウントID
+#
+#   production には一切触れません（--env staging 固定）。
+name: Deploy to Cloudflare staging
+
+on:
+  push:
+    branches:
+      - deploy/staging
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'staging に出します。よければ deploy と入力してください'
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+    steps:
+      - name: Confirm intent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+             && [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "confirm に deploy と入力してください。中止します。"
+            exit 1
+          fi
+
+      - name: Checkout current source
+        uses: actions/checkout@v4
+
+      - name: Verify preserved Cloudflare staging contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f DEPLOYMENT_SAFETY.md
+          test -f cloudflare/wrangler.jsonc
+          grep -q '"name": "seiseki-api-staging"' cloudflare/wrangler.jsonc
+          grep -q '"database_name": "seiseki-db-staging"' cloudflare/wrangler.jsonc
+          grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' cloudflare/wrangler.jsonc
+          grep -q '"queue": "seiseki-analysis-staging"' cloudflare/wrangler.jsonc
+          grep -q '"AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"' cloudflare/wrangler.jsonc
+          grep -q '"AI_MAX_ATTEMPTS": "2"' cloudflare/wrangler.jsonc
+
+      - name: Verify source safety and generated app sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .env
+          test ! -e local/.env.staging
+          test ! -e cloudflare/.env.staging
+          test ! -d local/node_modules
+          test ! -d cloudflare/node_modules
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+
+      - name: Verify application behavior contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'quantum: "/app/quantum"' core/ui.jsx
+          grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev' core/ui.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify local model fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs=require("fs"), crypto=require("crypto"), path=require("path");
+            const d="local/public/model";
+            const man=JSON.parse(fs.readFileSync(path.join(d,"manifest.json"),"utf8"));
+            let ng=0;
+            for (const f of man.files) {
+              const p=path.join(d, path.basename(f.url));
+              const b=fs.readFileSync(p);
+              const h=crypto.createHash("sha256").update(b).digest("hex");
+              const ok = h===String(f.sha256).toLowerCase() && b.length===f.bytes;
+              console.log("  "+path.basename(p).padEnd(26)+String(b.length).padStart(10)+"  "+(ok?"ok":"MISMATCH"));
+              if(!ok) ng++;
+            }
+            console.log("  manifest version: "+man.version);
+            process.exit(ng?1:0);
+          '
+          grep -q "takeWhole" local/public/model/model-store.js
+
+      - name: Verify Cloudflare worker source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh staging build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          cd ..
+          test -s local/dist/index.html
+          test -d local/dist/assets
+          test -f local/dist/model/manifest.json
+          grep -lq "seiseki-api-staging" local/dist/assets/*.js \
+            || { echo "接続先がバンドルに入っていません（VITE_SEISEKI_API_BASE が読まれていない）"; exit 1; }
+          grep -lq "seiseki-local-v1" local/dist/assets/*.js \
+            || { echo "ローカルモデルの橋渡しが入っていません"; exit 1; }
+          grep -q "model-store.js" local/dist/index.html \
+            || { echo "index.html にモデル用スクリプトがありません"; exit 1; }
+          printf '### Fresh staging build\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- index sha256: `%s`\n' "$(sha256sum local/dist/index.html | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- model files: `%s`\n' "$(ls local/dist/model | wc -l)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy to Cloudflare staging
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
+          printf '\n### Deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- environment: `staging` (production untouched)\n' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'Current Version ID|Uploaded' /tmp/deploy.log \
+            | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
