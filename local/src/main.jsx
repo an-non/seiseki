@@ -31,7 +31,18 @@ window.SEISEKI_API_CONFIG = {
   required: import.meta.env.VITE_SEISEKI_API_REQUIRED === "true"
 };
 
-/* window.storage 定義後にアプリを読み込む(動的import)。
-   Vite雛形の index.css / App.css は読み込まない(レイアウトが崩れるため)。 */
-const { default: App } = await import("./App.jsx");
-createRoot(document.getElementById("root")).render(React.createElement(App));
+/* Safari 15.1ではトップレベルawaitを避ける。動的importのPromise連鎖で
+   window.storage初期化後にAppを読み込み、エラー時は画面に原因を残す。 */
+import("./App.jsx")
+  .then(({ default: App }) => {
+    const root = document.getElementById("root");
+    if (!root) throw new Error("root element is missing");
+    createRoot(root).render(React.createElement(App));
+  })
+  .catch(error => {
+    console.error("SEISEKI bootstrap failed", error);
+    const root = document.getElementById("root");
+    if (root) {
+      root.innerHTML = `<div style="padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;color:#7a1f1f">表示初期化エラー: ${String(error && error.message || error || "unknown error")}</div>`;
+    }
+  });
