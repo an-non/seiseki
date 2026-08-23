@@ -1,0 +1,42 @@
+name: Redeploy opinion network preview
+
+on:
+  push:
+    branches:
+      - feature/opinion-network-preview
+    paths:
+      - preview/opinion-network/worker.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout preview branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/opinion-network-preview
+
+      - name: Verify preview worker
+        shell: bash
+        run: node --check preview/opinion-network/worker.mjs
+
+      - name: Deploy isolated Cloudflare preview
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          workingDirectory: preview/opinion-network
+          command: deploy
+
+      - name: Report preview URL
+        shell: bash
+        run: |
+          echo "Preview URL: ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.deploy.outputs.deployment-url }}"
