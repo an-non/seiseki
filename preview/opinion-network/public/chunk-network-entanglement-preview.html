@@ -670,17 +670,35 @@
     scene.add(entanglementGlowPoints);
     scene.add(entanglementInstances);
 
-    const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
+    /* Density-accumulating relation glow.
+       The three layers share identical endpoints: no spatial duplication, only
+       a broader additive footprint. Overlap therefore sums in the same pixels,
+       keeping isolated relations faint while dense crossings become brighter. */
+    const relationGlowProfile = Object.freeze({
+      referenceNodeDiameter:.32,
+      innerWorldWidth:.26,
+      outerWorldWidth:.48,
+      baseOpacityDark:.12,
+      baseOpacityLight:.18,
+      innerOpacityDark:.055,
+      innerOpacityLight:.045,
+      outerOpacityDark:.018,
+      outerOpacityLight:.014
+    });
+    const relationLines = makeLineSegments(
+      initialPalette.relation,
+      colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight
+    );
     scene.add(relationLines);
     const relationGlowMaterial = new LineMaterial({
-      color:initialPalette.relation,
-      linewidth:1.55,
+      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.28),
+      linewidth:relationGlowProfile.innerWorldWidth,
       transparent:true,
-      opacity:colorTheme === "dark" ? .04 : .04,
+      opacity:colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight,
       depthWrite:false,
-      worldUnits:false,
+      worldUnits:true,
       alphaToCoverage:true,
-      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending,
+      blending:THREE.AdditiveBlending,
       fog:false,
       toneMapped:false
     });
@@ -688,6 +706,22 @@
     const relationGlowLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowMaterial);
     relationGlowLines.renderOrder = -1;
     scene.add(relationGlowLines);
+    const relationGlowOuterMaterial = new LineMaterial({
+      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.08),
+      linewidth:relationGlowProfile.outerWorldWidth,
+      transparent:true,
+      opacity:colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight,
+      depthWrite:false,
+      worldUnits:true,
+      alphaToCoverage:true,
+      blending:THREE.AdditiveBlending,
+      fog:false,
+      toneMapped:false
+    });
+    relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
+    const relationGlowOuterLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowOuterMaterial);
+    relationGlowOuterLines.renderOrder = -2;
+    scene.add(relationGlowOuterLines);
     let relationEndpointIndices = [];
     function rebuildRelationGeometry() {
       relationEndpointIndices = [...projection.relations]
@@ -703,6 +737,8 @@
       relationLines.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
       relationGlowLines.geometry.dispose();
       relationGlowLines.geometry = new LineSegmentsGeometry();
+      relationGlowOuterLines.geometry.dispose();
+      relationGlowOuterLines.geometry = new LineSegmentsGeometry();
       updateRelationPositions();
     }
     function updateRelationPositions() {
@@ -718,7 +754,10 @@
       });
       attribute.needsUpdate = true;
       relationLines.geometry.computeBoundingSphere();
-      if (glowPositions.length) relationGlowLines.geometry.setPositions(glowPositions);
+      if (glowPositions.length) {
+        relationGlowLines.geometry.setPositions(glowPositions);
+        relationGlowOuterLines.geometry.setPositions(glowPositions);
+      }
     }
     rebuildRelationGeometry();
 
@@ -782,11 +821,15 @@
       scene.background.set(palette.background);
       scene.fog.color.set(palette.fog);
       relationLines.material.color.set(palette.relation);
-      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;
-      relationGlowMaterial.color.set(palette.relation);
-      relationGlowMaterial.opacity = .04;
-      relationGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
+      relationLines.material.opacity = colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight;
+      relationGlowMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.28));
+      relationGlowMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight;
+      relationGlowMaterial.blending = THREE.AdditiveBlending;
       relationGlowMaterial.needsUpdate = true;
+      relationGlowOuterMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.08));
+      relationGlowOuterMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight;
+      relationGlowOuterMaterial.blending = THREE.AdditiveBlending;
+      relationGlowOuterMaterial.needsUpdate = true;
       activeLines.material.color.set("#ffffff");
       activeGlowMaterial.color.copy(new THREE.Color("#40e8ff").multiplyScalar(colorTheme === "dark" ? 3.2 : 2.15));
       activeGlowOuterMaterial.color.copy(new THREE.Color("#10c8ec").multiplyScalar(colorTheme === "dark" ? 2.25 : 1.55));
@@ -1179,8 +1222,6 @@
       pointerDirty = true;
     });
     renderer.domElement.addEventListener("click", (event) => {
-      /* iPhone/Safari has no hover before a normal tap. Resolve the hit from the
-         actual tap coordinates instead of depending on the previous pointermove. */
       setPointer(event);
       hovered = hitFromPointer();
       pointerDirty = false;
@@ -1249,6 +1290,7 @@
       activeGlowMaterial.resolution.set(innerWidth, innerHeight);
       activeGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
       relationGlowMaterial.resolution.set(innerWidth, innerHeight);
+      relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
     });
 
     window.__ENTANGLEMENT_PROTOTYPE__ = {
