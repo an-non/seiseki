@@ -121,16 +121,16 @@ const oldRelationBlock = `    const relationLines = makeLineSegments(initialPale
     relationGlowLines.renderOrder = -1;
     scene.add(relationGlowLines);`;
 
-const newRelationBlock = `    /* Keep the original readable relation line, and add one very wide, very low-energy
-       additive mist layer on exactly the same geometry. A single relation barely glows;
-       dense crossings accumulate into a soft haze without washing out the nodes. */
+const newRelationBlock = `    /* Keep the original readable relation line, and add one very wide, extremely low-energy
+       additive mist layer on exactly the same geometry. A single relation is nearly invisible;
+       only dense crossings accumulate into a soft haze. */
     const relationMistProfile = Object.freeze({
       referenceNodeDiameter:.32,
       worldWidth:.48,
-      opacityDark:.012,
-      opacityLight:.009,
-      colorScaleDark:.55,
-      colorScaleLight:.42
+      opacityDark:.006,
+      opacityLight:.0045,
+      colorScaleDark:.46,
+      colorScaleLight:.34
     });
     const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
@@ -225,7 +225,7 @@ if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) thr
 if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
 if (!html.includes('const relationMistProfile = Object.freeze')) throw new Error("relation mist profile missing");
 if (!html.includes('worldWidth:.48')) throw new Error("relation mist width missing");
-if (!html.includes('opacityDark:.012')) throw new Error("relation mist opacity missing");
+if (!html.includes('opacityDark:.006')) throw new Error("relation mist opacity missing");
 if (!html.includes('const relationMistMaterial = new LineMaterial')) throw new Error("relation mist material missing");
 if (!html.includes('relationMistLines.geometry.setPositions(glowPositions)')) throw new Error("shared relation mist geometry missing");
 if (html.includes('relationGlowOuterMaterial')) throw new Error("strong outer glow still present");
@@ -233,4 +233,4 @@ if (!html.includes('background:transparent; box-shadow:none; backdrop-filter:non
 if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
 fs.writeFileSync(file, html);
-console.log(`mobile quantum 10000-node relation-mist fix applied: ${Buffer.byteLength(html)} bytes`);
+console.log(`mobile quantum 10000-node ultra-light relation-mist fix applied: ${Buffer.byteLength(html)} bytes`);
