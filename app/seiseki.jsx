@@ -2093,8 +2093,8 @@ const C = {
   slate: "#3D5573", slateSoft: "#E6EAF1",
   gray: "#9C988B"
 };
-const FONT_BODY = '-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",sans-serif';
-const FONT_DISP = '-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",sans-serif';
+const FONT_BODY = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
+const FONT_DISP = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
 const FONT_MONO = 'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace';
 
 const SUP_COLORS = {
@@ -2154,7 +2154,7 @@ function GlobalStyle() {
   return (
     <style>{`
       * { box-sizing: border-box; }
-      html, body { margin: 0; }
+      html, body { margin: 0; font-family: ${FONT_BODY}; -webkit-text-size-adjust: 100%; font-synthesis: none; }
       button { font-family: inherit; cursor: pointer; }
       textarea, input, select { font-family: inherit; font-size: 14px; color: inherit; }
       @keyframes skspin { to { transform: rotate(360deg); } }
@@ -2374,7 +2374,7 @@ function currentPath() {
   return typeof window !== "undefined" && window.location ? window.location.pathname : "/";
 }
 
-const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-10000-scale-v1";
+const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-stable-prodprep-v1";
 
 function QuantumObservation() {
   return (
@@ -2833,7 +2833,7 @@ export default function App() {
         </div>
       </header>
 
-      {cloudApiEnabled() ? (
+      {cloudApiEnabled() && typeof window !== "undefined" && window.location.hostname.includes("staging") ? (
         <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>
           <div style={{ maxWidth: 900, margin: "0 auto", padding: "7px 16px", fontSize: 12 }}>
             <b>STAGING 検証環境</b> — 入力はCloudflare D1へ送信されます。実回答や個人情報は入力しないでください。
