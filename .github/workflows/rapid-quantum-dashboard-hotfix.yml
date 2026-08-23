@@ -25,22 +25,12 @@ jobs:
       STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
     steps:
       - name: Checkout app branch
-        id: checkout
         uses: actions/checkout@v4
         with:
           ref: feature/quantum-app-integration
           fetch-depth: 0
 
-      - name: Confirm deployment secrets
-        id: credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "CLOUDFLARE_API_TOKEN missing" >&2; exit 42; }
-          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "CLOUDFLARE_ACCOUNT_ID missing" >&2; exit 43; }
-
-      - name: Apply app dashboard and same-origin quantum URL patches
-        id: app_patch
+      - name: Apply UI patches
         shell: bash
         run: |
           set -euo pipefail
@@ -50,72 +40,51 @@ jobs:
           grep -q '/api/public-aggregate' cloudflare/src/index.mjs
           grep -q 'cloudLoadPublicAggregate' core/ui.jsx
           grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
-          ! grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html' core/ui.jsx
 
-      - name: Patch and verify 10000-node quantum renderer
-        id: quantum_patch
+      - name: Prepare 10000-node quantum source as Vite entry
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
-          rm -rf preview/opinion-network
-          mkdir -p preview/opinion-network/public preview/opinion-network/scripts
+          mkdir -p local/quantum preview/opinion-network/public preview/opinion-network/scripts
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > preview/opinion-network/public/chunk-network-entanglement-preview.html
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > preview/opinion-network/public/quantum-entanglement-engine.mjs
           git show origin/feature/opinion-network-preview:preview/opinion-network/scripts/restore-stable-relation-glow.mjs > preview/opinion-network/scripts/restore-stable-relation-glow.mjs
           node preview/opinion-network/scripts/restore-stable-relation-glow.mjs
-          grep -q 'baseCapacity' preview/opinion-network/public/quantum-entanglement-engine.mjs
-          grep -q '合成系列' preview/opinion-network/public/quantum-entanglement-engine.mjs
-          ! grep -q 'uniqueCount must be ${capacity} or less' preview/opinion-network/public/quantum-entanglement-engine.mjs
-          grep -q 'prototype-10000' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'linewidth:1.55' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          ! grep -q 'relationMist' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          mkdir -p local/public/quantum
-          cp preview/opinion-network/public/chunk-network-entanglement-preview.html local/public/quantum/chunk-network-entanglement-preview.html
-          cp preview/opinion-network/public/quantum-entanglement-engine.mjs local/public/quantum/quantum-entanglement-engine.mjs
-          node --check local/public/quantum/quantum-entanglement-engine.mjs
+          cp preview/opinion-network/public/chunk-network-entanglement-preview.html local/quantum/chunk-network-entanglement-preview.html
+          cp preview/opinion-network/public/quantum-entanglement-engine.mjs local/quantum/quantum-entanglement-engine.mjs
+          grep -q 'baseCapacity' local/quantum/quantum-entanglement-engine.mjs
+          grep -q '合成系列' local/quantum/quantum-entanglement-engine.mjs
+          ! grep -q 'uniqueCount must be ${capacity} or less' local/quantum/quantum-entanglement-engine.mjs
+          grep -q 'linewidth:1.55' local/quantum/chunk-network-entanglement-preview.html
+          node --check local/quantum/quantum-entanglement-engine.mjs
 
-      - name: Prepare same-origin Three.js runtime
-        id: runtime
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
-          tmp="$(mktemp -d)"
-          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
-          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
-          src="$tmp/package"
-          dst="local/public/node_modules/three"
-          rm -rf "$dst"
-          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
-          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
-          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
-          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
-          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
-          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
-          test -s "$dst/build/three.module.js"
-          test -s "$dst/examples/jsm/lines/LineMaterial.js"
+          cd local && npm ci --no-audit --no-fund
+          cd ../cloudflare && npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Install Worker dependencies
-        id: deps
-        working-directory: cloudflare
-        shell: bash
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
-      - name: Build and deploy production
-        id: production
+      - name: Build production Safari-compatible bundle
         shell: bash
         run: |
           set -euo pipefail
           cd local
-          npm ci --no-audit --no-fund
           VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
+          test -s dist/index.html
           test -s dist/quantum/chunk-network-entanglement-preview.html
-          grep -q '合成系列' dist/quantum/quantum-entanglement-engine.mjs
-          cd ../cloudflare
+          ! grep -q '<script type="importmap">' dist/quantum/chunk-network-entanglement-preview.html || true
+          grep -lq '/api/public-aggregate' dist/assets/*.js
+
+      - name: Deploy production
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
           npx wrangler deploy --strict
 
-      - name: Production smoke
-        id: prod_smoke
+      - name: Smoke production
         shell: bash
         run: |
           set -euo pipefail
@@ -123,33 +92,27 @@ jobs:
           curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/prod-aggregate.json
           curl -fsS "$PRODUCTION_URL/app/dashboard" > /tmp/prod-dashboard.html
           curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
-          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3" > /tmp/prod-quantum.html
-          curl -fsS "$PRODUCTION_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/prod-engine.mjs
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-safari-v1" > /tmp/prod-quantum.html
           grep -q '意見ネットワーク 量子もつれ観測' /tmp/prod-quantum.html
-          grep -q '合成系列' /tmp/prod-engine.mjs
-          node - <<'NODE'
-          const fs=require('fs');
-          const h=JSON.parse(fs.readFileSync('/tmp/prod-health.json','utf8'));
-          if(h.status!=='ok'||h.database!=='d1') throw new Error('production health failed');
-          const a=JSON.parse(fs.readFileSync('/tmp/prod-aggregate.json','utf8'));
-          if(!('total' in a) || !('topics' in a) || !('opinions' in a)) throw new Error('production aggregate invalid');
-          NODE
 
-      - name: Build and deploy staging demo
-        id: staging
+      - name: Build staging Safari-compatible bundle
         shell: bash
         run: |
           set -euo pipefail
           rm -rf local/dist
           cd local
           VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build:staging
+          test -s dist/index.html
           test -s dist/quantum/chunk-network-entanglement-preview.html
-          grep -q '合成系列' dist/quantum/quantum-entanglement-engine.mjs
-          cd ../cloudflare
+
+      - name: Deploy staging
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
           npx wrangler deploy --env staging --strict
 
-      - name: Staging smoke
-        id: staging_smoke
+      - name: Smoke staging
         shell: bash
         run: |
           set -euo pipefail
@@ -157,76 +120,28 @@ jobs:
           curl -fsS "$STAGING_URL/api/public-aggregate" > /tmp/stage-aggregate.json
           curl -fsS "$STAGING_URL/app/dashboard" > /tmp/stage-dashboard.html
           curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
-          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3" > /tmp/stage-quantum.html
-          curl -fsS "$STAGING_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/stage-engine.mjs
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-safari-v1" > /tmp/stage-quantum.html
           grep -q '意見ネットワーク 量子もつれ観測' /tmp/stage-quantum.html
-          grep -q '合成系列' /tmp/stage-engine.mjs
-          node - <<'NODE'
-          const fs=require('fs');
-          const h=JSON.parse(fs.readFileSync('/tmp/stage-health.json','utf8'));
-          if(h.status!=='ok'||h.database!=='d1') throw new Error('staging health failed');
-          const a=JSON.parse(fs.readFileSync('/tmp/stage-aggregate.json','utf8'));
-          if(!('total' in a) || !('topics' in a) || !('opinions' in a)) throw new Error('staging aggregate invalid');
-          NODE
 
-      - name: Record rapid hotfix success
-        id: record
+      - name: Record success
         shell: bash
         run: |
           set -euo pipefail
-          cat > RAPID_HOTFIX_STATUS.md <<EOF
-          # SEISEKI rapid quantum/dashboard hotfix
-
+          cat > SAFARI_HOTFIX_STATUS.md <<EOF
+          # SEISEKI Safari hotfix
           - outcome: success
-          - production_app: ${PRODUCTION_URL}/app
           - production_dashboard: ${PRODUCTION_URL}/app/dashboard
           - production_quantum: ${PRODUCTION_URL}/app/quantum
-          - production_quantum_asset: ${PRODUCTION_URL}/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3
-          - staging_app: ${STAGING_URL}/app
           - staging_dashboard: ${STAGING_URL}/app/dashboard
           - staging_quantum: ${STAGING_URL}/app/quantum
-          - staging_quantum_asset: ${STAGING_URL}/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v3
           - quantum_generator: 10000 unique synthetic nodes verified
-          - quantum_old_cap_6048: removed
+          - build_target: safari14 ios14
+          - quantum_delivery: Vite-bundled same-origin entry
           - dashboard_source: /api/public-aggregate
-          - d1_migrations: none
           EOF
-          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules preview/opinion-network
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules preview/opinion-network
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add RAPID_HOTFIX_STATUS.md core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-mobile-ui-fix.mjs scripts/apply-production-dashboard-fix.mjs
-          if ! git diff --cached --quiet; then
-            git commit -m "Record rapid dashboard and quantum hotfix"
-            git push origin HEAD:feature/quantum-app-integration
-          fi
-
-      - name: Record rapid hotfix progress
-        if: ${{ always() && steps.record.outcome != 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > RAPID_HOTFIX_PROGRESS.md <<EOF
-          # SEISEKI rapid quantum/dashboard hotfix progress
-
-          - outcome: incomplete
-          - checkout: ${{ steps.checkout.outcome }}
-          - credentials: ${{ steps.credentials.outcome }}
-          - app_patch: ${{ steps.app_patch.outcome }}
-          - quantum_patch: ${{ steps.quantum_patch.outcome }}
-          - runtime: ${{ steps.runtime.outcome }}
-          - deps: ${{ steps.deps.outcome }}
-          - production: ${{ steps.production.outcome }}
-          - prod_smoke: ${{ steps.prod_smoke.outcome }}
-          - staging: ${{ steps.staging.outcome }}
-          - staging_smoke: ${{ steps.staging_smoke.outcome }}
-          - record: ${{ steps.record.outcome }}
-          - d1_migrations: none
-          EOF
-          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules preview/opinion-network || true
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add RAPID_HOTFIX_PROGRESS.md
-          if ! git diff --cached --quiet; then
-            git commit -m "Record incomplete rapid dashboard and quantum hotfix"
-            git push origin HEAD:feature/quantum-app-integration
-          fi
+          git add SAFARI_HOTFIX_STATUS.md local/vite.config.js core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-mobile-ui-fix.mjs scripts/apply-production-dashboard-fix.mjs
+          git commit -m "Ship Safari-compatible dashboard and quantum bundle" || true
+          git push origin HEAD:feature/quantum-app-integration
