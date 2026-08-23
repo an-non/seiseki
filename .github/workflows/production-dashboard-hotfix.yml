@@ -1,4 +1,4 @@
-name: Deploy SEISEKI production dashboard hotfix
+name: Deploy SEISEKI production dashboard + quantum hotfix
 
 on:
   push:
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   hotfix:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -41,6 +41,44 @@ jobs:
           grep -q 'cloudLoadPublicAggregate' core/ui.jsx
           grep -q '/api/public-aggregate' cloudflare/src/index.mjs
           grep -q 'getPublicAggregate' cloudflare/src/public-aggregate.mjs
+          grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
+          ! grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html' core/ui.jsx
+
+      - name: Sync stable quantum source into web public assets
+        id: quantum_source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
+          mkdir -p local/public/quantum
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/public/quantum/chunk-network-entanglement-preview.html
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/public/quantum/quantum-entanglement-engine.mjs
+          test -s local/public/quantum/chunk-network-entanglement-preview.html
+          test -s local/public/quantum/quantum-entanglement-engine.mjs
+          grep -q 'prototype-10000' local/public/quantum/chunk-network-entanglement-preview.html
+          grep -q 'linewidth:1.55' local/public/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'relationMist' local/public/quantum/chunk-network-entanglement-preview.html
+          node --check local/public/quantum/quantum-entanglement-engine.mjs
+
+      - name: Prepare same-origin Three.js runtime
+        id: quantum_runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
+          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
+          src="$tmp/package"
+          dst="local/public/node_modules/three"
+          rm -rf "$dst"
+          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
+          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
+          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
+          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
+          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
+          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
+          test -s "$dst/build/three.module.js"
+          test -s "$dst/examples/jsm/postprocessing/UnrealBloomPass.js"
 
       - name: Run application tests
         id: app_tests
@@ -78,7 +116,11 @@ jobs:
           npm run build
           test -s dist/index.html
           test -f dist/model/manifest.json
+          test -s dist/quantum/chunk-network-entanglement-preview.html
+          test -s dist/quantum/quantum-entanglement-engine.mjs
+          test -s dist/node_modules/three/build/three.module.js
           grep -lq '/api/public-aggregate' dist/assets/*.js
+          grep -lq '/quantum/chunk-network-entanglement-preview.html' dist/assets/*.js
           grep -lq 'Hiragino Sans' dist/assets/*.js
 
       - name: Wrangler dry run
@@ -88,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s ../local/dist/index.html
-          npx wrangler deploy --dry-run --outdir /tmp/seiseki-dashboard-hotfix
+          npx wrangler deploy --dry-run --outdir /tmp/seiseki-dashboard-quantum-hotfix
 
       - name: Record previous Worker deployment
         id: previous
@@ -130,16 +172,21 @@ jobs:
           node - <<'NODE'
           const fs=require('fs');
           const a=JSON.parse(fs.readFileSync('/tmp/aggregate.json','utf8'));
-          for(const k of ['total','demo','questions','ideology','topics','targets','cross','series','net','opinions']) {
-            if(!(k in a)) throw new Error('aggregate missing '+k);
-          }
+          for(const k of ['total','demo','questions','ideology','topics','targets','cross','series','net','opinions']) if(!(k in a)) throw new Error('aggregate missing '+k);
           if(!Number.isFinite(Number(a.total))) throw new Error('aggregate total invalid');
           console.log(JSON.stringify({total:a.total,topics:Object.keys(a.topics||{}).length,opinions:(a.opinions||[]).length}));
           NODE
           curl -fsS "$PRODUCTION_URL/app/dashboard" > /tmp/dashboard.html
           grep -qi '<!doctype html>' /tmp/dashboard.html
-          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/quantum.html
-          grep -qi '<!doctype html>' /tmp/quantum.html
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/quantum-route.html
+          grep -qi '<!doctype html>' /tmp/quantum-route.html
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1" > /tmp/quantum-embedded.html
+          grep -q '意見ネットワーク 量子もつれ観測' /tmp/quantum-embedded.html
+          grep -q 'quantum-entanglement-engine.mjs' /tmp/quantum-embedded.html
+          curl -fsS "$PRODUCTION_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/quantum-engine.mjs
+          grep -q 'createEntanglementModel' /tmp/quantum-engine.mjs
+          curl -fsS "$PRODUCTION_URL/node_modules/three/build/three.module.js" > /tmp/three.module.js
+          grep -q 'three.js' /tmp/three.module.js
 
       - name: Commit hotfix source and success record
         id: record
@@ -147,27 +194,33 @@ jobs:
         run: |
           set -euo pipefail
           cat > PRODUCTION_DASHBOARD_HOTFIX.md <<EOF
-          # SEISEKI production dashboard hotfix
+          # SEISEKI production dashboard + quantum hotfix
 
           - outcome: success
           - production_url: ${PRODUCTION_URL}
           - dashboard_path: ${PRODUCTION_URL}/app/dashboard
+          - quantum_path: ${PRODUCTION_URL}/app/quantum
+          - embedded_quantum_asset: ${PRODUCTION_URL}/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1
           - health: ok
           - database: d1
           - public_aggregate: ok
           - dashboard_html: ok
           - quantum_route: ok
+          - quantum_embedded_html: ok
+          - quantum_engine: ok
+          - three_runtime: 0.185.1 same-origin
           - d1_migrations: none
           - worker_deploy_guard: strict
           - dashboard_source: privacy-filtered D1 aggregate API
+          - quantum_source: stable feature/opinion-network-preview artifact copied into production web assets
           - local_fallback: retained
           EOF
-          rm -rf local/node_modules local/dist cloudflare/node_modules
+          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-production-dashboard-fix.mjs PRODUCTION_DASHBOARD_HOTFIX.md
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-mobile-ui-fix.mjs scripts/apply-production-dashboard-fix.mjs PRODUCTION_DASHBOARD_HOTFIX.md
           if ! git diff --cached --quiet; then
-            git commit -m "Fix production web dashboard D1 rendering"
+            git commit -m "Fix production dashboard and embed quantum renderer"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
@@ -177,7 +230,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler rollback --message "Rollback failed SEISEKI dashboard hotfix"
+          npx wrangler rollback --message "Rollback failed SEISEKI dashboard/quantum hotfix"
 
       - name: Record incomplete hotfix
         if: ${{ always() && steps.record.outcome != 'success' }}
@@ -185,10 +238,12 @@ jobs:
         run: |
           set -euo pipefail
           cat > PRODUCTION_DASHBOARD_HOTFIX_PROGRESS.md <<EOF
-          # SEISEKI production dashboard hotfix progress
+          # SEISEKI production dashboard + quantum hotfix progress
           - outcome: incomplete
           - checkout: ${{ steps.checkout.outcome }}
           - patch: ${{ steps.patch.outcome }}
+          - quantum_source: ${{ steps.quantum_source.outcome }}
+          - quantum_runtime: ${{ steps.quantum_runtime.outcome }}
           - app_tests: ${{ steps.app_tests.outcome }}
           - worker_tests: ${{ steps.worker_tests.outcome }}
           - build: ${{ steps.build.outcome }}
@@ -199,11 +254,11 @@ jobs:
           - record: ${{ steps.record.outcome }}
           - d1_migrations: none
           EOF
-          rm -rf local/node_modules local/dist cloudflare/node_modules || true
+          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add PRODUCTION_DASHBOARD_HOTFIX_PROGRESS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record incomplete dashboard hotfix"
+            git commit -m "Record incomplete dashboard/quantum hotfix"
             git push origin HEAD:feature/quantum-app-integration
           fi
