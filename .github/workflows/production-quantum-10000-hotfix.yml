@@ -1,0 +1,141 @@
+name: Deploy SEISEKI quantum 10000-node hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/production-quantum-10000-hotfix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-production-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout production source
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply app patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          if [ -f scripts/apply-production-dashboard-fix.mjs ]; then node scripts/apply-production-dashboard-fix.mjs; fi
+          node scripts/build-app.mjs
+
+      - name: Sync fixed quantum source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
+          mkdir -p local/public/quantum
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/public/quantum/chunk-network-entanglement-preview.html
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/public/quantum/quantum-entanglement-engine.mjs
+          ! grep -q 'uniqueCount must be ${capacity} or less' local/public/quantum/quantum-entanglement-engine.mjs
+          grep -q 'maximumSyntheticCount = 50000' local/public/quantum/quantum-entanglement-engine.mjs
+          grep -q 'variantIndex = Math.floor(index / baseCapacity)' local/public/quantum/quantum-entanglement-engine.mjs
+          node --check local/public/quantum/quantum-entanglement-engine.mjs
+          node --input-type=module <<'NODE'
+          const q = await import('./local/public/quantum/quantum-entanglement-engine.mjs?verify=' + Date.now());
+          const topics = Array.from({length:24}, (_,i)=>({id:`t${i}`,label:`topic${i}`,categoryId:`c${Math.floor(i/4)}`}));
+          const generated = q.generatePrototypeCandidates(topics,{uniqueCount:10000,duplicateCount:0});
+          const unique = q.deduplicateNodes(generated);
+          if(generated.length!==10000 || unique.length!==10000) throw new Error(`generator failed ${generated.length}/${unique.length}`);
+          console.log('10000 unique nodes verified');
+          NODE
+
+      - name: Prepare same-origin Three.js runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          npm pack three@0.185.1 --pack-destination "$tmp" >/dev/null
+          tar -xzf "$tmp"/three-*.tgz -C "$tmp"
+          src="$tmp/package"
+          dst="local/public/node_modules/three"
+          rm -rf "$dst"
+          mkdir -p "$dst/build" "$dst/examples/jsm/controls" "$dst/examples/jsm/lines" "$dst/examples/jsm/postprocessing" "$dst/examples/jsm/shaders"
+          cp "$src/build/three.module.js" "$src/build/three.core.js" "$dst/build/"
+          cp "$src/examples/jsm/controls/OrbitControls.js" "$dst/examples/jsm/controls/"
+          cp "$src/examples/jsm/lines/LineMaterial.js" "$src/examples/jsm/lines/LineSegments2.js" "$src/examples/jsm/lines/LineSegmentsGeometry.js" "$dst/examples/jsm/lines/"
+          cp "$src/examples/jsm/postprocessing/EffectComposer.js" "$src/examples/jsm/postprocessing/MaskPass.js" "$src/examples/jsm/postprocessing/OutputPass.js" "$src/examples/jsm/postprocessing/Pass.js" "$src/examples/jsm/postprocessing/RenderPass.js" "$src/examples/jsm/postprocessing/ShaderPass.js" "$src/examples/jsm/postprocessing/UnrealBloomPass.js" "$dst/examples/jsm/postprocessing/"
+          cp "$src/examples/jsm/shaders/CopyShader.js" "$src/examples/jsm/shaders/LuminosityHighPassShader.js" "$src/examples/jsm/shaders/OutputShader.js" "$dst/examples/jsm/shaders/"
+
+      - name: Build production web
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/quantum/chunk-network-entanglement-preview.html
+          test -s dist/quantum/quantum-entanglement-engine.mjs
+          test -s dist/node_modules/three/build/three.module.js
+
+      - name: Install Worker dependencies
+        working-directory: cloudflare
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Dry run and deploy
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --outdir /tmp/seiseki-quantum-10000-hotfix
+          npx wrangler deploy --strict
+
+      - name: Verify production quantum assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json
+          node -e "const h=require('/tmp/health.json'); if(h.status!=='ok'||h.database!=='d1') process.exit(1)"
+          curl -fsS "$PRODUCTION_URL/quantum/quantum-entanglement-engine.mjs" > /tmp/engine.mjs
+          grep -q 'maximumSyntheticCount = 50000' /tmp/engine.mjs
+          ! grep -q 'uniqueCount must be ${capacity} or less' /tmp/engine.mjs
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v2" > /tmp/quantum.html
+          grep -q '10,000件の観測投影' /tmp/quantum.html
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/app-quantum.html
+          grep -qi '<!doctype html>' /tmp/app-quantum.html
+
+      - name: Record success
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_QUANTUM_10000_HOTFIX.md <<EOF
+          # SEISEKI production quantum 10000-node hotfix
+
+          - outcome: success
+          - cause: prototype generator had a 6048 unique-content lattice hard cap while UI requested 10000
+          - fix: deterministic lattice cycling with unique synthetic-series suffixes
+          - verified_generated_nodes: 10000
+          - verified_unique_nodes: 10000
+          - production_quantum_path: ${PRODUCTION_URL}/app/quantum
+          - production_quantum_asset: ${PRODUCTION_URL}/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v2
+          - d1_migrations: none
+          EOF
+          rm -rf local/node_modules local/dist local/public/node_modules local/public/quantum cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_QUANTUM_10000_HOTFIX.md
+          git commit -m "Record successful 10000-node quantum hotfix" || true
+          git push origin HEAD:feature/quantum-app-integration
