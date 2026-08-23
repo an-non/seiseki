@@ -8,6 +8,7 @@ const mustContain = [
   'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })',
   'const raycaster = new THREE.Raycaster();',
   'renderer.domElement.addEventListener("click"',
+  'controls.maxDistance = Math.max(170, displayRadiusBounds.max * 2.5);',
   'OBSERVATION TRACE'
 ];
 for (const marker of mustContain) {
@@ -23,12 +24,8 @@ html = html.replace(
   'font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",sans-serif;'
 );
 html = html.replaceAll(
-  'font:11px/1.6 "IBM Plex Mono",Consolas,monospace;',
-  'font:11px/1.6 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;'
-);
-html = html.replaceAll(
-  'font:8px/1.38 "IBM Plex Mono",Consolas,monospace;',
-  'font:8px/1.38 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;'
+  '"IBM Plex Mono",Consolas,monospace',
+  'ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace'
 );
 
 const mobileCss = `@media (max-width:700px) {
@@ -56,7 +53,16 @@ const mobileCss = `@media (max-width:700px) {
         pointer-events:none;
       }
       .status { display:none; }
-      .trace { display:none; }
+      .trace {
+        display:block; left:8px; right:auto; bottom:104px;
+        width:min(76vw,330px); height:min(20vh,170px); max-height:min(20vh,170px);
+        overflow:hidden; padding:6px 8px; border:1px solid var(--rule); border-radius:8px;
+        background:var(--panel); box-shadow:var(--panel-shadow); backdrop-filter:blur(6px);
+        font-size:8px; line-height:1.28; opacity:.84; pointer-events:none;
+      }
+      .trace header { margin:0 0 3px; font-size:8px; line-height:1.2; }
+      .trace header span:last-child { display:none; }
+      .trace pre { max-height:calc(20vh - 28px); overflow:hidden; }
       .details {
         left:8px; right:8px; bottom:8px; width:calc(100% - 16px);
         min-height:0; max-height:88px; padding:7px 9px; overflow:auto;
@@ -72,6 +78,15 @@ const mobileCss = `@media (max-width:700px) {
 const mobilePattern = /@media \(max-width:700px\) \{[\s\S]*?\n    \}\n  <\/style>/;
 if (!mobilePattern.test(html)) throw new Error("mobile CSS block not found");
 html = html.replace(mobilePattern, `${mobileCss}\n  </style>`);
+
+html = html.replace(
+  'const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 600);',
+  'const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 1800);'
+);
+html = html.replace(
+  'controls.maxDistance = Math.max(170, displayRadiusBounds.max * 2.5);',
+  `const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov * .5);\n    const fitAllDistance = displayRadiusBounds.max / Math.tan(verticalHalfFov) / Math.min(1, Math.max(.35, camera.aspect));\n    controls.maxDistance = Math.max(220, fitAllDistance * 1.18);`
+);
 
 const oldClick = `    renderer.domElement.addEventListener("pointermove", setPointer);
     renderer.domElement.addEventListener("pointerleave", () => {
@@ -117,7 +132,9 @@ html = html.replace(oldClick, newClick);
 
 if (!html.includes('const count = Math.max(240, Math.min(5000')) throw new Error("5000-node generation changed unexpectedly");
 if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) throw new Error("tap raycast fix missing");
-if (!html.includes('.trace { display:none; }')) throw new Error("mobile trace rule missing");
+if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
+if (!html.includes('.trace {\n        display:block;')) throw new Error("mobile trace panel missing");
+if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
 fs.writeFileSync(file, html);
 console.log(`mobile quantum fix applied: ${Buffer.byteLength(html)} bytes`);
