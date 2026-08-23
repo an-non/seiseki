@@ -1,48 +1,61 @@
-name: Redeploy opinion network preview
+name: Recover and redeploy opinion network preview
 
 on:
   push:
     branches:
       - feature/opinion-network-preview
     paths:
-      - preview/opinion-network/worker.mjs
-      - preview/opinion-network/scripts/apply-mobile-fix.mjs
       - .github/workflows/opinion-network-preview-redeploy.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: seiseki-opinion-preview-recovery
+  cancel-in-progress: false
+
 jobs:
-  mobile-fix-test-deploy:
+  recover-verify-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout preview branch
+      - name: Checkout preview branch with history
         uses: actions/checkout@v4
         with:
           ref: feature/opinion-network-preview
           fetch-depth: 0
 
-      - name: Apply deterministic mobile fix
-        shell: bash
-        run: node preview/opinion-network/scripts/apply-mobile-fix.mjs
-
-      - name: Verify 5000-node preview and mobile behavior
+      - name: Record GitHub state and restore last known-good 3D preview
         shell: bash
         run: |
           set -euo pipefail
-          node --check preview/opinion-network/worker.mjs
-          node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
-          grep -q 'Math.min(5000' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'setPointer(event);' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'hovered = hitFromPointer();' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q '.trace { display:none; }' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'font-size:12px; line-height:1; white-space:nowrap' preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'Hiragino Sans' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          GOOD_COMMIT=80254a7826b9bb5dbfa10707852382204dbb8ef8
+          GOOD_BLOB=f19b67d1b978a93edfaf96a5519b0a2e9ee2ac64
+          FILE=preview/opinion-network/public/chunk-network-entanglement-preview.html
 
-      - name: Commit mobile-safe preview source
+          printf '### Preview recovery preflight\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- current GitHub HEAD: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- last known-good commit: `%s`\n' "$GOOD_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- commits since known-good: `%s`\n' "$(git rev-list --count "$GOOD_COMMIT"..HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- changed paths since known-good:\n' >> "$GITHUB_STEP_SUMMARY"
+          git diff --name-only "$GOOD_COMMIT"..HEAD | sed 's/^/  - `/' | sed 's/$/`/' >> "$GITHUB_STEP_SUMMARY"
+
+          git checkout "$GOOD_COMMIT" -- "$FILE"
+          ACTUAL_BLOB="$(git hash-object "$FILE")"
+          test "$ACTUAL_BLOB" = "$GOOD_BLOB" || {
+            echo "known-good preview blob mismatch: $ACTUAL_BLOB" >&2
+            exit 1
+          }
+
+          grep -q 'Math.min(5000' "$FILE"
+          grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' "$FILE"
+          grep -q 'loading.hidden = true' "$FILE"
+          grep -q 'animate();' "$FILE"
+          node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
+          node --check preview/opinion-network/worker.mjs
+
+      - name: Commit exact known-good preview HTML
         shell: bash
         run: |
           set -euo pipefail
@@ -50,11 +63,28 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/public/chunk-network-entanglement-preview.html
           if ! git diff --cached --quiet; then
-            git commit -m "Make quantum preview mobile-safe"
+            git commit -m "Restore last known-good quantum 3D preview"
             git push origin HEAD:feature/opinion-network-preview
           fi
 
-      - name: Deploy isolated Cloudflare preview
+      - name: Inspect current Cloudflare preview deployments
+        id: inspect
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          workingDirectory: preview/opinion-network
+          command: deployments list
+
+      - name: Record Cloudflare pre-deploy state
+        shell: bash
+        run: |
+          printf '\n### Cloudflare pre-deploy state\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' '${{ steps.inspect.outputs.command-output }}' | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY" || true
+          printf '\nOnly `seiseki-opinion-network-preview` is targeted. SEISEKI staging API, D1 and production are not part of this workflow.\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy isolated preview defensively
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
@@ -62,10 +92,16 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4"
           workingDirectory: preview/opinion-network
-          command: deploy
+          command: deploy --strict
 
-      - name: Report preview URL
+      - name: Report recovery deployment
         shell: bash
         run: |
-          echo "Preview URL: ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.deploy.outputs.deployment-url }}"
+          printf '\n### Recovery deployment\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- worker: `seiseki-opinion-network-preview`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- restored preview blob: `f19b67d1b978a93edfaf96a5519b0a2e9ee2ac64`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- known-good source commit: `80254a7826b9bb5dbfa10707852382204dbb8ef8`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- preview URL: `%s`\n' '${{ steps.deploy.outputs.deployment-url }}' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- SEISEKI staging API touched: `false`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migrations: `none`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production touched: `false`\n' >> "$GITHUB_STEP_SUMMARY"
