@@ -21,6 +21,7 @@ import { analyzeStoredResponse } from "./analysis.mjs";
 import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
 import { createResponseId, normalizeSubmission, RequestError } from "./validation.mjs";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
+import { getPublicAggregate } from "./public-aggregate.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -193,6 +194,9 @@ async function handleRequest(request, env, ctx) {
   }
   if (request.method === "GET" && url.pathname === "/api/stats") {
     return json(await getBasicStats(env.DB), 200, { "cache-control": "public, max-age=0, s-maxage=60" });
+  }
+  if (request.method === "GET" && url.pathname === "/api/public-aggregate") {
+    return json(await getPublicAggregate(env.DB), 200, { "cache-control": "public, max-age=0, s-maxage=30" });
   }
   if (request.method === "GET" && url.pathname === "/api/demo-responses") {
     return json({ responses: await listPublicDemoResponses(env.DB) }, 200, {

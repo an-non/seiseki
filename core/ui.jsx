@@ -184,6 +184,27 @@ async function cloudLoadDemoResponses() {
   return payload && Array.isArray(payload.responses) ? payload.responses : [];
 }
 
+async function cloudLoadPublicAggregate() {
+  if (!cloudApiEnabled()) return null;
+  const payload = await cloudApiRequest("/api/public-aggregate");
+  if (!payload || typeof payload !== "object") return null;
+  const base = newAgg();
+  return {
+    ...base,
+    ...payload,
+    demo: { ...base.demo, ...(payload.demo || {}) },
+    questions: payload.questions || {},
+    ideology: { ...base.ideology, ...(payload.ideology || {}), points: Array.isArray(payload.ideology && payload.ideology.points) ? payload.ideology.points : [] },
+    topics: payload.topics || {},
+    targets: payload.targets || {},
+    cross: payload.cross || {},
+    series: payload.series || {},
+    rtree: payload.rtree || {},
+    net: { ...base.net, ...(payload.net || {}), nodes: (payload.net && payload.net.nodes) || {}, links: (payload.net && payload.net.links) || {} },
+    opinions: Array.isArray(payload.opinions) ? payload.opinions : []
+  };
+}
+
 function withCloudDemos(base, demos) {
   const combined = JSON.parse(JSON.stringify(base || newAgg()));
   for (const raw of demos || []) {
@@ -1101,11 +1122,15 @@ export default function App() {
       const a = await sGet("agg:summary");
       let demos = [];
       let cloudConfig = null;
+      let cloudAggregate = null;
       if (cloudApiEnabled()) {
-        const [demoResult, configResult] = await Promise.allSettled([
+        const [aggregateResult, demoResult, configResult] = await Promise.allSettled([
+          cloudLoadPublicAggregate(),
           cloudLoadDemoResponses(),
           cloudLoadConfig()
         ]);
+        if (aggregateResult.status === "fulfilled") cloudAggregate = aggregateResult.value;
+        else console.warn("cloud aggregate load failed", aggregateResult.reason);
         if (demoResult.status === "fulfilled") demos = demoResult.value;
         else console.warn("cloud demo load failed", demoResult.reason);
         if (configResult.status === "fulfilled") cloudConfig = configResult.value;
@@ -1116,7 +1141,8 @@ export default function App() {
       else if (q) setQuestions(q);
       setPolicy(effectivePolicy);
       setCloudDemos(demos);
-      setAgg(withCloudDemos(a || newAgg(), demos));
+      const visibleAggregate = cloudAggregate || withCloudDemos(a || newAgg(), demos);
+      setAgg(visibleAggregate);
       /* 個人スコープ: セッション・下書き・自分の回答IDの有無を確認する */
       const dr = await pGet("draft:current");
       let ss = await pGet("session:current");
@@ -1139,7 +1165,7 @@ export default function App() {
         setMyId(mid);
         if (viewFromPath(currentPath()) === "complete" && mid) {
           const latest = (await sGet("resp:" + mid + "-2")) || (await sGet("resp:" + mid));
-          if (latest) setCompletion({ resp: latest, agg: withCloudDemos(a || newAgg(), demos) });
+          if (latest) setCompletion({ resp: latest, agg: cloudAggregate || withCloudDemos(a || newAgg(), demos) });
         }
       }
       setReady(true);
@@ -1161,6 +1187,9 @@ export default function App() {
     const path = VIEW_PATHS[v] || VIEW_PATHS.entry;
     if (currentPath() !== path) window.history.pushState({ view: v }, "", path);
     setView(v);
+    if (cloudApiEnabled() && ["home", "dash", "tree", "opinions"].includes(v)) {
+      refreshAgg().catch(error => console.warn("aggregate navigation refresh failed", error));
+    }
   }
   function goBack() {
     const p = prevRef.current;
@@ -1194,7 +1223,20 @@ export default function App() {
     notify("ログアウトしました(統計の閲覧は引き続きできます)");
   }
 
-  async function refreshAgg() { const a = await sGet("agg:summary"); setAgg(withCloudDemos(a || newAgg(), cloudDemos)); }
+  async function refreshAgg() {
+    if (cloudApiEnabled()) {
+      try {
+        const remote = await cloudLoadPublicAggregate();
+        if (remote) { setAgg(remote); return remote; }
+      } catch (error) {
+        console.warn("cloud aggregate refresh failed", error);
+      }
+    }
+    const a = await sGet("agg:summary");
+    const local = withCloudDemos(a || newAgg(), cloudDemos);
+    setAgg(local);
+    return local;
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: C.paper, color: C.ink, fontFamily: FONT_BODY, fontSize: 14, lineHeight: 1.75 }}>
