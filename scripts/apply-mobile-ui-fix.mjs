@@ -3,12 +3,6 @@ import fs from "node:fs";
 const file = "core/ui.jsx";
 let src = fs.readFileSync(file, "utf8");
 
-const replaceOnce = (from, to, label) => {
-  if (src.includes(to)) return;
-  if (!src.includes(from)) throw new Error(`missing ${label}`);
-  src = src.replace(from, to);
-};
-
 const stableJapaneseSans = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
 
 src = src.replace(
@@ -38,7 +32,11 @@ src = src.replace(
 
 src = src.replace(
   '      {cloudApiEnabled() ? (\n        <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>',
-  '      {cloudApiEnabled() && typeof window !== "undefined" && window.location.hostname.includes("staging") ? (\n        <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>'
+  '      {cloudApiEnabled() && typeof window !== "undefined" && window.SEISEKI_RUNTIME_MODE === "staging" ? (\n        <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>'
+);
+src = src.replace(
+  '      {cloudApiEnabled() && typeof window !== "undefined" && window.location.hostname.includes("staging") ? (\n        <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>',
+  '      {cloudApiEnabled() && typeof window !== "undefined" && window.SEISEKI_RUNTIME_MODE === "staging" ? (\n        <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>'
 );
 
 if (!src.includes('count=10000&seed=prototype-10000')) throw new Error("quantum 10000-node URL missing");
@@ -47,7 +45,7 @@ if (src.includes('fonts.googleapis.com')) throw new Error("external Google font 
 if (!src.includes('const FONT_BODY = \'"Hiragino Sans"')) throw new Error("Hiragino-first body font missing");
 if (!src.includes('const FONT_DISP = \'"Hiragino Sans"')) throw new Error("Hiragino-first display font missing");
 if (!src.includes('font-synthesis: none')) throw new Error("font synthesis guard missing");
-if (!src.includes('window.location.hostname.includes("staging")')) throw new Error("staging banner guard missing");
+if (!src.includes('window.SEISEKI_RUNTIME_MODE === "staging"')) throw new Error("explicit staging runtime guard missing");
 
 fs.writeFileSync(file, src);
-console.log("SEISEKI stable Japanese typography + production-prep UI patch applied");
+console.log("SEISEKI stable Japanese typography + explicit runtime-mode UI patch applied");
