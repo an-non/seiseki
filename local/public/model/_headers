@@ -1,0 +1,11 @@
+# 声析 モデル配信のヘッダ
+#   ※ Workers Static Assets が _headers を読むかは要確認（読まない場合は wrangler.jsonc 側で指定）
+/model/*
+  Cache-Control: public, max-age=31536000, immutable
+  Access-Control-Allow-Origin: *
+
+/model/manifest.json
+  Cache-Control: public, max-age=60
+
+/model/kernel.wasm
+  Content-Type: application/wasm

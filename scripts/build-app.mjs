@@ -7,6 +7,7 @@ const root = path.resolve(here, "..");
 const parts = [
   "core/head.jsx",
   "core/logic.js",
+  "core/seiseki-local-bridge.js",
   "core/chunk-network.js",
   "core/opinion-network.jsx",
   "core/chunk-network.jsx",
