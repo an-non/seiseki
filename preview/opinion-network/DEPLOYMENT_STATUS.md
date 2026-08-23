@@ -5,7 +5,7 @@
 - deployment_url: https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev
 - worker: seiseki-opinion-network-preview
 - source_branch: feature/opinion-network-preview
-- source_head: 96cc176547ed54666f4a12fc2622c65c24573bc2
+- source_head: b53821d9394bb8780956a28f589e2d6558aea0f4
 - known_good_base: 80254a7826b9bb5dbfa10707852382204dbb8ef8
 - runtime_three: 0.185.1
 - module_loading: same-origin-importmap
@@ -16,6 +16,10 @@
 - demo_count_default: 10000
 - count_scaling_base: 5000
 - spatial_scaling: existing-displayScale
+- relation_density_glow: additive-shared-geometry-v1
+- relation_glow_reference_node_diameter: 0.32
+- relation_glow_outer_world_width: 0.48
+- relation_base_opacity_dark: 0.12
 - cloudflare_conflict_guard: strict
 - existing_seiseki_staging_touched: false
 - d1_migrations_run: false
