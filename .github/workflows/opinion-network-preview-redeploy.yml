@@ -48,7 +48,7 @@ jobs:
           grep -q 'loading.hidden = true' "$FILE"
           grep -q 'animate();' "$FILE"
 
-      - name: Apply mobile-only UI and tap fix
+      - name: Apply mobile-only UI tap zoom and trace fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -58,7 +58,9 @@ jobs:
           grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' "$FILE"
           grep -q 'setPointer(event);' "$FILE"
           grep -q 'hovered = hitFromPointer();' "$FILE"
-          grep -q '.trace { display:none; }' "$FILE"
+          grep -q 'const fitAllDistance = displayRadiusBounds.max' "$FILE"
+          grep -q 'camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 1800)' "$FILE"
+          grep -q 'display:block; left:8px; right:auto; bottom:104px' "$FILE"
           grep -q 'font-size:12px; line-height:1; white-space:nowrap' "$FILE"
           grep -q 'Hiragino Sans' "$FILE"
           grep -q 'loading.hidden = true' "$FILE"
@@ -74,7 +76,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/public/chunk-network-entanglement-preview.html
           if ! git diff --cached --quiet; then
-            git commit -m "Restore 3D preview and apply mobile-safe controls"
+            git commit -m "Restore 3D preview with mobile zoom trace and tap controls"
             git push origin HEAD:feature/opinion-network-preview
           fi
 
@@ -144,6 +146,8 @@ jobs:
           - module_loading: same-origin-importmap
           - mobile_ui: enabled
           - mobile_tap_raycast: enabled
+          - mobile_fit_all_zoom: enabled
+          - mobile_trace_panel: enabled
           - demo_count_default: 5000
           - cloudflare_conflict_guard: strict
           - existing_seiseki_staging_touched: false
@@ -154,7 +158,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/DEPLOYMENT_STATUS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record recovered mobile quantum preview deployment"
+            git commit -m "Record mobile zoom and trace quantum preview deployment"
             git push origin HEAD:feature/opinion-network-preview
           fi
 
