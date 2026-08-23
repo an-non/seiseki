@@ -1,0 +1,209 @@
+name: Deploy SEISEKI production dashboard hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/production-dashboard-hotfix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-production-release
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout production source
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply durable UI and dashboard patches
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/apply-production-dashboard-fix.mjs
+          node scripts/build-app.mjs
+          grep -q 'cloudLoadPublicAggregate' core/ui.jsx
+          grep -q '/api/public-aggregate' cloudflare/src/index.mjs
+          grep -q 'getPublicAggregate' cloudflare/src/public-aggregate.mjs
+
+      - name: Run application tests
+        id: app_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Install and test Worker
+        id: worker_tests
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx wrangler --version
+          npm run check
+          npm test
+
+      - name: Build production web assets
+        id: build
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/index.html
+          test -f dist/model/manifest.json
+          grep -lq '/api/public-aggregate' dist/assets/*.js
+          grep -lq 'Hiragino Sans' dist/assets/*.js
+
+      - name: Wrangler dry run
+        id: dry_run
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ../local/dist/index.html
+          npx wrangler deploy --dry-run --outdir /tmp/seiseki-dashboard-hotfix
+
+      - name: Record previous Worker deployment
+        id: previous
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set +e
+          npx wrangler deployments list > /tmp/previous-deployment.txt 2>&1
+          STATUS=$?
+          set -e
+          cat /tmp/previous-deployment.txt
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Deploy production hotfix
+        id: deploy
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --strict 2>&1 | tee /tmp/deploy.txt
+
+      - name: Verify production Cloudflare runtime
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then break; fi
+            sleep 3
+          done
+          node - <<'NODE'
+          const fs=require('fs');
+          const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if(h.status!=='ok'||h.database!=='d1') throw new Error('health/D1 failed');
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/aggregate.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const a=JSON.parse(fs.readFileSync('/tmp/aggregate.json','utf8'));
+          for(const k of ['total','demo','questions','ideology','topics','targets','cross','series','net','opinions']) {
+            if(!(k in a)) throw new Error('aggregate missing '+k);
+          }
+          if(!Number.isFinite(Number(a.total))) throw new Error('aggregate total invalid');
+          console.log(JSON.stringify({total:a.total,topics:Object.keys(a.topics||{}).length,opinions:(a.opinions||[]).length}));
+          NODE
+          curl -fsS "$PRODUCTION_URL/app/dashboard" > /tmp/dashboard.html
+          grep -qi '<!doctype html>' /tmp/dashboard.html
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/quantum.html
+          grep -qi '<!doctype html>' /tmp/quantum.html
+
+      - name: Commit hotfix source and success record
+        id: record
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_DASHBOARD_HOTFIX.md <<EOF
+          # SEISEKI production dashboard hotfix
+
+          - outcome: success
+          - production_url: ${PRODUCTION_URL}
+          - dashboard_path: ${PRODUCTION_URL}/app/dashboard
+          - health: ok
+          - database: d1
+          - public_aggregate: ok
+          - dashboard_html: ok
+          - quantum_route: ok
+          - d1_migrations: none
+          - worker_deploy_guard: strict
+          - dashboard_source: privacy-filtered D1 aggregate API
+          - local_fallback: retained
+          EOF
+          rm -rf local/node_modules local/dist cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-production-dashboard-fix.mjs PRODUCTION_DASHBOARD_HOTFIX.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Fix production web dashboard D1 rendering"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Roll back Worker if runtime verification fails
+        if: ${{ failure() && steps.deploy.outcome == 'success' && steps.smoke.outcome != 'success' && steps.previous.outputs.exists == 'true' }}
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler rollback --message "Rollback failed SEISEKI dashboard hotfix"
+
+      - name: Record incomplete hotfix
+        if: ${{ always() && steps.record.outcome != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_DASHBOARD_HOTFIX_PROGRESS.md <<EOF
+          # SEISEKI production dashboard hotfix progress
+          - outcome: incomplete
+          - checkout: ${{ steps.checkout.outcome }}
+          - patch: ${{ steps.patch.outcome }}
+          - app_tests: ${{ steps.app_tests.outcome }}
+          - worker_tests: ${{ steps.worker_tests.outcome }}
+          - build: ${{ steps.build.outcome }}
+          - dry_run: ${{ steps.dry_run.outcome }}
+          - previous: ${{ steps.previous.outcome }}
+          - deploy: ${{ steps.deploy.outcome }}
+          - smoke: ${{ steps.smoke.outcome }}
+          - record: ${{ steps.record.outcome }}
+          - d1_migrations: none
+          EOF
+          rm -rf local/node_modules local/dist cloudflare/node_modules || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_DASHBOARD_HOTFIX_PROGRESS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record incomplete dashboard hotfix"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
