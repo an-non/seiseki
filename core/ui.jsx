@@ -784,7 +784,7 @@ function currentPath() {
   return typeof window !== "undefined" && window.location ? window.location.pathname : "/";
 }
 
-const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-stable-prodprep-v1";
+const QUANTUM_PREVIEW_URL = "/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1";
 
 function QuantumObservation() {
   return (
@@ -1187,6 +1187,9 @@ export default function App() {
     const path = VIEW_PATHS[v] || VIEW_PATHS.entry;
     if (currentPath() !== path) window.history.pushState({ view: v }, "", path);
     setView(v);
+    if (cloudApiEnabled() && ["home", "dash", "tree", "opinions"].includes(v)) {
+      refreshAgg().catch(error => console.warn("aggregate navigation refresh failed", error));
+    }
     if (cloudApiEnabled() && ["home", "dash", "tree", "opinions"].includes(v)) {
       refreshAgg().catch(error => console.warn("aggregate navigation refresh failed", error));
     }
