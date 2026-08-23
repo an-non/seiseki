@@ -5,7 +5,7 @@ on:
     branches:
       - feature/opinion-network-preview
     paths:
-      - .github/workflows/opinion-network-preview-redeploy.yml
+      - preview/opinion-network/scripts/apply-mobile-fix.mjs
   workflow_dispatch:
 
 permissions:
@@ -46,30 +46,34 @@ jobs:
           grep -q 'loading.hidden = true' "$FILE"
           grep -q 'animate();' "$FILE"
 
-      - name: Apply mobile-only UI tap zoom and trace fixes
+      - name: Apply mobile UI and 10000-node preview patch
         shell: bash
         run: |
           set -euo pipefail
           node preview/opinion-network/scripts/apply-mobile-fix.mjs
           FILE=preview/opinion-network/public/chunk-network-entanglement-preview.html
-          grep -q 'Math.min(5000' "$FILE"
-          grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' "$FILE"
+          grep -q 'Math.min(10000' "$FILE"
+          grep -q 'requested : 10000' "$FILE"
+          grep -q 'prototype-10000' "$FILE"
+          grep -q '10,000件の観測投影' "$FILE"
+          grep -q 'const nodeCountScale = Math.cbrt(Math.max(1, model.nodes.length) / 5000);' "$FILE"
+          grep -q 'displayRadiusBounds = Object.freeze({ min:14 \* displayScale, max:72 \* displayScale })' "$FILE"
+          grep -q 'camera.position.set(0, 13 \* displayScale' "$FILE"
+          grep -q 'const fitAllDistance = displayRadiusBounds.max' "$FILE"
           grep -q 'setPointer(event);' "$FILE"
           grep -q 'hovered = hitFromPointer();' "$FILE"
-          grep -q 'const fitAllDistance = displayRadiusBounds.max' "$FILE"
           grep -q 'camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 1800)' "$FILE"
           grep -q 'display:block; left:1px; right:auto; bottom:96px' "$FILE"
           grep -q 'width:min(58vw,240px); height:min(13vh,105px)' "$FILE"
           grep -q 'font-size:7px; line-height:1.2' "$FILE"
           grep -q 'background:transparent; box-shadow:none; backdrop-filter:none;' "$FILE"
-          grep -q 'font-size:10px; line-height:1; white-space:nowrap' "$FILE"
           grep -q 'Hiragino Sans' "$FILE"
           grep -q 'loading.hidden = true' "$FILE"
           grep -q 'animate();' "$FILE"
           node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
           node --check preview/opinion-network/worker.mjs
 
-      - name: Commit mobile-safe preview source
+      - name: Commit 10000-node preview source
         shell: bash
         run: |
           set -euo pipefail
@@ -77,7 +81,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/public/chunk-network-entanglement-preview.html
           if ! git diff --cached --quiet; then
-            git commit -m "Shrink mobile quantum calculation trace"
+            git commit -m "Enable 10000-node quantum preview using existing scaling"
             git push origin HEAD:feature/opinion-network-preview
           fi
 
@@ -148,7 +152,9 @@ jobs:
           - mobile_tap_raycast: enabled
           - mobile_fit_all_zoom: enabled
           - mobile_trace_panel: transparent-compact-v2
-          - demo_count_default: 5000
+          - demo_count_default: 10000
+          - count_scaling_base: 5000
+          - spatial_scaling: existing-displayScale
           - cloudflare_conflict_guard: strict
           - existing_seiseki_staging_touched: false
           - d1_migrations_run: false
@@ -158,6 +164,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/DEPLOYMENT_STATUS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record compact calculation trace deployment"
+            git commit -m "Record 10000-node quantum preview deployment"
             git push origin HEAD:feature/opinion-network-preview
           fi
