@@ -123,7 +123,7 @@
     .details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }
     .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
     .details .generated { color:var(--ink); font-size:12px; }
-    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }
+    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace; }
     .details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
     .details dt { color:var(--sub); }
     .details dd { margin:0; overflow-wrap:anywhere; }
@@ -142,7 +142,7 @@
       background:transparent;
       box-shadow:none;
       color:var(--trace);
-      font:10px/1.55 "IBM Plex Mono",Consolas,monospace;
+      font:10px/1.55 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
       text-shadow:none;
     }
     .trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }
@@ -156,7 +156,7 @@
       top:50%;
       transform:translate(-50%,-50%);
       color:var(--cyan);
-      font:12px/1.5 "IBM Plex Mono",Consolas,monospace;
+      font:12px/1.5 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
       text-shadow:0 1px 10px rgba(0,123,155,.2);
       pointer-events:none;
     }
@@ -186,7 +186,16 @@
         pointer-events:none;
       }
       .status { display:none; }
-      .trace { display:none; }
+      .trace {
+        display:block; left:8px; right:auto; bottom:104px;
+        width:min(76vw,330px); height:min(20vh,170px); max-height:min(20vh,170px);
+        overflow:hidden; padding:6px 8px; border:1px solid var(--rule); border-radius:8px;
+        background:var(--panel); box-shadow:var(--panel-shadow); backdrop-filter:blur(6px);
+        font-size:8px; line-height:1.28; opacity:.84; pointer-events:none;
+      }
+      .trace header { margin:0 0 3px; font-size:8px; line-height:1.2; }
+      .trace header span:last-child { display:none; }
+      .trace pre { max-height:calc(20vh - 28px); overflow:hidden; }
       .details {
         left:8px; right:8px; bottom:8px; width:calc(100% - 16px);
         min-height:0; max-height:88px; padding:7px 9px; overflow:auto;
@@ -438,7 +447,7 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(initialPalette.background);
     scene.fog = new THREE.FogExp2(initialPalette.fog, .009 / displayScale);
-    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 600);
+    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 1800);
     camera.position.set(0, 13 * displayScale, Math.max(92, displayRadiusBounds.max * 1.36));
     const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:"high-performance" });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
@@ -464,7 +473,9 @@
     controls.enableDamping = true;
     controls.dampingFactor = .065;
     controls.minDistance = 13;
-    controls.maxDistance = Math.max(170, displayRadiusBounds.max * 2.5);
+    const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov * .5);
+    const fitAllDistance = displayRadiusBounds.max / Math.tan(verticalHalfFov) / Math.min(1, Math.max(.35, camera.aspect));
+    controls.maxDistance = Math.max(220, fitAllDistance * 1.18);
 
     scene.add(new THREE.HemisphereLight("#ffffff", "#dce4f0", 2.1));
     const keyLight = new THREE.DirectionalLight("#ffffff", 2.2);
