@@ -6,24 +6,53 @@ on:
       - feature/opinion-network-preview
     paths:
       - preview/opinion-network/worker.mjs
+      - preview/opinion-network/scripts/apply-mobile-fix.mjs
+      - .github/workflows/opinion-network-preview-redeploy.yml
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  deploy-preview:
+  mobile-fix-test-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout preview branch
         uses: actions/checkout@v4
         with:
           ref: feature/opinion-network-preview
+          fetch-depth: 0
 
-      - name: Verify preview worker
+      - name: Apply deterministic mobile fix
         shell: bash
-        run: node --check preview/opinion-network/worker.mjs
+        run: node preview/opinion-network/scripts/apply-mobile-fix.mjs
+
+      - name: Verify 5000-node preview and mobile behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check preview/opinion-network/worker.mjs
+          node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
+          grep -q 'Math.min(5000' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'generatePrototypeCandidates(topics, { uniqueCount:count, duplicateCount })' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'setPointer(event);' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'hovered = hitFromPointer();' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q '.trace { display:none; }' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'font-size:12px; line-height:1; white-space:nowrap' preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q 'Hiragino Sans' preview/opinion-network/public/chunk-network-entanglement-preview.html
+
+      - name: Commit mobile-safe preview source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add preview/opinion-network/public/chunk-network-entanglement-preview.html
+          if ! git diff --cached --quiet; then
+            git commit -m "Make quantum preview mobile-safe"
+            git push origin HEAD:feature/opinion-network-preview
+          fi
 
       - name: Deploy isolated Cloudflare preview
         id: deploy
