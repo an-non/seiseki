@@ -8,18 +8,26 @@
     "directory": "../local/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": [
+      "/api/*"
+    ]
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "seiseki-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "8ad5e023-3588-490c-ba61-3f180f8b2887",
       "migrations_dir": "migrations"
     }
   ],
   "vars": {
-    "TURNSTILE_REQUIRED": "false"
+    "TURNSTILE_REQUIRED": "false",
+    "ALLOWED_ORIGINS": "https://seiseki-api.tokyo-odh-129.workers.dev",
+    "AI_ANALYSIS_ENABLED": "true",
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "AI_MAX_ATTEMPTS": "2",
+    "AI_MAX_OUTPUT_TOKENS": "1800",
+    "PASSWORD_ITERATIONS": "120000"
   },
   "env": {
     "staging": {
@@ -65,5 +73,27 @@
         "PASSWORD_ITERATIONS": "30000"
       }
     }
+  },
+  "workers_dev": true,
+  "ai": {
+    "binding": "AI"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "ANALYSIS_QUEUE",
+        "queue": "seiseki-analysis"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "seiseki-analysis",
+        "max_batch_size": 3,
+        "max_batch_timeout": 2,
+        "max_retries": 3,
+        "max_concurrency": 1,
+        "retry_delay": 10
+      }
+    ]
   }
 }
