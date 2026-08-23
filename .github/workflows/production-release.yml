@@ -1,0 +1,264 @@
+name: Release SEISEKI production
+
+on:
+  push:
+    branches:
+      - feature/quantum-app-integration
+    paths:
+      - .github/workflows/production-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout release candidate
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Verify application candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/build-app.mjs
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+          grep -q 'const FONT_BODY = '\''"Hiragino Sans"' core/ui.jsx
+          grep -q 'font-synthesis: none' core/ui.jsx
+          ! grep -q 'fonts.googleapis.com' core/ui.jsx
+          grep -q 'quantum-stable-prodprep-v1' core/ui.jsx
+
+      - name: Install Cloudflare tooling and test Worker
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx wrangler --version
+          npm run check
+          npm test
+
+      - name: Discover or create production D1
+        id: d1
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          find_db() {
+            npx wrangler d1 list --json > /tmp/d1-list.json
+            node - <<'NODE'
+          const fs=require('fs');
+          const rows=JSON.parse(fs.readFileSync('/tmp/d1-list.json','utf8'));
+          const hit=Array.isArray(rows)?rows.find(x=>x && x.name==='seiseki-db'):null;
+          process.stdout.write(hit?.uuid || hit?.id || '');
+          NODE
+          }
+          DB_ID="$(find_db)"
+          CREATED=false
+          if [ -z "$DB_ID" ]; then
+            npx wrangler d1 create seiseki-db --location apac
+            DB_ID="$(find_db)"
+            CREATED=true
+          fi
+          test -n "$DB_ID"
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+          echo "created=$CREATED" >> "$GITHUB_OUTPUT"
+          printf '### Production infrastructure\n\n- D1 `seiseki-db`: `%s`\n- created now: `%s`\n' "$DB_ID" "$CREATED" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Discover or create production analysis queue
+        id: queue
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler queues list > /tmp/queues-before.txt
+          CREATED=false
+          if ! grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues-before.txt; then
+            npx wrangler queues create seiseki-analysis
+            CREATED=true
+          fi
+          npx wrangler queues list > /tmp/queues-after.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues-after.txt
+          echo "created=$CREATED" >> "$GITHUB_OUTPUT"
+          printf -- '- Queue `seiseki-analysis`: present (created now: `%s`)\n' "$CREATED" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure production bindings deterministically
+        env:
+          SEISEKI_PRODUCTION_D1_ID: ${{ steps.d1.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/configure-production.mjs
+          node - <<'NODE'
+          const fs=require('fs');
+          const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          if (c.d1_databases?.[0]?.database_id === '00000000-0000-0000-0000-000000000000') throw new Error('placeholder D1 remains');
+          if (c.vars?.ALLOWED_ORIGINS !== 'https://seiseki-api.tokyo-odh-129.workers.dev') throw new Error('production origin mismatch');
+          if (c.vars?.TURNSTILE_REQUIRED !== 'false') throw new Error('Turnstile cannot be required before client token integration');
+          if (c.vars?.PASSWORD_ITERATIONS !== '120000') throw new Error('production KDF setting mismatch');
+          if (c.queues?.producers?.[0]?.queue !== 'seiseki-analysis') throw new Error('production queue mismatch');
+          if (c.ai?.binding !== 'AI') throw new Error('AI binding missing');
+          NODE
+          cd cloudflare
+          npx wrangler check
+
+      - name: Build production assets
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/index.html
+          test -f dist/model/manifest.json
+          grep -lq 'seiseki-api.tokyo-odh-129.workers.dev' dist/assets/*.js
+          grep -lq 'quantum-stable-prodprep-v1' dist/assets/*.js
+          grep -lq 'Hiragino Sans' dist/assets/*.js
+
+      - name: Record existing production state before write
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set +e
+          npx wrangler deployments list > /tmp/prod-before.txt 2>&1
+          STATUS=$?
+          set -e
+          printf '\n### Existing production Worker before deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- deployments-list exit: `%s`\n\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' /tmp/prod-before.txt >> "$GITHUB_STEP_SUMMARY" || true
+          printf '\nGitHub release head: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit resolved production configuration before Cloudflare write
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/node_modules cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare/wrangler.jsonc core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize production Cloudflare bindings and typography"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Reinstall Wrangler after source commit cleanup
+        working-directory: cloudflare
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Apply production D1 migrations
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations-before.txt
+          npx wrangler d1 migrations apply seiseki-db --remote | tee /tmp/migrations-apply.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('responses','accounts','account_sessions','account_responses') ORDER BY name" --json > /tmp/schema-check.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const text=fs.readFileSync('/tmp/schema-check.json','utf8');
+          for (const name of ['responses','accounts','account_sessions','account_responses']) {
+            if (!text.includes(name)) throw new Error(`missing production table ${name}`);
+          }
+          NODE
+          printf '\n### D1 migrations\n\n' >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' /tmp/migrations-apply.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Rebuild production assets after reinstall
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Deploy production with remote-setting conflict guard
+        id: deploy
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --strict 2>&1 | tee /tmp/prod-deploy.txt
+          printf '\n### Production deployment\n\n' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'Current Version ID|Uploaded|https://' /tmp/prod-deploy.txt | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Production smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then break; fi
+            sleep 3
+          done
+          node - <<'NODE'
+          const fs=require('fs');
+          const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if (h.status !== 'ok' || h.database !== 'd1') throw new Error('production health failed');
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
+          curl -fsS "$PRODUCTION_URL/app" > /tmp/app.html
+          grep -q '<!doctype html>' /tmp/app.html
+          printf '\n### Production smoke\n\n- `/api/health`: ok\n- `/api/config`: ok\n- `/app`: served\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record production release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_RELEASE.md <<EOF
+          # SEISEKI production release
+
+          - outcome: success
+          - production_url: ${PRODUCTION_URL}
+          - worker: seiseki-api
+          - d1_database: seiseki-db
+          - d1_database_id: ${{ steps.d1.outputs.db_id }}
+          - d1_created_during_release: ${{ steps.d1.outputs.created }}
+          - analysis_queue: seiseki-analysis
+          - queue_created_during_release: ${{ steps.queue.outputs.created }}
+          - workers_ai: enabled
+          - model: @cf/qwen/qwen3-30b-a3b-fp8
+          - allowed_origins: ${PRODUCTION_URL}
+          - turnstile_required: false
+          - password_iterations: 120000
+          - typography: Hiragino-first / external Google Fonts removed / font synthesis disabled
+          - quantum_preview: 10000-node stable renderer
+          - quantum_glow_experiment_archive: archive/quantum-relation-glow-20260823
+          - production_health: ok
+
+          ## Known residual security items
+          - Turnstile client token flow is not yet wired, so server enforcement remains disabled to avoid blocking all submissions.
+          - Account login/register do not yet have a dedicated application-level rate limiter; Cloudflare account/zone controls should be added before high-traffic exposure.
+          - Anonymous response withdrawal uses possession of a high-entropy response ID as the capability.
+          EOF
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_RELEASE.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record successful SEISEKI production release"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
