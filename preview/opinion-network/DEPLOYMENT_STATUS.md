@@ -5,7 +5,7 @@
 - deployment_url: https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev
 - worker: seiseki-opinion-network-preview
 - source_branch: feature/opinion-network-preview
-- source_head: 92eb9d10a8cdd20efbbff84dae2326b5b10af78d
+- source_head: 26454681da928224ec49baec4a743ad32aaadaa1
 - archived_glow_experiment: archive/quantum-relation-glow-20260823
 - runtime_three: 0.185.1
 - mobile_ui: enabled
