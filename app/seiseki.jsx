@@ -2093,9 +2093,9 @@ const C = {
   slate: "#3D5573", slateSoft: "#E6EAF1",
   gray: "#9C988B"
 };
-const FONT_BODY = '"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif';
-const FONT_DISP = '"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif';
-const FONT_MONO = '"IBM Plex Mono","SF Mono","Consolas",monospace';
+const FONT_BODY = '-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",sans-serif';
+const FONT_DISP = '-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",sans-serif';
+const FONT_MONO = 'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace';
 
 const SUP_COLORS = {
   "支持する": "#175E54",
@@ -2153,7 +2153,6 @@ function paramView(p) {
 function GlobalStyle() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
       * { box-sizing: border-box; }
       html, body { margin: 0; }
       button { font-family: inherit; cursor: pointer; }
@@ -2375,7 +2374,7 @@ function currentPath() {
   return typeof window !== "undefined" && window.location ? window.location.pathname : "/";
 }
 
-const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=5000&seed=prototype-5000&theme=dark&rev=relations1400-compact-v2";
+const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=5000&seed=prototype-5000&theme=dark&rev=mobile-touch-v3";
 
 function QuantumObservation() {
   return (
