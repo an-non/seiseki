@@ -30,10 +30,13 @@ jobs:
           ref: feature/quantum-app-integration
           fetch-depth: 0
 
-      - name: Verify application candidate
+      - name: Verify application candidate and architecture boundary
         shell: bash
         run: |
           set -euo pipefail
+          test -s PRODUCTION_ARCHITECTURE.md
+          grep -q 'synthetic/demo visualization only' PRODUCTION_ARCHITECTURE.md
+          grep -q 'does not read production D1' PRODUCTION_ARCHITECTURE.md
           node scripts/apply-mobile-ui-fix.mjs
           node scripts/build-app.mjs
           node tests/test.js
@@ -44,9 +47,11 @@ jobs:
           grep -q 'const FONT_BODY = '\''"Hiragino Sans"' core/ui.jsx
           grep -q 'font-synthesis: none' core/ui.jsx
           ! grep -q 'fonts.googleapis.com' core/ui.jsx
+          grep -q 'window.SEISEKI_RUNTIME_MODE === "staging"' core/ui.jsx
+          grep -q 'VITE_SEISEKI_RUNTIME_MODE' local/src/main.jsx
           grep -q 'quantum-stable-prodprep-v1' core/ui.jsx
 
-      - name: Install Cloudflare tooling and test Worker
+      - name: Install Cloudflare tooling and test Worker security contract
         working-directory: cloudflare
         shell: bash
         run: |
@@ -55,6 +60,9 @@ jobs:
           npx wrangler --version
           npm run check
           npm test
+          test -s migrations/0005_rate_limits.sql
+          grep -q 'RATE_LIMITED' src/rate-limit.mjs
+          grep -q 'if (required) throw new RequestError(400, "TURNSTILE_REQUIRED"' src/index.mjs
 
       - name: Discover or create production D1
         id: d1
@@ -125,6 +133,7 @@ jobs:
         env:
           VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
           VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
         shell: bash
         run: |
           set -euo pipefail
@@ -135,6 +144,7 @@ jobs:
           grep -lq 'seiseki-api.tokyo-odh-129.workers.dev' dist/assets/*.js
           grep -lq 'quantum-stable-prodprep-v1' dist/assets/*.js
           grep -lq 'Hiragino Sans' dist/assets/*.js
+          grep -lq 'production' dist/assets/*.js
 
       - name: Record existing production state before write
         working-directory: cloudflare
@@ -158,7 +168,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add cloudflare/wrangler.jsonc core/ui.jsx app/seiseki.jsx local/src/App.jsx
           if ! git diff --cached --quiet; then
-            git commit -m "Finalize production Cloudflare bindings and typography"
+            git commit -m "Finalize production Cloudflare bindings typography and runtime mode"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
@@ -174,11 +184,11 @@ jobs:
           set -euo pipefail
           npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations-before.txt
           npx wrangler d1 migrations apply seiseki-db --remote | tee /tmp/migrations-apply.txt
-          npx wrangler d1 execute seiseki-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('responses','accounts','account_sessions','account_responses') ORDER BY name" --json > /tmp/schema-check.json
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('responses','accounts','account_sessions','account_responses','rate_limit_buckets') ORDER BY name" --json > /tmp/schema-check.json
           node - <<'NODE'
           const fs=require('fs');
           const text=fs.readFileSync('/tmp/schema-check.json','utf8');
-          for (const name of ['responses','accounts','account_sessions','account_responses']) {
+          for (const name of ['responses','accounts','account_sessions','account_responses','rate_limit_buckets']) {
             if (!text.includes(name)) throw new Error(`missing production table ${name}`);
           }
           NODE
@@ -190,6 +200,7 @@ jobs:
         env:
           VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
           VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
         shell: bash
         run: |
           set -euo pipefail
@@ -221,7 +232,7 @@ jobs:
           NODE
           curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
           curl -fsS "$PRODUCTION_URL/app" > /tmp/app.html
-          grep -q '<!doctype html>' /tmp/app.html
+          grep -qi '<!doctype html>' /tmp/app.html
           printf '\n### Production smoke\n\n- `/api/health`: ok\n- `/api/config`: ok\n- `/app`: served\n' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record production release
@@ -243,15 +254,19 @@ jobs:
           - model: @cf/qwen/qwen3-30b-a3b-fp8
           - allowed_origins: ${PRODUCTION_URL}
           - turnstile_required: false
+          - turnstile_optional_semantics: enabled
+          - application_rate_limits: enabled (login/register/response)
+          - rate_limit_storage: D1 hashed network/account fingerprints
           - password_iterations: 120000
+          - runtime_mode: production
           - typography: Hiragino-first / external Google Fonts removed / font synthesis disabled
-          - quantum_preview: 10000-node stable renderer
+          - quantum_preview: 10000-node stable synthetic demo renderer; no production D1 binding
           - quantum_glow_experiment_archive: archive/quantum-relation-glow-20260823
           - production_health: ok
 
           ## Known residual security items
-          - Turnstile client token flow is not yet wired, so server enforcement remains disabled to avoid blocking all submissions.
-          - Account login/register do not yet have a dedicated application-level rate limiter; Cloudflare account/zone controls should be added before high-traffic exposure.
+          - Turnstile browser widget/token flow is not yet wired, so enforcement remains disabled to avoid blocking valid submissions.
+          - D1-backed rate limits are release abuse controls; stronger distributed/edge controls can be added if traffic warrants it.
           - Anonymous response withdrawal uses possession of a high-entropy response ID as the capability.
           EOF
           rm -rf local/dist local/node_modules cloudflare/node_modules
