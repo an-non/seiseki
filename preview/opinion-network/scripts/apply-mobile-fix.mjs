@@ -82,6 +82,16 @@ if (!mobilePattern.test(html)) throw new Error("mobile CSS block not found");
 html = html.replace(mobilePattern, `${mobileCss}\n  </style>`);
 
 html = html.replace(
+  'const count = Math.max(240, Math.min(5000, Number.isFinite(requested) && requested > 0 ? requested : 5000));',
+  'const count = Math.max(240, Math.min(10000, Number.isFinite(requested) && requested > 0 ? requested : 10000));'
+);
+html = html.replace(
+  'const observationSeed = searchParams.get("seed") || "prototype-5000";',
+  'const observationSeed = searchParams.get("seed") || "prototype-10000";'
+);
+html = html.replace('<p>5,000件の観測投影</p>', '<p>10,000件の観測投影</p>');
+
+html = html.replace(
   'const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 600);',
   'const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 1800);'
 );
@@ -132,7 +142,12 @@ const newClick = `    renderer.domElement.addEventListener("pointermove", setPoi
 if (!html.includes(oldClick)) throw new Error("click handler block not found");
 html = html.replace(oldClick, newClick);
 
-if (!html.includes('const count = Math.max(240, Math.min(5000')) throw new Error("5000-node generation changed unexpectedly");
+if (!html.includes('const count = Math.max(240, Math.min(10000')) throw new Error("10000-node generation missing");
+if (!html.includes('requested : 10000')) throw new Error("10000-node default missing");
+if (!html.includes('prototype-10000')) throw new Error("10000 seed missing");
+if (!html.includes('10,000件の観測投影')) throw new Error("10000 label missing");
+if (!html.includes('const nodeCountScale = Math.cbrt(Math.max(1, model.nodes.length) / 5000);')) throw new Error("existing node scale missing");
+if (!html.includes('displayRadiusBounds = Object.freeze({ min:14 * displayScale, max:72 * displayScale })')) throw new Error("existing radius scale missing");
 if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) throw new Error("tap raycast fix missing");
 if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
 if (!html.includes('display:block; left:1px; right:auto; bottom:96px')) throw new Error("mobile trace panel missing");
@@ -141,4 +156,4 @@ if (!html.includes('background:transparent; box-shadow:none; backdrop-filter:non
 if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
 fs.writeFileSync(file, html);
-console.log(`mobile quantum fix applied: ${Buffer.byteLength(html)} bytes`);
+console.log(`mobile quantum 10000-node fix applied: ${Buffer.byteLength(html)} bytes`);
