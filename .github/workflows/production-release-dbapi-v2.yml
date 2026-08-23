@@ -1,0 +1,394 @@
+name: Release SEISEKI production DB_API v2
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/production-release-dbapi-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DB_API_TOKEN: ${{ secrets.DB_API }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+
+    steps:
+      - name: Checkout release candidate
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Confirm secrets without exposing them
+        id: credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DB_API_TOKEN:-}" || { echo "GitHub secret DB_API is missing" >&2; exit 41; }
+          test -n "${CLOUDFLARE_API_TOKEN:-}" || { echo "GitHub secret CLOUDFLARE_API_TOKEN is missing" >&2; exit 42; }
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}" || { echo "GitHub secret CLOUDFLARE_ACCOUNT_ID is missing" >&2; exit 43; }
+          echo "Required secrets are present. Secret values were not printed."
+
+      - name: Verify release candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s PRODUCTION_ARCHITECTURE.md
+          grep -q 'synthetic/demo visualization only' PRODUCTION_ARCHITECTURE.md
+          grep -q 'does not read production D1' PRODUCTION_ARCHITECTURE.md
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/build-app.mjs
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+          grep -q 'Hiragino Sans' core/ui.jsx
+          grep -q 'font-synthesis: none' core/ui.jsx
+          ! grep -q 'fonts.googleapis.com' core/ui.jsx
+          grep -q 'VITE_SEISEKI_RUNTIME_MODE' local/src/main.jsx
+          grep -q 'quantum-stable-prodprep-v1' core/ui.jsx
+
+      - name: Install Wrangler and run Worker/security tests
+        id: worker_tests
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx wrangler --version
+          npm run check
+          npm test
+          test -s migrations/0005_rate_limits.sql
+          grep -q 'RATE_LIMITED' src/rate-limit.mjs
+          grep -q 'TURNSTILE_REQUIRED' src/index.mjs
+
+      - name: Resolve production D1 with DB_API
+        id: d1
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler whoami >/tmp/db-whoami.txt
+          npx wrangler d1 list --json > /tmp/d1-list.json
+          find_db() {
+            node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync('/tmp/d1-list.json', 'utf8'));
+          const hit = Array.isArray(rows) ? rows.find(x => x && x.name === 'seiseki-db') : null;
+          process.stdout.write(hit?.uuid || hit?.id || '');
+          NODE
+          }
+          DB_ID="$(find_db)"
+          CREATED=false
+          if [ -z "$DB_ID" ]; then
+            npx wrangler d1 create seiseki-db --location apac
+            npx wrangler d1 list --json > /tmp/d1-list.json
+            DB_ID="$(find_db)"
+            CREATED=true
+          fi
+          test -n "$DB_ID"
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+          echo "created=$CREATED" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve production Queue with deploy token
+        id: queue
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler queues list > /tmp/queues-before.txt
+          CREATED=false
+          if ! grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues-before.txt; then
+            npx wrangler queues create seiseki-analysis
+            CREATED=true
+          fi
+          npx wrangler queues list > /tmp/queues-after.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues-after.txt
+          echo "created=$CREATED" >> "$GITHUB_OUTPUT"
+
+      - name: Configure production bindings
+        id: bindings
+        env:
+          SEISEKI_PRODUCTION_D1_ID: ${{ steps.d1.outputs.db_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/configure-production.mjs
+          node - <<'NODE'
+          const fs = require('fs');
+          const c = JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc', 'utf8'));
+          if (!c.d1_databases?.[0]?.database_id || c.d1_databases[0].database_id.startsWith('00000000-')) throw new Error('production D1 unresolved');
+          if (c.vars?.ALLOWED_ORIGINS !== 'https://seiseki-api.tokyo-odh-129.workers.dev') throw new Error('production origin mismatch');
+          if (c.vars?.TURNSTILE_REQUIRED !== 'false') throw new Error('Turnstile must remain optional for this release');
+          if (c.vars?.PASSWORD_ITERATIONS !== '120000') throw new Error('production password KDF mismatch');
+          if (c.ai?.binding !== 'AI') throw new Error('Workers AI binding missing');
+          if (c.queues?.producers?.[0]?.queue !== 'seiseki-analysis') throw new Error('queue producer mismatch');
+          if (c.queues?.consumers?.[0]?.queue !== 'seiseki-analysis') throw new Error('queue consumer mismatch');
+          NODE
+
+      - name: Build production assets before Wrangler validation
+        id: build
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/index.html
+          test -f dist/model/manifest.json
+          grep -lq 'seiseki-api.tokyo-odh-129.workers.dev' dist/assets/*.js
+          grep -lq 'quantum-stable-prodprep-v1' dist/assets/*.js
+          grep -lq 'Hiragino Sans' dist/assets/*.js
+
+      - name: Wrangler production dry run after assets exist
+        id: dry_run
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ../local/dist/index.html
+          npx wrangler deploy --dry-run --outdir /tmp/seiseki-worker-dry-run | tee /tmp/wrangler-dry-run.txt
+
+      - name: Record current production Worker state
+        id: remote_state
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set +e
+          npx wrangler deployments list > /tmp/prod-before.txt 2>&1
+          STATUS=$?
+          set -e
+          echo "list_status=$STATUS" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -eq 0 ]; then
+            echo "had_existing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "had_existing=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat /tmp/prod-before.txt
+
+      - name: Commit resolved production config to release branch
+        id: config_commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/node_modules cloudflare/node_modules local/dist
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare/wrangler.jsonc core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize production bindings and release UI"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Reinstall deployment dependencies
+        id: reinstall
+        working-directory: cloudflare
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Record D1 rollback checkpoint
+        id: d1_checkpoint
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKPOINT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "timestamp=$CHECKPOINT" >> "$GITHUB_OUTPUT"
+          npx wrangler d1 time-travel info seiseki-db --timestamp="$CHECKPOINT" --json > /tmp/d1-checkpoint.json
+          test -s /tmp/d1-checkpoint.json
+
+      - name: Apply production D1 migrations using DB_API
+        id: migrations
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations-before.txt
+          npx wrangler d1 migrations apply seiseki-db --remote | tee /tmp/migrations-apply.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('responses','accounts','account_sessions','account_responses','rate_limit_buckets') ORDER BY name" --json > /tmp/schema-check.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/schema-check.json', 'utf8');
+          for (const name of ['responses','accounts','account_sessions','account_responses','rate_limit_buckets']) {
+            if (!text.includes(name)) throw new Error(`missing production table ${name}`);
+          }
+          NODE
+
+      - name: Rebuild production assets
+        id: rebuild
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/index.html
+
+      - name: Deploy production with strict conflict guard
+        id: deploy
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --strict 2>&1 | tee /tmp/prod-deploy.txt
+
+      - name: Production smoke tests
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then break; fi
+            sleep 3
+          done
+          node - <<'NODE'
+          const fs = require('fs');
+          const h = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
+          if (h.status !== 'ok' || h.database !== 'd1') throw new Error('production health failed');
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
+          curl -fsS "$PRODUCTION_URL/app" > /tmp/app.html
+          grep -qi '<!doctype html>' /tmp/app.html
+
+      - name: Record successful production release
+        id: release_record
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_RELEASE.md <<EOF
+          # SEISEKI production release
+
+          - outcome: success
+          - production_url: ${PRODUCTION_URL}
+          - worker: seiseki-api
+          - d1_database: seiseki-db
+          - d1_database_id: ${{ steps.d1.outputs.db_id }}
+          - d1_created_during_release: ${{ steps.d1.outputs.created }}
+          - analysis_queue: seiseki-analysis
+          - queue_created_during_release: ${{ steps.queue.outputs.created }}
+          - workers_ai: enabled
+          - allowed_origins: ${PRODUCTION_URL}
+          - turnstile_required: false
+          - application_rate_limits: enabled
+          - runtime_mode: production
+          - typography: Hiragino-first; external Google Fonts removed; font synthesis disabled
+          - quantum_preview: stable 10000-node synthetic demo; no production D1 binding
+          - quantum_glow_experiment_archive: archive/quantum-relation-glow-20260823
+          - production_health: ok
+          - release_guard: DB_API isolated to D1; assets built before dry-run; strict deploy; D1 Time Travel checkpoint
+          EOF
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_RELEASE.md
+          git rm -f PRODUCTION_RELEASE_PROGRESS.md 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Record successful SEISEKI production release"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Roll back Worker after failed smoke when a previous deployment exists
+        id: rollback_worker
+        if: ${{ failure() && steps.deploy.outcome == 'success' && steps.smoke.outcome != 'success' && steps.remote_state.outputs.had_existing == 'true' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler rollback --message "Automatic rollback after failed SEISEKI production smoke test"
+
+      - name: Restore D1 if release fails before a healthy production smoke
+        id: rollback_d1
+        if: ${{ failure() && steps.d1_checkpoint.outcome == 'success' && steps.migrations.outcome != 'skipped' && (steps.deploy.outcome != 'success' || steps.smoke.outcome != 'success') }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS='${{ steps.d1_checkpoint.outputs.timestamp }}'
+          test -n "$TS"
+          printf 'y\n' | npx wrangler d1 time-travel restore seiseki-db --timestamp="$TS" --json
+
+      - name: Persist incomplete release progress
+        if: ${{ always() && steps.release_record.outcome != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > PRODUCTION_RELEASE_PROGRESS.md <<EOF
+          # SEISEKI production release progress
+
+          - outcome: incomplete
+          - workflow_source: main/.github/workflows/production-release-dbapi-v2.yml
+          - release_branch: feature/quantum-app-integration
+          - checkout: ${{ steps.checkout.outcome }}
+          - credentials: ${{ steps.credentials.outcome }}
+          - candidate: ${{ steps.candidate.outcome }}
+          - worker_tests: ${{ steps.worker_tests.outcome }}
+          - d1: ${{ steps.d1.outcome }}
+          - queue: ${{ steps.queue.outcome }}
+          - bindings: ${{ steps.bindings.outcome }}
+          - build: ${{ steps.build.outcome }}
+          - dry_run: ${{ steps.dry_run.outcome }}
+          - remote_state: ${{ steps.remote_state.outcome }}
+          - config_commit: ${{ steps.config_commit.outcome }}
+          - reinstall: ${{ steps.reinstall.outcome }}
+          - d1_checkpoint: ${{ steps.d1_checkpoint.outcome }}
+          - migrations: ${{ steps.migrations.outcome }}
+          - rebuild: ${{ steps.rebuild.outcome }}
+          - deploy: ${{ steps.deploy.outcome }}
+          - smoke: ${{ steps.smoke.outcome }}
+          - release_record: ${{ steps.release_record.outcome }}
+          - worker_rollback: ${{ steps.rollback_worker.outcome }}
+          - d1_rollback: ${{ steps.rollback_d1.outcome }}
+          - previous_worker_detected: ${{ steps.remote_state.outputs.had_existing }}
+
+          The first failed step above is the current blocker. No secret values are written here.
+          EOF
+          rm -rf local/dist local/node_modules cloudflare/node_modules || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_RELEASE_PROGRESS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record incomplete SEISEKI production release v2"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
