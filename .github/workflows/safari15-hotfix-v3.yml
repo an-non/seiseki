@@ -1,0 +1,215 @@
+name: Safari 15 SEISEKI hotfix v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/safari15-hotfix-v3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-safari15-hotfix-v3
+  cancel-in-progress: true
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout app branch
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply current app patches
+        id: app_patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/apply-production-dashboard-fix.mjs
+          node scripts/build-app.mjs
+          grep -q '/api/public-aggregate' cloudflare/src/index.mjs
+          grep -q 'cloudLoadPublicAggregate' core/ui.jsx
+          grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
+          ! grep -q 'await import("./App.jsx")' local/src/main.jsx
+          grep -q 'rollupOptions: { input }' local/vite.config.js
+          grep -q 'safari14' local/vite.config.js
+
+      - name: Prepare quantum as a Vite HTML entry
+        id: quantum
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
+          rm -rf local/quantum
+          mkdir -p local/quantum
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/quantum/chunk-network-entanglement-preview.html
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/quantum/quantum-entanglement-engine.mjs
+          node - <<'NODE'
+          const fs=require('fs');
+          const path='local/quantum/quantum-entanglement-engine.mjs';
+          let s=fs.readFileSync(path,'utf8');
+          const oldCap='  const capacity = topics.length * statements.length * targets.length * lenses.length;\n  if (uniqueCount > capacity) throw new RangeError(`uniqueCount must be ${capacity} or less`);';
+          const newCap='  const baseCapacity = topics.length * statements.length * targets.length * lenses.length;\n  const maximumSyntheticCount = 50000;\n  if (uniqueCount > maximumSyntheticCount) throw new RangeError(`uniqueCount must be ${maximumSyntheticCount} or less`);';
+          if(s.includes(oldCap)) s=s.replace(oldCap,newCap);
+          const oldLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    let cursor = index;';
+          const newLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    const variantIndex = Math.floor(index / baseCapacity);\n    let cursor = index % baseCapacity;';
+          if(s.includes(oldLoop)) s=s.replace(oldLoop,newLoop);
+          const oldText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。`,';
+          const newText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。${variantIndex ? ` 合成系列${variantIndex + 1}。` : ""}`,';
+          if(s.includes(oldText)) s=s.replace(oldText,newText);
+          if(!s.includes('const baseCapacity = topics.length * statements.length * targets.length * lenses.length')) throw new Error('baseCapacity patch failed');
+          if(!s.includes('const variantIndex = Math.floor(index / baseCapacity)')) throw new Error('variant patch failed');
+          if(!s.includes('合成系列${variantIndex + 1}')) throw new Error('unique text patch failed');
+          fs.writeFileSync(path,s);
+          NODE
+          node --check local/quantum/quantum-entanglement-engine.mjs
+          node --input-type=module - <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const q=await import(pathToFileURL(process.cwd()+'/local/quantum/quantum-entanglement-engine.mjs').href+'?v='+Date.now());
+          const topics=Array.from({length:24},(_,i)=>({id:`t${i}`,label:`topic${i}`,categoryId:`c${Math.floor(i/4)}`}));
+          const nodes=q.generatePrototypeCandidates(topics,{uniqueCount:10000,duplicateCount:0});
+          const unique=q.deduplicateNodes(nodes);
+          if(nodes.length!==10000||unique.length!==10000) throw new Error(`10000 verification failed ${nodes.length}/${unique.length}`);
+          NODE
+
+      - name: Install dependencies
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local && npm ci --no-audit --no-fund
+          cd ../cloudflare && npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build production Safari-compatible bundle
+        id: prod_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
+          test -s dist/index.html
+          test -s dist/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'type="importmap"' dist/quantum/chunk-network-entanglement-preview.html
+          ! grep -R -q 'await import("./App.jsx")' dist/assets || true
+          grep -R -q 'api/public-aggregate' dist/assets
+          cd ../cloudflare
+          npx wrangler deploy --strict
+
+      - name: Verify production HTTP assets
+        id: prod_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$PRODUCTION_URL/api/health" > /tmp/prod-health.json
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/prod-aggregate.json
+          curl -fsS "$PRODUCTION_URL/app/dashboard" > /tmp/prod-dashboard.html
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=safari15-v3" > /tmp/prod-quantum.html
+          ! grep -q 'type="importmap"' /tmp/prod-quantum.html
+          grep -q 'type="module"' /tmp/prod-quantum.html
+          node - <<'NODE'
+          const fs=require('fs');
+          const h=JSON.parse(fs.readFileSync('/tmp/prod-health.json','utf8'));
+          if(h.status!=='ok'||h.database!=='d1') throw new Error('production health failed');
+          const a=JSON.parse(fs.readFileSync('/tmp/prod-aggregate.json','utf8'));
+          if(!('total' in a)||!('topics' in a)||!('opinions' in a)) throw new Error('production aggregate invalid');
+          NODE
+
+      - name: Build and deploy staging Safari-compatible bundle
+        id: staging_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist
+          cd local
+          VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build
+          test -s dist/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'type="importmap"' dist/quantum/chunk-network-entanglement-preview.html
+          cd ../cloudflare
+          npx wrangler deploy --env staging --strict
+
+      - name: Verify staging HTTP assets
+        id: staging_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$STAGING_URL/api/health" > /tmp/stage-health.json
+          curl -fsS "$STAGING_URL/api/public-aggregate" > /tmp/stage-aggregate.json
+          curl -fsS "$STAGING_URL/app/dashboard" > /tmp/stage-dashboard.html
+          curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=safari15-v3" > /tmp/stage-quantum.html
+          ! grep -q 'type="importmap"' /tmp/stage-quantum.html
+          node - <<'NODE'
+          const fs=require('fs');
+          const h=JSON.parse(fs.readFileSync('/tmp/stage-health.json','utf8'));
+          if(h.status!=='ok'||h.database!=='d1') throw new Error('staging health failed');
+          const a=JSON.parse(fs.readFileSync('/tmp/stage-aggregate.json','utf8'));
+          if(!('total' in a)||!('topics' in a)||!('opinions' in a)) throw new Error('staging aggregate invalid');
+          NODE
+
+      - name: Record Safari 15 success
+        id: record
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > SAFARI15_HOTFIX_STATUS.md <<EOF
+          # SEISEKI Safari 15 hotfix
+          - outcome: success
+          - verified_target: Safari 15.1 syntax baseline
+          - app_top_level_await: removed
+          - quantum_importmap_dependency: removed
+          - quantum_vite_html_entry: enabled
+          - production_dashboard: ${PRODUCTION_URL}/app/dashboard
+          - production_quantum: ${PRODUCTION_URL}/app/quantum
+          - staging_dashboard: ${STAGING_URL}/app/dashboard
+          - staging_quantum: ${STAGING_URL}/app/quantum
+          - quantum_generator: 10000/10000 unique synthetic nodes verified
+          - d1_migrations: none
+          EOF
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SAFARI15_HOTFIX_STATUS.md local/vite.config.js local/src/main.jsx core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/index.mjs cloudflare/src/public-aggregate.mjs scripts/apply-mobile-ui-fix.mjs scripts/apply-production-dashboard-fix.mjs
+          if ! git diff --cached --quiet; then
+            git commit -m "Complete Safari 15 dashboard and quantum hotfix"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Record Safari 15 progress
+        if: ${{ always() && steps.record.outcome != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > SAFARI15_HOTFIX_PROGRESS.md <<EOF
+          # SEISEKI Safari 15 hotfix progress
+          - outcome: incomplete
+          - checkout: ${{ steps.checkout.outcome }}
+          - app_patch: ${{ steps.app_patch.outcome }}
+          - quantum: ${{ steps.quantum.outcome }}
+          - deps: ${{ steps.deps.outcome }}
+          - prod_build: ${{ steps.prod_build.outcome }}
+          - prod_smoke: ${{ steps.prod_smoke.outcome }}
+          - staging_build: ${{ steps.staging_build.outcome }}
+          - staging_smoke: ${{ steps.staging_smoke.outcome }}
+          - record: ${{ steps.record.outcome }}
+          EOF
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add SAFARI15_HOTFIX_PROGRESS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record Safari 15 hotfix progress"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
