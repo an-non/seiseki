@@ -73,9 +73,9 @@ jobs:
           find_db() {
             npx wrangler d1 list --json > /tmp/d1-list.json
             node - <<'NODE'
-          const fs=require('fs');
-          const rows=JSON.parse(fs.readFileSync('/tmp/d1-list.json','utf8'));
-          const hit=Array.isArray(rows)?rows.find(x=>x && x.name==='seiseki-db'):null;
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync('/tmp/d1-list.json', 'utf8'));
+          const hit = Array.isArray(rows) ? rows.find(x => x && x.name === 'seiseki-db') : null;
           process.stdout.write(hit?.uuid || hit?.id || '');
           NODE
           }
@@ -116,8 +116,8 @@ jobs:
           set -euo pipefail
           node scripts/configure-production.mjs
           node - <<'NODE'
-          const fs=require('fs');
-          const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          const fs = require('fs');
+          const c = JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc', 'utf8'));
           if (c.d1_databases?.[0]?.database_id === '00000000-0000-0000-0000-000000000000') throw new Error('placeholder D1 remains');
           if (c.vars?.ALLOWED_ORIGINS !== 'https://seiseki-api.tokyo-odh-129.workers.dev') throw new Error('production origin mismatch');
           if (c.vars?.TURNSTILE_REQUIRED !== 'false') throw new Error('Turnstile cannot be required before client token integration');
@@ -126,7 +126,7 @@ jobs:
           if (c.ai?.binding !== 'AI') throw new Error('AI binding missing');
           NODE
           cd cloudflare
-          npx wrangler check
+          npx wrangler deploy --dry-run
 
       - name: Build production assets
         working-directory: local
@@ -157,13 +157,13 @@ jobs:
           printf '\n### Existing production Worker before deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- deployments-list exit: `%s`\n\n' "$STATUS" >> "$GITHUB_STEP_SUMMARY"
           sed 's/^/    /' /tmp/prod-before.txt >> "$GITHUB_STEP_SUMMARY" || true
-          printf '\nGitHub release head: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nGitHub release head before Cloudflare write: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit resolved production configuration before Cloudflare write
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf local/node_modules cloudflare/node_modules
+          rm -rf local/node_modules cloudflare/node_modules local/dist
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add cloudflare/wrangler.jsonc core/ui.jsx app/seiseki.jsx local/src/App.jsx
@@ -186,8 +186,8 @@ jobs:
           npx wrangler d1 migrations apply seiseki-db --remote | tee /tmp/migrations-apply.txt
           npx wrangler d1 execute seiseki-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('responses','accounts','account_sessions','account_responses','rate_limit_buckets') ORDER BY name" --json > /tmp/schema-check.json
           node - <<'NODE'
-          const fs=require('fs');
-          const text=fs.readFileSync('/tmp/schema-check.json','utf8');
+          const fs = require('fs');
+          const text = fs.readFileSync('/tmp/schema-check.json', 'utf8');
           for (const name of ['responses','accounts','account_sessions','account_responses','rate_limit_buckets']) {
             if (!text.includes(name)) throw new Error(`missing production table ${name}`);
           }
@@ -226,8 +226,8 @@ jobs:
             sleep 3
           done
           node - <<'NODE'
-          const fs=require('fs');
-          const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          const fs = require('fs');
+          const h = JSON.parse(fs.readFileSync('/tmp/health.json', 'utf8'));
           if (h.status !== 'ok' || h.database !== 'd1') throw new Error('production health failed');
           NODE
           curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
