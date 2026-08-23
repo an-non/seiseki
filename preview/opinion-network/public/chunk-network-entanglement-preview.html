@@ -670,47 +670,24 @@
     scene.add(entanglementGlowPoints);
     scene.add(entanglementInstances);
 
-    /* Wide relation mist with camera-distance attenuation.
-       The readable base line stays unchanged. The mist keeps its broad footprint at
-       long range, but its energy collapses as the camera approaches the network so
-       dense crossings do not wash the scene to white. */
-    const relationMistProfile = Object.freeze({
-      referenceNodeDiameter:.32,
-      worldWidth:.48,
-      opacityDark:.0035,
-      opacityLight:.0025,
-      colorScaleDark:.38,
-      colorScaleLight:.28,
-      nearOpacityFloor:.06
-    });
     const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
-    function relationMistOpacity() {
-      const baseOpacity = colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight;
-      const nearDistance = displayRadiusBounds.max * .72;
-      const farDistance = displayRadiusBounds.max * 2.1;
-      const normalized = clamp((camera.position.length() - nearDistance) / Math.max(1, farDistance - nearDistance), 0, 1);
-      const attenuation = relationMistProfile.nearOpacityFloor + (1 - relationMistProfile.nearOpacityFloor) * Math.pow(normalized, 1.7);
-      return baseOpacity * attenuation;
-    }
-    const relationMistMaterial = new LineMaterial({
-      color:new THREE.Color(initialPalette.relation).multiplyScalar(
-        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
-      ),
-      linewidth:relationMistProfile.worldWidth,
+    const relationGlowMaterial = new LineMaterial({
+      color:initialPalette.relation,
+      linewidth:1.55,
       transparent:true,
-      opacity:relationMistOpacity(),
+      opacity:colorTheme === "dark" ? .04 : .04,
       depthWrite:false,
-      worldUnits:true,
+      worldUnits:false,
       alphaToCoverage:true,
-      blending:THREE.AdditiveBlending,
+      blending:colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending,
       fog:false,
       toneMapped:false
     });
-    relationMistMaterial.resolution.set(innerWidth, innerHeight);
-    const relationMistLines = new LineSegments2(new LineSegmentsGeometry(), relationMistMaterial);
-    relationMistLines.renderOrder = -1;
-    scene.add(relationMistLines);
+    relationGlowMaterial.resolution.set(innerWidth, innerHeight);
+    const relationGlowLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowMaterial);
+    relationGlowLines.renderOrder = -1;
+    scene.add(relationGlowLines);
     let relationEndpointIndices = [];
     function rebuildRelationGeometry() {
       relationEndpointIndices = [...projection.relations]
@@ -724,8 +701,8 @@
       relationLines.geometry = new THREE.BufferGeometry();
       const positions = new Float32Array(relationEndpointIndices.length * 6);
       relationLines.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-      relationMistLines.geometry.dispose();
-      relationMistLines.geometry = new LineSegmentsGeometry();
+      relationGlowLines.geometry.dispose();
+      relationGlowLines.geometry = new LineSegmentsGeometry();
       updateRelationPositions();
     }
     function updateRelationPositions() {
@@ -741,7 +718,7 @@
       });
       attribute.needsUpdate = true;
       relationLines.geometry.computeBoundingSphere();
-      if (glowPositions.length) relationMistLines.geometry.setPositions(glowPositions);
+      if (glowPositions.length) relationGlowLines.geometry.setPositions(glowPositions);
     }
     rebuildRelationGeometry();
 
@@ -806,12 +783,10 @@
       scene.fog.color.set(palette.fog);
       relationLines.material.color.set(palette.relation);
       relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;
-      relationMistMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(
-        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
-      ));
-      relationMistMaterial.opacity = relationMistOpacity();
-      relationMistMaterial.blending = THREE.AdditiveBlending;
-      relationMistMaterial.needsUpdate = true;
+      relationGlowMaterial.color.set(palette.relation);
+      relationGlowMaterial.opacity = .04;
+      relationGlowMaterial.blending = colorTheme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
+      relationGlowMaterial.needsUpdate = true;
       activeLines.material.color.set("#ffffff");
       activeGlowMaterial.color.copy(new THREE.Color("#40e8ff").multiplyScalar(colorTheme === "dark" ? 3.2 : 2.15));
       activeGlowOuterMaterial.color.copy(new THREE.Color("#10c8ec").multiplyScalar(colorTheme === "dark" ? 2.25 : 1.55));
@@ -1262,7 +1237,6 @@
       activeGlowMaterial.opacity = .42 * glowStrength;
       activeGlowOuterMaterial.opacity = .075 * glowStrength;
       controls.update();
-      relationMistMaterial.opacity = relationMistOpacity();
       composer.render();
     }
     addEventListener("resize", () => {
@@ -1272,7 +1246,7 @@
       composer.setSize(innerWidth, innerHeight);
       activeGlowMaterial.resolution.set(innerWidth, innerHeight);
       activeGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
-      relationMistMaterial.resolution.set(innerWidth, innerHeight);
+      relationGlowMaterial.resolution.set(innerWidth, innerHeight);
     });
 
     window.__ENTANGLEMENT_PROTOTYPE__ = {
