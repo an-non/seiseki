@@ -6,6 +6,7 @@ on:
       - feature/quantum-app-integration
     paths:
       - scripts/apply-mobile-ui-fix.mjs
+      - local/src/main.jsx
       - .github/workflows/mobile-ui-staging.yml
   workflow_dispatch:
 
@@ -23,6 +24,7 @@ jobs:
     env:
       VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
       VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_RUNTIME_MODE: staging
     steps:
       - name: Checkout integration branch
         uses: actions/checkout@v4
@@ -37,7 +39,7 @@ jobs:
           node scripts/apply-mobile-ui-fix.mjs
           node scripts/build-app.mjs
 
-      - name: Verify typography and quantum contract
+      - name: Verify typography quantum and runtime contract
         shell: bash
         run: |
           set -euo pipefail
@@ -48,7 +50,8 @@ jobs:
           ! grep -q 'fonts.googleapis.com' core/ui.jsx
           grep -q 'rev=quantum-stable-prodprep-v1' core/ui.jsx
           grep -q 'count=10000&seed=prototype-10000' core/ui.jsx
-          grep -q 'window.location.hostname.includes("staging")' core/ui.jsx
+          grep -q 'window.SEISEKI_RUNTIME_MODE === "staging"' core/ui.jsx
+          grep -q 'VITE_SEISEKI_RUNTIME_MODE' local/src/main.jsx
           cmp app/seiseki.jsx local/src/App.jsx
           grep -q 'seiseki-local-v1' app/seiseki.jsx
           grep -q 'quantum: "/app/quantum"' app/seiseki.jsx
@@ -86,6 +89,7 @@ jobs:
           grep -lq 'quantum-stable-prodprep-v1' local/dist/assets/*.js
           grep -lq 'count=10000' local/dist/assets/*.js
           grep -lq 'seiseki-local-v1' local/dist/assets/*.js
+          grep -lq 'staging' local/dist/assets/*.js
 
       - name: Commit patched source
         shell: bash
@@ -96,7 +100,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/ui.jsx app/seiseki.jsx local/src/App.jsx
           if ! git diff --cached --quiet; then
-            git commit -m "Stabilize mobile typography for production prep"
+            git commit -m "Stabilize mobile typography and runtime mode"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
@@ -125,6 +129,7 @@ jobs:
           npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
           printf '\n### Production-prep staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- typography: Hiragino-first / no external fonts\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- runtime mode: staging\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- quantum: stable relation rendering / 10000 nodes\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- D1 migrations: not run\n' >> "$GITHUB_STEP_SUMMARY"
