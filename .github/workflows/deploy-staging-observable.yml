@@ -1,0 +1,32 @@
+name: Observable Cloudflare staging deploy
+
+on:
+  pull_request:
+    branches:
+      - feat/local-llm-stage0-1
+    paths:
+      - "deploy-observe/TRIGGER"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-observable-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout verified local LLM branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/local-llm-stage0-1
+          fetch-depth: 0
+      - name: Verify and deploy staging only
+        shell: bash
+        run: bash .github/scripts/deploy-staging-observable.sh
