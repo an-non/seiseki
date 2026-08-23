@@ -1222,7 +1222,7 @@ export default function App() {
         </div>
       </header>
 
-      {cloudApiEnabled() && typeof window !== "undefined" && window.location.hostname.includes("staging") ? (
+      {cloudApiEnabled() && typeof window !== "undefined" && window.SEISEKI_RUNTIME_MODE === "staging" ? (
         <div role="status" style={{ background: C.karashiSoft, borderBottom: "1px solid " + C.karashi, color: C.ink }}>
           <div style={{ maxWidth: 900, margin: "0 auto", padding: "7px 16px", fontSize: 12 }}>
             <b>STAGING 検証環境</b> — 入力はCloudflare D1へ送信されます。実回答や個人情報は入力しないでください。
