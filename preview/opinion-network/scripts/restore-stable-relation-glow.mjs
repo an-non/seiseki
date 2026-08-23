@@ -3,7 +3,6 @@ import fs from "node:fs";
 const file = "preview/opinion-network/public/chunk-network-entanglement-preview.html";
 let html = fs.readFileSync(file, "utf8");
 
-const mistBlock = /    \/\* Keep the original readable relation line,[\s\S]*?    scene\.add\(relationMistLines\);/u;
 const stableBlock = `    const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
     const relationGlowMaterial = new LineMaterial({
@@ -23,8 +22,10 @@ const stableBlock = `    const relationLines = makeLineSegments(initialPalette.r
     relationGlowLines.renderOrder = -1;
     scene.add(relationGlowLines);`;
 
-if (!mistBlock.test(html)) throw new Error("relation mist experiment block not found");
-html = html.replace(mistBlock, stableBlock);
+const relationExperimentBlock = /    \/\*[\s\S]*?relationMist[\s\S]*?    scene\.add\(relationMistLines\);/u;
+if (!relationExperimentBlock.test(html)) throw new Error("relation mist experiment block not found");
+html = html.replace(relationExperimentBlock, stableBlock);
+
 html = html.replaceAll("relationMistLines", "relationGlowLines");
 html = html.replaceAll("relationMistMaterial", "relationGlowMaterial");
 
@@ -36,9 +37,9 @@ html = html.replace(
       relationGlowMaterial.needsUpdate = true;`
 );
 
-if (html.includes("relationMistProfile")) {
-  html = html.replace(/    const relationMistProfile = Object\.freeze\(\{[\s\S]*?    \}\);\n/u, "");
-}
+html = html.replace(/      relationGlowMaterial\.opacity = relationMistOpacity\(\);\n/g, "");
+html = html.replace(/    function relationMistOpacity\(\) \{[\s\S]*?    \}\n/u, "");
+html = html.replace(/    const relationMistProfile = Object\.freeze\(\{[\s\S]*?    \}\);\n/u, "");
 
 if (html.includes("relationMist")) throw new Error("relation mist experiment still present");
 if (!html.includes("linewidth:1.55")) throw new Error("stable relation glow width missing");
