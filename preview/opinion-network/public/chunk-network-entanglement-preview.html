@@ -670,31 +670,26 @@
     scene.add(entanglementGlowPoints);
     scene.add(entanglementInstances);
 
-    /* Density-accumulating relation glow.
-       The three layers share identical endpoints: no spatial duplication, only
-       a broader additive footprint. Overlap therefore sums in the same pixels,
-       keeping isolated relations faint while dense crossings become brighter. */
-    const relationGlowProfile = Object.freeze({
+    /* Keep the original readable relation line, and add one very wide, very low-energy
+       additive mist layer on exactly the same geometry. A single relation barely glows;
+       dense crossings accumulate into a soft haze without washing out the nodes. */
+    const relationMistProfile = Object.freeze({
       referenceNodeDiameter:.32,
-      innerWorldWidth:.26,
-      outerWorldWidth:.48,
-      baseOpacityDark:.12,
-      baseOpacityLight:.18,
-      innerOpacityDark:.055,
-      innerOpacityLight:.045,
-      outerOpacityDark:.018,
-      outerOpacityLight:.014
+      worldWidth:.48,
+      opacityDark:.012,
+      opacityLight:.009,
+      colorScaleDark:.55,
+      colorScaleLight:.42
     });
-    const relationLines = makeLineSegments(
-      initialPalette.relation,
-      colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight
-    );
+    const relationLines = makeLineSegments(initialPalette.relation, colorTheme === "dark" ? .18 : .27);
     scene.add(relationLines);
-    const relationGlowMaterial = new LineMaterial({
-      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.28),
-      linewidth:relationGlowProfile.innerWorldWidth,
+    const relationMistMaterial = new LineMaterial({
+      color:new THREE.Color(initialPalette.relation).multiplyScalar(
+        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
+      ),
+      linewidth:relationMistProfile.worldWidth,
       transparent:true,
-      opacity:colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight,
+      opacity:colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight,
       depthWrite:false,
       worldUnits:true,
       alphaToCoverage:true,
@@ -702,26 +697,10 @@
       fog:false,
       toneMapped:false
     });
-    relationGlowMaterial.resolution.set(innerWidth, innerHeight);
-    const relationGlowLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowMaterial);
-    relationGlowLines.renderOrder = -1;
-    scene.add(relationGlowLines);
-    const relationGlowOuterMaterial = new LineMaterial({
-      color:new THREE.Color(initialPalette.relation).multiplyScalar(1.08),
-      linewidth:relationGlowProfile.outerWorldWidth,
-      transparent:true,
-      opacity:colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight,
-      depthWrite:false,
-      worldUnits:true,
-      alphaToCoverage:true,
-      blending:THREE.AdditiveBlending,
-      fog:false,
-      toneMapped:false
-    });
-    relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
-    const relationGlowOuterLines = new LineSegments2(new LineSegmentsGeometry(), relationGlowOuterMaterial);
-    relationGlowOuterLines.renderOrder = -2;
-    scene.add(relationGlowOuterLines);
+    relationMistMaterial.resolution.set(innerWidth, innerHeight);
+    const relationMistLines = new LineSegments2(new LineSegmentsGeometry(), relationMistMaterial);
+    relationMistLines.renderOrder = -1;
+    scene.add(relationMistLines);
     let relationEndpointIndices = [];
     function rebuildRelationGeometry() {
       relationEndpointIndices = [...projection.relations]
@@ -735,10 +714,8 @@
       relationLines.geometry = new THREE.BufferGeometry();
       const positions = new Float32Array(relationEndpointIndices.length * 6);
       relationLines.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-      relationGlowLines.geometry.dispose();
-      relationGlowLines.geometry = new LineSegmentsGeometry();
-      relationGlowOuterLines.geometry.dispose();
-      relationGlowOuterLines.geometry = new LineSegmentsGeometry();
+      relationMistLines.geometry.dispose();
+      relationMistLines.geometry = new LineSegmentsGeometry();
       updateRelationPositions();
     }
     function updateRelationPositions() {
@@ -754,10 +731,7 @@
       });
       attribute.needsUpdate = true;
       relationLines.geometry.computeBoundingSphere();
-      if (glowPositions.length) {
-        relationGlowLines.geometry.setPositions(glowPositions);
-        relationGlowOuterLines.geometry.setPositions(glowPositions);
-      }
+      if (glowPositions.length) relationMistLines.geometry.setPositions(glowPositions);
     }
     rebuildRelationGeometry();
 
@@ -821,15 +795,13 @@
       scene.background.set(palette.background);
       scene.fog.color.set(palette.fog);
       relationLines.material.color.set(palette.relation);
-      relationLines.material.opacity = colorTheme === "dark" ? relationGlowProfile.baseOpacityDark : relationGlowProfile.baseOpacityLight;
-      relationGlowMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.28));
-      relationGlowMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.innerOpacityDark : relationGlowProfile.innerOpacityLight;
-      relationGlowMaterial.blending = THREE.AdditiveBlending;
-      relationGlowMaterial.needsUpdate = true;
-      relationGlowOuterMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(1.08));
-      relationGlowOuterMaterial.opacity = colorTheme === "dark" ? relationGlowProfile.outerOpacityDark : relationGlowProfile.outerOpacityLight;
-      relationGlowOuterMaterial.blending = THREE.AdditiveBlending;
-      relationGlowOuterMaterial.needsUpdate = true;
+      relationLines.material.opacity = colorTheme === "dark" ? .18 : .27;
+      relationMistMaterial.color.copy(new THREE.Color(palette.relation).multiplyScalar(
+        colorTheme === "dark" ? relationMistProfile.colorScaleDark : relationMistProfile.colorScaleLight
+      ));
+      relationMistMaterial.opacity = colorTheme === "dark" ? relationMistProfile.opacityDark : relationMistProfile.opacityLight;
+      relationMistMaterial.blending = THREE.AdditiveBlending;
+      relationMistMaterial.needsUpdate = true;
       activeLines.material.color.set("#ffffff");
       activeGlowMaterial.color.copy(new THREE.Color("#40e8ff").multiplyScalar(colorTheme === "dark" ? 3.2 : 2.15));
       activeGlowOuterMaterial.color.copy(new THREE.Color("#10c8ec").multiplyScalar(colorTheme === "dark" ? 2.25 : 1.55));
@@ -1289,8 +1261,7 @@
       composer.setSize(innerWidth, innerHeight);
       activeGlowMaterial.resolution.set(innerWidth, innerHeight);
       activeGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
-      relationGlowMaterial.resolution.set(innerWidth, innerHeight);
-      relationGlowOuterMaterial.resolution.set(innerWidth, innerHeight);
+      relationMistMaterial.resolution.set(innerWidth, innerHeight);
     });
 
     window.__ENTANGLEMENT_PROTOTYPE__ = {
