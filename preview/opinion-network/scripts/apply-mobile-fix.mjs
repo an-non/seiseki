@@ -56,15 +56,15 @@ const mobileCss = `@media (max-width:700px) {
       }
       .status { display:none; }
       .trace {
-        display:block; left:2px; right:auto; bottom:98px;
-        width:min(70vw,300px); height:min(18vh,145px); max-height:min(18vh,145px);
-        overflow:hidden; padding:0 2px; border:0; border-radius:0;
+        display:block; left:1px; right:auto; bottom:96px;
+        width:min(58vw,240px); height:min(13vh,105px); max-height:min(13vh,105px);
+        overflow:hidden; padding:0 1px; border:0; border-radius:0;
         background:transparent; box-shadow:none; backdrop-filter:none;
-        font-size:8px; line-height:1.26; opacity:.78; pointer-events:none;
+        font-size:7px; line-height:1.2; opacity:.72; pointer-events:none;
       }
-      .trace header { margin:0 0 2px; font-size:8px; line-height:1.15; }
+      .trace header { margin:0 0 1px; font-size:7px; line-height:1.1; }
       .trace header span:last-child { display:none; }
-      .trace pre { max-height:calc(18vh - 20px); overflow:hidden; }
+      .trace pre { max-height:calc(13vh - 16px); overflow:hidden; }
       .details {
         left:6px; right:6px; bottom:6px; width:calc(100% - 12px);
         min-height:0; max-height:86px; padding:6px 8px; overflow:auto;
@@ -135,7 +135,8 @@ html = html.replace(oldClick, newClick);
 if (!html.includes('const count = Math.max(240, Math.min(5000')) throw new Error("5000-node generation changed unexpectedly");
 if (!html.includes('setPointer(event);\n      hovered = hitFromPointer();')) throw new Error("tap raycast fix missing");
 if (!html.includes('const fitAllDistance = displayRadiusBounds.max')) throw new Error("fit-all zoom fix missing");
-if (!html.includes('display:block; left:2px; right:auto; bottom:98px')) throw new Error("mobile trace panel missing");
+if (!html.includes('display:block; left:1px; right:auto; bottom:96px')) throw new Error("mobile trace panel missing");
+if (!html.includes('width:min(58vw,240px); height:min(13vh,105px)')) throw new Error("compact trace dimensions missing");
 if (!html.includes('background:transparent; box-shadow:none; backdrop-filter:none;')) throw new Error("transparent trace style missing");
 if (html.includes('"IBM Plex Mono",Consolas,monospace')) throw new Error("legacy mono font remains");
 
