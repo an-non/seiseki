@@ -763,7 +763,7 @@ function currentPath() {
   return typeof window !== "undefined" && window.location ? window.location.pathname : "/";
 }
 
-const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=5000&seed=prototype-5000&theme=dark&rev=mobile-touch-v3";
+const QUANTUM_PREVIEW_URL = "https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-10000-scale-v1";
 
 function QuantumObservation() {
   return (
