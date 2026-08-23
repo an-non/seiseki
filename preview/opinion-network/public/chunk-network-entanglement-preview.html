@@ -40,7 +40,7 @@
     * { box-sizing:border-box; }
     html, body { width:100%; height:100%; margin:0; overflow:hidden; background:var(--paper); color:var(--ink); }
     body {
-      font-family:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+      font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",sans-serif;
       background-image:none;
     }
     button { font:inherit; letter-spacing:0; }
@@ -50,7 +50,7 @@
     h1 {
       margin:0;
       color:var(--ink);
-      font-family:"Shippori Mincho","Yu Mincho","Noto Serif JP",serif;
+      font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic",sans-serif;
       font-size:25px;
       letter-spacing:0;
       text-shadow:0 1px 12px rgba(44,84,145,.12);
@@ -99,7 +99,7 @@
       top:22px;
       right:24px;
       color:var(--sub);
-      font:11px/1.6 "IBM Plex Mono",Consolas,monospace;
+      font:11px/1.6 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
       text-align:right;
       white-space:pre-line;
       pointer-events:none;
@@ -123,7 +123,7 @@
     .details h2 { margin:0 0 4px; color:var(--ink); font-size:10px; line-height:1.35; }
     .details p { margin:0; color:var(--sub); font-size:8.5px; line-height:1.45; }
     .details .generated { color:var(--ink); font-size:9px; line-height:1.45; }
-    .details .result { margin-top:5px; color:var(--cyan); font:8px/1.38 "IBM Plex Mono",Consolas,monospace; }
+    .details .result { margin-top:5px; color:var(--cyan); font:8px/1.38 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace; }
     .details dl { display:grid; grid-template-columns:56px 1fr; gap:2px 6px; margin:6px 0 0; font-size:8.5px; line-height:1.4; }
     .details dt { color:var(--sub); }
     .details dd { margin:0; overflow-wrap:anywhere; }
@@ -142,7 +142,7 @@
       background:transparent;
       box-shadow:none;
       color:var(--trace);
-      font:8px/1.38 "IBM Plex Mono",Consolas,monospace;
+      font:8px/1.38 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
       text-shadow:none;
     }
     .trace header { position:static; display:flex; justify-content:flex-start; margin:0 0 4px; color:var(--cyan); font-size:8px; line-height:1.35; }
@@ -162,17 +162,41 @@
     }
     .loading[hidden] { display:none; }
     @media (max-width:700px) {
-      header { top:14px; left:15px; right:15px; }
-      h1 { font-size:20px; }
-      .legend { max-width:280px; gap:6px 10px; }
-      .controls { top:82px; left:14px; max-width:calc(100% - 28px); overflow-x:auto; }
-      .controls button { min-width:43px; padding:0 7px; }
-      .provenance { position:fixed; z-index:7; left:14px; top:124px; max-width:calc(100vw - 28px); padding:8px 10px; border:1px solid var(--rule); border-radius:9px; background:var(--panel); color:var(--sub); font-size:10px; line-height:1.4; backdrop-filter:blur(12px); }
-    .provenance strong { color:var(--ink); font-weight:650; }
-    .status { top:auto; right:13px; bottom:148px; font-size:9px; line-height:1.45; }
-      .status .optional { display:none; }
-      .details { right:11px; top:auto; bottom:11px; width:calc(100% - 22px); min-height:82px; max-height:106px; padding:8px 10px; }
-      .trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:8px 10px; }
+      html, body { font-size:16px; -webkit-text-size-adjust:100%; }
+      #scene, #scene canvas { touch-action:none; }
+      header { top:10px; left:12px; right:12px; }
+      h1 { font-size:17px; line-height:1.25; letter-spacing:.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .legend { max-width:calc(100vw - 24px); gap:5px 10px; margin-top:5px; font-size:10px; line-height:1.25; }
+      .controls {
+        top:59px; left:8px; right:8px; width:calc(100% - 16px); max-width:none;
+        display:flex; flex-wrap:nowrap; gap:2px; padding:3px;
+        overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;
+        scrollbar-width:none; border-radius:8px;
+      }
+      .controls::-webkit-scrollbar { display:none; }
+      .controls button {
+        flex:0 0 auto; min-width:44px; height:34px; padding:0 7px;
+        font-size:12px; line-height:1; white-space:nowrap; border-radius:6px;
+      }
+      .controls .observe { flex-basis:36px; min-width:36px; width:36px; font-size:18px; }
+      .controls .divider { flex:0 0 1px; margin:0 2px; }
+      .provenance {
+        left:8px; right:8px; top:101px; max-width:none; padding:6px 8px;
+        font-size:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+        pointer-events:none;
+      }
+      .status { display:none; }
+      .trace { display:none; }
+      .details {
+        left:8px; right:8px; bottom:8px; width:calc(100% - 16px);
+        min-height:0; max-height:88px; padding:7px 9px; overflow:auto;
+        border-radius:9px; -webkit-overflow-scrolling:touch;
+      }
+      .details h2 { margin:0 0 2px; font-size:11px; line-height:1.25; }
+      .details p, .details .generated { font-size:9px; line-height:1.3; }
+      .details .result { margin-top:3px; font-size:8px; line-height:1.25; }
+      .details dl { display:none; }
+      .loading { max-width:calc(100vw - 32px); text-align:center; font-size:11px; }
     }
   </style>
   <script type="importmap">
@@ -1141,7 +1165,12 @@
       pointer.set(2, 2);
       pointerDirty = true;
     });
-    renderer.domElement.addEventListener("click", () => {
+    renderer.domElement.addEventListener("click", (event) => {
+      /* iPhone/Safari has no hover before a normal tap. Resolve the hit from the
+         actual tap coordinates instead of depending on the previous pointermove. */
+      setPointer(event);
+      hovered = hitFromPointer();
+      pointerDirty = false;
       if (!hovered) return;
       selected = { ...hovered };
       if (selected.type === "root") observeAll();
