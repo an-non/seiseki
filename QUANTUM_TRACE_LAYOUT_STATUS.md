@@ -1,0 +1,13 @@
+# SEISEKI quantum trace layout hotfix
+- outcome: success
+- run_id: 32700467542
+- run_attempt: 1
+- mobile_trace_accumulation: restored
+- mobile_trace_auto_scroll: restored
+- desktop_trace_width: compact
+- desktop_epoch_label: hidden
+- desktop_details_panel: compact
+- production_quantum: https://seiseki-api.tokyo-odh-129.workers.dev/app/quantum
+- staging_quantum: https://seiseki-api-staging.tokyo-odh-129.workers.dev/app/quantum
+- quantum_generator: 10000/10000 unique synthetic nodes verified
+- d1_migrations: none
