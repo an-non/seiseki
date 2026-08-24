@@ -57,7 +57,7 @@ jobs:
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/quantum/chunk-network-entanglement-preview.html
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/quantum/quantum-entanglement-engine.mjs
           git show origin/feature/opinion-network-preview:preview/opinion-network/scripts/apply-trace-layout-fix.mjs > /tmp/apply-trace-layout-fix.mjs
-          node /tmp/apply-trace-layout-fix.mjs local/quantum/chunk-network-entanglement-preview.html || true
+          node /tmp/apply-trace-layout-fix.mjs local/quantum/chunk-network-entanglement-preview.html
           grep -q 'width:min(340px,calc(100% - 340px));' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'width:min(54vw,220px); height:min(24vh,168px);' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'traceEntries.slice(-48)' local/quantum/chunk-network-entanglement-preview.html
@@ -118,7 +118,7 @@ jobs:
           set -euo pipefail
           curl -fsS "$PRODUCTION_URL/api/health" > /tmp/prod-health.json
           curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
-          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v1" > /tmp/prod-quantum.html
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/prod-quantum.html
           grep -q 'width:min(340px,calc(100% - 340px));' /tmp/prod-quantum.html
           grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/prod-quantum.html
           grep -q 'traceEntries.slice(-48)' /tmp/prod-quantum.html
@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
           curl -fsS "$STAGING_URL/api/health" > /tmp/stage-health.json
           curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
-          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v1" > /tmp/stage-quantum.html
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/stage-quantum.html
           grep -q 'width:min(340px,calc(100% - 340px));' /tmp/stage-quantum.html
           grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/stage-quantum.html
           grep -q 'traceEntries.slice(-48)' /tmp/stage-quantum.html
