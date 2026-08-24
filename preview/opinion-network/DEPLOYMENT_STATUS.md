@@ -5,11 +5,16 @@
 - deployment_url: https://seiseki-opinion-network-preview.tokyo-odh-129.workers.dev
 - worker: seiseki-opinion-network-preview
 - source_branch: feature/opinion-network-preview
-- source_head: 26454681da928224ec49baec4a743ad32aaadaa1
+- source_head: 5704c3aefa63ea411e5f0f08df4cd924c967b38d
 - archived_glow_experiment: archive/quantum-relation-glow-20260823
 - runtime_three: 0.185.1
 - mobile_ui: enabled
 - mobile_tap_raycast: enabled
+- mobile_trace_accumulation: enabled
+- mobile_trace_auto_scroll: enabled
+- desktop_trace_compact: enabled
+- desktop_epoch_label_hidden: true
+- desktop_details_compact: enabled
 - mobile_fit_all_zoom: enabled
 - demo_count_default: 10000
 - spatial_scaling: existing-displayScale
