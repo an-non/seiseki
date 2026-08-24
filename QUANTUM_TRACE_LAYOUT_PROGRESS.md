@@ -1,0 +1,11 @@
+# SEISEKI quantum trace layout hotfix progress
+- outcome: incomplete
+- checkout: success
+- app_patch: success
+- quantum: failure
+- deps: skipped
+- prod: skipped
+- prod_smoke: skipped
+- staging: skipped
+- staging_smoke: skipped
+- record: skipped
