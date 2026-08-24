@@ -27,11 +27,11 @@ src = src.replace(
 
 /* Keep the 3D quantum renderer on the same origin as the app.  The previous
    cross-origin iframe depended on a second Worker and could be blank even when
-   the main production Worker was healthy.  Vite copies /public/quantum into
-   /quantum, so both staging and production can render the exact same artifact. */
+   the main production Worker was healthy.  The revision parameter is also a
+   deliberate cache-buster for the trace/layout renderer. */
 src = src.replace(
   /const QUANTUM_PREVIEW_URL = "[^"]+";/u,
-  'const QUANTUM_PREVIEW_URL = "/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1";'
+  'const QUANTUM_PREVIEW_URL = "/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2";'
 );
 
 src = src.replace(
@@ -44,7 +44,7 @@ src = src.replace(
 );
 
 if (!src.includes('count=10000&seed=prototype-10000')) throw new Error("quantum 10000-node URL missing");
-if (!src.includes('rev=quantum-embedded-v1')) throw new Error("embedded quantum cache revision missing");
+if (!src.includes('rev=trace-layout-v2')) throw new Error("embedded quantum cache revision missing");
 if (!src.includes('const QUANTUM_PREVIEW_URL = "/quantum/')) throw new Error("same-origin quantum URL missing");
 if (src.includes('seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html')) throw new Error("external quantum iframe dependency still present");
 if (src.includes('fonts.googleapis.com')) throw new Error("external Google font import still present");
