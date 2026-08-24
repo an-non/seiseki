@@ -7,6 +7,7 @@ on:
     paths:
       - preview/opinion-network/scripts/apply-mobile-fix.mjs
       - preview/opinion-network/scripts/restore-stable-relation-glow.mjs
+      - preview/opinion-network/scripts/apply-trace-layout-fix.mjs
       - .github/workflows/opinion-network-preview-redeploy.yml
   workflow_dispatch:
 
@@ -41,12 +42,13 @@ jobs:
           git checkout "$GOOD_COMMIT" -- "$FILE"
           test "$(git hash-object "$FILE")" = "$GOOD_BLOB"
 
-      - name: Apply mobile and 10000-node stable patch
+      - name: Apply mobile 10000-node and trace layout patches
         shell: bash
         run: |
           set -euo pipefail
           node preview/opinion-network/scripts/apply-mobile-fix.mjs
           node preview/opinion-network/scripts/restore-stable-relation-glow.mjs
+          node preview/opinion-network/scripts/apply-trace-layout-fix.mjs
           FILE=preview/opinion-network/public/chunk-network-entanglement-preview.html
           grep -q 'Math.min(10000' "$FILE"
           grep -q 'requested : 10000' "$FILE"
@@ -61,6 +63,10 @@ jobs:
           grep -q 'Hiragino Sans' "$FILE"
           grep -q 'loading.hidden = true' "$FILE"
           grep -q 'animate();' "$FILE"
+          grep -q 'width:min(340px,calc(100% - 340px));' "$FILE"
+          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' "$FILE"
+          grep -q 'traceEntries.slice(-48)' "$FILE"
+          grep -q 'traceState.textContent = "";' "$FILE"
           node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
           node --check preview/opinion-network/worker.mjs
 
@@ -72,7 +78,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/public/chunk-network-entanglement-preview.html
           if ! git diff --cached --quiet; then
-            git commit -m "Restore stable relation rendering after glow experiment"
+            git commit -m "Restore compact trace layout and scrolling"
             git push origin HEAD:feature/opinion-network-preview
           fi
 
@@ -132,6 +138,11 @@ jobs:
           - runtime_three: 0.185.1
           - mobile_ui: enabled
           - mobile_tap_raycast: enabled
+          - mobile_trace_accumulation: enabled
+          - mobile_trace_auto_scroll: enabled
+          - desktop_trace_compact: enabled
+          - desktop_epoch_label_hidden: true
+          - desktop_details_compact: enabled
           - mobile_fit_all_zoom: enabled
           - demo_count_default: 10000
           - spatial_scaling: existing-displayScale
@@ -145,6 +156,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add preview/opinion-network/DEPLOYMENT_STATUS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record stable quantum preview deployment"
+            git commit -m "Record compact quantum trace deployment"
             git push origin HEAD:feature/opinion-network-preview
           fi
