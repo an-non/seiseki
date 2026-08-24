@@ -116,11 +116,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "$PRODUCTION_URL/api/health" > /tmp/prod-health.json
-          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
-          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/prod-quantum.html
-          grep -q 'width:min(340px,calc(100% - 340px));' /tmp/prod-quantum.html
-          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/prod-quantum.html
+          curl -fSs --retry 4 --retry-delay 2 "$PRODUCTION_URL/api/health?cb=${GITHUB_RUN_ID}" > /tmp/prod-health.json
+          curl -fSs --retry 4 --retry-delay 2 "$PRODUCTION_URL/app/quantum?cb=${GITHUB_RUN_ID}" > /tmp/prod-quantum-route.html
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            curl -fSs "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2&cb=${GITHUB_RUN_ID}-${attempt}" > /tmp/prod-quantum.html
+            if grep -q 'width:min(340px,calc(100% - 340px));' /tmp/prod-quantum.html && grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/prod-quantum.html; then
+              ok=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo 'production quantum asset did not expose expected compact CSS markers'
+            grep -o 'width:min([^;]*' /tmp/prod-quantum.html | head -20 || true
+            exit 1
+          fi
 
       - name: Build and deploy staging
         id: staging
@@ -141,11 +152,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "$STAGING_URL/api/health" > /tmp/stage-health.json
-          curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
-          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/stage-quantum.html
-          grep -q 'width:min(340px,calc(100% - 340px));' /tmp/stage-quantum.html
-          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/stage-quantum.html
+          curl -fSs --retry 4 --retry-delay 2 "$STAGING_URL/api/health?cb=${GITHUB_RUN_ID}" > /tmp/stage-health.json
+          curl -fSs --retry 4 --retry-delay 2 "$STAGING_URL/app/quantum?cb=${GITHUB_RUN_ID}" > /tmp/stage-quantum-route.html
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            curl -fSs "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2&cb=${GITHUB_RUN_ID}-${attempt}" > /tmp/stage-quantum.html
+            if grep -q 'width:min(340px,calc(100% - 340px));' /tmp/stage-quantum.html && grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/stage-quantum.html; then
+              ok=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo 'staging quantum asset did not expose expected compact CSS markers'
+            grep -o 'width:min([^;]*' /tmp/stage-quantum.html | head -20 || true
+            exit 1
+          fi
 
       - name: Record success
         id: record
