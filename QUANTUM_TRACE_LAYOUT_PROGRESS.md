@@ -1,11 +1,13 @@
 # SEISEKI quantum trace layout hotfix progress
 - outcome: incomplete
+- run_id: 32700115846
+- run_attempt: 1
 - checkout: success
 - app_patch: success
 - quantum: success
 - deps: success
-- prod: failure
-- prod_smoke: skipped
+- prod: success
+- prod_smoke: failure
 - staging: skipped
 - staging_smoke: skipped
 - record: skipped
