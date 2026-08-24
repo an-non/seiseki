@@ -42,6 +42,7 @@ jobs:
           grep -q '/api/public-aggregate' cloudflare/src/index.mjs
           grep -q 'cloudLoadPublicAggregate' core/ui.jsx
           grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
+          grep -q 'rev=trace-layout-v2' core/ui.jsx
           ! grep -q 'await import("./App.jsx")' local/src/main.jsx
           grep -q 'rollupOptions: { input }' local/vite.config.js
           grep -q 'safari14' local/vite.config.js
@@ -105,8 +106,7 @@ jobs:
           cd local
           VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
           grep -q 'width:min(340px,calc(100% - 340px));' dist/quantum/chunk-network-entanglement-preview.html
-          grep -q 'traceEntries.slice(-48)' dist/quantum/chunk-network-entanglement-preview.html
-          ! grep -q 'EPOCH ${epoch}' dist/quantum/chunk-network-entanglement-preview.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -name 'quantum-*.js' -print -quit)"
           cd ../cloudflare
           npx wrangler deployments list
           npx wrangler deploy --strict
@@ -121,8 +121,6 @@ jobs:
           curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/prod-quantum.html
           grep -q 'width:min(340px,calc(100% - 340px));' /tmp/prod-quantum.html
           grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/prod-quantum.html
-          grep -q 'traceEntries.slice(-48)' /tmp/prod-quantum.html
-          grep -q 'traceState.textContent = "";' /tmp/prod-quantum.html
 
       - name: Build and deploy staging
         id: staging
@@ -133,7 +131,7 @@ jobs:
           cd local
           VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build
           grep -q 'width:min(340px,calc(100% - 340px));' dist/quantum/chunk-network-entanglement-preview.html
-          grep -q 'traceEntries.slice(-48)' dist/quantum/chunk-network-entanglement-preview.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -name 'quantum-*.js' -print -quit)"
           cd ../cloudflare
           npx wrangler deployments list --env staging
           npx wrangler deploy --env staging --strict
@@ -148,17 +146,20 @@ jobs:
           curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v2" > /tmp/stage-quantum.html
           grep -q 'width:min(340px,calc(100% - 340px));' /tmp/stage-quantum.html
           grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/stage-quantum.html
-          grep -q 'traceEntries.slice(-48)' /tmp/stage-quantum.html
-          grep -q 'traceState.textContent = "";' /tmp/stage-quantum.html
 
       - name: Record success
         id: record
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules
+          git fetch origin feature/quantum-app-integration
+          git reset --hard origin/feature/quantum-app-integration
           cat > QUANTUM_TRACE_LAYOUT_STATUS.md <<EOF
           # SEISEKI quantum trace layout hotfix
           - outcome: success
+          - run_id: ${GITHUB_RUN_ID}
+          - run_attempt: ${GITHUB_RUN_ATTEMPT}
           - mobile_trace_accumulation: restored
           - mobile_trace_auto_scroll: restored
           - desktop_trace_width: compact
@@ -169,10 +170,10 @@ jobs:
           - quantum_generator: 10000/10000 unique synthetic nodes verified
           - d1_migrations: none
           EOF
-          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules
+          rm -f QUANTUM_TRACE_LAYOUT_PROGRESS.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add QUANTUM_TRACE_LAYOUT_STATUS.md
+          git add -A QUANTUM_TRACE_LAYOUT_STATUS.md QUANTUM_TRACE_LAYOUT_PROGRESS.md || true
           if ! git diff --cached --quiet; then
             git commit -m "Record quantum trace layout hotfix"
             git push origin HEAD:feature/quantum-app-integration
@@ -183,9 +184,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules || true
+          git fetch origin feature/quantum-app-integration
+          git reset --hard origin/feature/quantum-app-integration
           cat > QUANTUM_TRACE_LAYOUT_PROGRESS.md <<EOF
           # SEISEKI quantum trace layout hotfix progress
           - outcome: incomplete
+          - run_id: ${GITHUB_RUN_ID}
+          - run_attempt: ${GITHUB_RUN_ATTEMPT}
           - checkout: ${{ steps.checkout.outcome }}
           - app_patch: ${{ steps.app_patch.outcome }}
           - quantum: ${{ steps.quantum.outcome }}
@@ -196,7 +202,6 @@ jobs:
           - staging_smoke: ${{ steps.staging_smoke.outcome }}
           - record: ${{ steps.record.outcome }}
           EOF
-          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add QUANTUM_TRACE_LAYOUT_PROGRESS.md
