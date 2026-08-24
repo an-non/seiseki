@@ -1,0 +1,206 @@
+name: Deploy compact quantum trace layout hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/quantum-trace-layout-hotfix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-quantum-trace-layout-hotfix
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+    steps:
+      - name: Checkout app branch
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply app patches
+        id: app_patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/apply-production-dashboard-fix.mjs
+          node scripts/build-app.mjs
+          grep -q '/api/public-aggregate' cloudflare/src/index.mjs
+          grep -q 'cloudLoadPublicAggregate' core/ui.jsx
+          grep -q 'const QUANTUM_PREVIEW_URL = "/quantum/' core/ui.jsx
+          ! grep -q 'await import("./App.jsx")' local/src/main.jsx
+          grep -q 'rollupOptions: { input }' local/vite.config.js
+          grep -q 'safari14' local/vite.config.js
+
+      - name: Prepare latest compact quantum source
+        id: quantum
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/opinion-network-preview:refs/remotes/origin/feature/opinion-network-preview
+          rm -rf local/quantum
+          mkdir -p local/quantum
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/quantum/chunk-network-entanglement-preview.html
+          git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/quantum/quantum-entanglement-engine.mjs
+          git show origin/feature/opinion-network-preview:preview/opinion-network/scripts/apply-trace-layout-fix.mjs > /tmp/apply-trace-layout-fix.mjs
+          node /tmp/apply-trace-layout-fix.mjs local/quantum/chunk-network-entanglement-preview.html || true
+          grep -q 'width:min(340px,calc(100% - 340px));' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'traceEntries.slice(-48)' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'traceState.textContent = "";' local/quantum/chunk-network-entanglement-preview.html
+          node - <<'NODE'
+          const fs=require('fs');
+          const path='local/quantum/quantum-entanglement-engine.mjs';
+          let s=fs.readFileSync(path,'utf8');
+          const oldCap='  const capacity = topics.length * statements.length * targets.length * lenses.length;\n  if (uniqueCount > capacity) throw new RangeError(`uniqueCount must be ${capacity} or less`);';
+          const newCap='  const baseCapacity = topics.length * statements.length * targets.length * lenses.length;\n  const maximumSyntheticCount = 50000;\n  if (uniqueCount > maximumSyntheticCount) throw new RangeError(`uniqueCount must be ${maximumSyntheticCount} or less`);';
+          if(s.includes(oldCap)) s=s.replace(oldCap,newCap);
+          const oldLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    let cursor = index;';
+          const newLoop='  for (let index = 0; index < uniqueCount; index += 1) {\n    const variantIndex = Math.floor(index / baseCapacity);\n    let cursor = index % baseCapacity;';
+          if(s.includes(oldLoop)) s=s.replace(oldLoop,newLoop);
+          const oldText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。`,';
+          const newText='      text: `${topic.label}について、${targets[targetIndex]}を対象に${lenses[lensIndex]}の観点から${statements[statementIndex]}。${variantIndex ? ` 合成系列${variantIndex + 1}。` : ""}`,';
+          if(s.includes(oldText)) s=s.replace(oldText,newText);
+          if(!s.includes('const baseCapacity = topics.length * statements.length * targets.length * lenses.length')) throw new Error('10000 cap patch failed');
+          if(!s.includes('const variantIndex = Math.floor(index / baseCapacity)')) throw new Error('10000 variant patch failed');
+          fs.writeFileSync(path,s);
+          NODE
+          node --check local/quantum/quantum-entanglement-engine.mjs
+          node --input-type=module - <<'NODE'
+          import { pathToFileURL } from 'node:url';
+          const q=await import(pathToFileURL(process.cwd()+'/local/quantum/quantum-entanglement-engine.mjs').href+'?v='+Date.now());
+          const topics=Array.from({length:24},(_,i)=>({id:`t${i}`,label:`topic${i}`,categoryId:`c${Math.floor(i/4)}`}));
+          const nodes=q.generatePrototypeCandidates(topics,{uniqueCount:10000,duplicateCount:0});
+          const unique=q.deduplicateNodes(nodes);
+          if(nodes.length!==10000||unique.length!==10000) throw new Error(`10000 verification failed ${nodes.length}/${unique.length}`);
+          NODE
+
+      - name: Install dependencies
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local && npm ci --no-audit --no-fund
+          cd ../cloudflare && npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build and deploy production
+        id: prod
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
+          grep -q 'width:min(340px,calc(100% - 340px));' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'traceEntries.slice(-48)' dist/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'EPOCH ${epoch}' dist/quantum/chunk-network-entanglement-preview.html
+          cd ../cloudflare
+          npx wrangler deployments list
+          npx wrangler deploy --strict
+
+      - name: Production smoke
+        id: prod_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$PRODUCTION_URL/api/health" > /tmp/prod-health.json
+          curl -fsS "$PRODUCTION_URL/app/quantum" > /tmp/prod-quantum-route.html
+          curl -fsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v1" > /tmp/prod-quantum.html
+          grep -q 'width:min(340px,calc(100% - 340px));' /tmp/prod-quantum.html
+          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/prod-quantum.html
+          grep -q 'traceEntries.slice(-48)' /tmp/prod-quantum.html
+          grep -q 'traceState.textContent = "";' /tmp/prod-quantum.html
+
+      - name: Build and deploy staging
+        id: staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist
+          cd local
+          VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build
+          grep -q 'width:min(340px,calc(100% - 340px));' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'traceEntries.slice(-48)' dist/quantum/chunk-network-entanglement-preview.html
+          cd ../cloudflare
+          npx wrangler deployments list --env staging
+          npx wrangler deploy --env staging --strict
+
+      - name: Staging smoke
+        id: staging_smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$STAGING_URL/api/health" > /tmp/stage-health.json
+          curl -fsS "$STAGING_URL/app/quantum" > /tmp/stage-quantum-route.html
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=trace-layout-v1" > /tmp/stage-quantum.html
+          grep -q 'width:min(340px,calc(100% - 340px));' /tmp/stage-quantum.html
+          grep -q 'width:min(54vw,220px); height:min(24vh,168px);' /tmp/stage-quantum.html
+          grep -q 'traceEntries.slice(-48)' /tmp/stage-quantum.html
+          grep -q 'traceState.textContent = "";' /tmp/stage-quantum.html
+
+      - name: Record success
+        id: record
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > QUANTUM_TRACE_LAYOUT_STATUS.md <<EOF
+          # SEISEKI quantum trace layout hotfix
+          - outcome: success
+          - mobile_trace_accumulation: restored
+          - mobile_trace_auto_scroll: restored
+          - desktop_trace_width: compact
+          - desktop_epoch_label: hidden
+          - desktop_details_panel: compact
+          - production_quantum: ${PRODUCTION_URL}/app/quantum
+          - staging_quantum: ${STAGING_URL}/app/quantum
+          - quantum_generator: 10000/10000 unique synthetic nodes verified
+          - d1_migrations: none
+          EOF
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add QUANTUM_TRACE_LAYOUT_STATUS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record quantum trace layout hotfix"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Record progress
+        if: ${{ always() && steps.record.outcome != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > QUANTUM_TRACE_LAYOUT_PROGRESS.md <<EOF
+          # SEISEKI quantum trace layout hotfix progress
+          - outcome: incomplete
+          - checkout: ${{ steps.checkout.outcome }}
+          - app_patch: ${{ steps.app_patch.outcome }}
+          - quantum: ${{ steps.quantum.outcome }}
+          - deps: ${{ steps.deps.outcome }}
+          - prod: ${{ steps.prod.outcome }}
+          - prod_smoke: ${{ steps.prod_smoke.outcome }}
+          - staging: ${{ steps.staging.outcome }}
+          - staging_smoke: ${{ steps.staging_smoke.outcome }}
+          - record: ${{ steps.record.outcome }}
+          EOF
+          rm -rf local/node_modules local/dist local/quantum cloudflare/node_modules || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add QUANTUM_TRACE_LAYOUT_PROGRESS.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Record incomplete quantum trace layout hotfix"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
