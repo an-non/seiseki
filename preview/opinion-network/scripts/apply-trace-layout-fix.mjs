@@ -150,7 +150,7 @@ replaceOnce(
 replaceOnce(
 `    function renderTraceHistory(activeEntry = "") {
       const completed = activeEntry ? traceEntries.slice(-23) : traceEntries.slice(-24);
-      traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\n\n");
+      traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\\n\\n");
       requestAnimationFrame(() => {
         const container = traceOutput.parentElement;
         container.scrollTop = container.scrollHeight;
@@ -158,7 +158,7 @@ replaceOnce(
     }`,
 `    function renderTraceHistory(activeEntry = "") {
       const completed = activeEntry ? traceEntries.slice(-47) : traceEntries.slice(-48);
-      traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\n\n");
+      traceOutput.textContent = [...completed, activeEntry].filter(Boolean).join("\\n\\n");
       requestAnimationFrame(() => {
         const container = traceOutput.parentElement;
         container.scrollTop = container.scrollHeight;
