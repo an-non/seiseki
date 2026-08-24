@@ -9,6 +9,16 @@ function replaceExact(oldText, newText, label) {
   html = html.replace(oldText, newText);
 }
 
+function replaceOneOf(oldTexts, newText, label) {
+  if (html.includes(newText)) return;
+  for (const oldText of oldTexts) {
+    if (!html.includes(oldText)) continue;
+    html = html.replace(oldText, newText);
+    return;
+  }
+  throw new Error(`${label} marker not found`);
+}
+
 replaceExact(
 `      font:9px/1.45 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;`,
 `      font:8px/1.38 ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;`,
@@ -84,7 +94,53 @@ replaceExact(
 "trace history retention"
 );
 
-replaceExact(
+replaceOneOf([
+`    async function processTraceQueue(generation) {
+      if (traceTyping) return;
+      traceTyping = true;
+      while (traceQueue.length && generation === traceGeneration) {
+        const entry = traceQueue.shift();
+        if (traceTypeDelay > 0) {
+          let activeEntry = "";
+          for (const character of entry) {
+            if (generation !== traceGeneration) break;
+            activeEntry += character;
+            renderTraceHistory(activeEntry);
+            await new Promise(resolve => setTimeout(resolve, traceTypeDelay));
+          }
+          if (generation !== traceGeneration) break;
+        }
+        traceEntries.push(entry);
+        if (traceEntries.length > 48) traceEntries.shift();
+        renderTraceHistory();
+      }
+      traceTyping = false;
+      if (traceQueue.length) void processTraceQueue(traceGeneration);
+    }`
+],
+`    async function processTraceQueue() {
+      if (traceTyping) return;
+      traceTyping = true;
+      while (traceQueue.length) {
+        const entry = traceQueue.shift();
+        if (traceTypeDelay > 0) {
+          let activeEntry = "";
+          for (const character of entry) {
+            activeEntry += character;
+            renderTraceHistory(activeEntry);
+            await new Promise(resolve => setTimeout(resolve, traceTypeDelay));
+          }
+        }
+        traceEntries.push(entry);
+        if (traceEntries.length > 48) traceEntries.shift();
+        renderTraceHistory();
+      }
+      traceTyping = false;
+    }`,
+"persistent typewriter queue"
+);
+
+replaceOneOf([
 `    function appendTrace(item, action) {
       traceState.textContent = "";
       traceSequence += 1;
@@ -102,9 +158,18 @@ replaceExact(
       traceTyping = false;
       traceQueue.push(formatTrace(item, action, traceSequence));
       void processTraceQueue(traceGeneration);
+    }`
+],
+`    function appendTrace(item, action) {
+      traceState.textContent = "";
+      traceSequence += 1;
+      traceQueue.push(formatTrace(item, action, traceSequence));
+      void processTraceQueue();
     }`,
-"restore typewriter trace"
+"accumulating selection trace"
 );
+
+html = html.replace(`    let traceGeneration = 0;\n`, "");
 
 const markers = [
   'font:8px/1.38 ui-monospace',
@@ -113,17 +178,21 @@ const markers = [
   '.trace::-webkit-scrollbar { display:none; }',
   'traceEntries.slice(-48)',
   'if (traceEntries.length > 48) traceEntries.shift();',
+  'while (traceQueue.length) {',
   'traceQueue.push(formatTrace(item, action, traceSequence));',
-  'void processTraceQueue(traceGeneration);',
+  'void processTraceQueue();',
   'for (const character of entry)',
   'activeEntry += character;',
   'requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });',
   'font-size:8.5px; line-height:1.35;',
-  'font-size:6.8px; line-height:1.15;'
+  'font-size:6.8px; line-height:1.15;',
+  'if (selected.type === "opinion") appendTrace(selected, "SELECT NODE");'
 ];
 
 const missing = markers.filter(marker => !html.includes(marker));
 if (missing.length) throw new Error(`trace/typewriter verification failed: ${missing.join(" | ")}`);
+if (html.includes('traceQueue.length = 0;')) throw new Error("selection trace queue must not be cleared");
+if (html.includes('generation !== traceGeneration')) throw new Error("selection trace must not cancel an in-flight entry");
 
 fs.writeFileSync(file, html);
-console.log(`typewriter trace + hidden scrollbars + smaller text applied: ${file}`);
+console.log(`queued per-selection typewriter trace + hidden scrollbars + smaller text applied: ${file}`);
