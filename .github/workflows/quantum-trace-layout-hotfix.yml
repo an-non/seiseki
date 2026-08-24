@@ -1,4 +1,4 @@
-name: Deploy quantum per-selection typewriter trace layout
+name: Deploy compact quantum overlay layout
 
 on:
   push:
@@ -46,7 +46,7 @@ jobs:
           grep -q 'rollupOptions: { input }' local/vite.config.js
           grep -q 'safari14' local/vite.config.js
 
-      - name: Prepare typewriter quantum source
+      - name: Prepare compact quantum source
         id: quantum
         shell: bash
         run: |
@@ -57,9 +57,13 @@ jobs:
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/chunk-network-entanglement-preview.html > local/quantum/chunk-network-entanglement-preview.html
           git show origin/feature/opinion-network-preview:preview/opinion-network/public/quantum-entanglement-engine.mjs > local/quantum/quantum-entanglement-engine.mjs
           git show origin/feature/opinion-network-preview:preview/opinion-network/scripts/apply-trace-layout-fix.mjs > /tmp/apply-trace-layout-fix.mjs
+          git show origin/feature/opinion-network-preview:preview/opinion-network/scripts/apply-compact-ui-density.mjs > /tmp/apply-compact-ui-density.mjs
           node /tmp/apply-trace-layout-fix.mjs local/quantum/chunk-network-entanglement-preview.html
-          grep -q 'font:8px/1.38 ui-monospace' local/quantum/chunk-network-entanglement-preview.html
-          grep -q 'font-size:6.5px; line-height:1.18;' local/quantum/chunk-network-entanglement-preview.html
+          node /tmp/apply-compact-ui-density.mjs local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'font:7px/1.3 ui-monospace' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(280px,calc(100% - 300px));' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(42vw,160px); height:min(15vh,96px);' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(58vw,220px);' local/quantum/chunk-network-entanglement-preview.html
           grep -q '.trace::-webkit-scrollbar { display:none; }' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'while (traceQueue.length) {' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'traceQueue.push(formatTrace(item, action, traceSequence));' local/quantum/chunk-network-entanglement-preview.html
@@ -111,8 +115,8 @@ jobs:
           set -euo pipefail
           cd local
           VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm run build
-          grep -q 'font:8px/1.38 ui-monospace' dist/quantum/chunk-network-entanglement-preview.html
-          grep -q 'font-size:6.5px; line-height:1.18;' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'font:7px/1.3 ui-monospace' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(42vw,160px); height:min(15vh,96px);' dist/quantum/chunk-network-entanglement-preview.html
           test -n "$(find dist/assets -maxdepth 1 -type f -name 'quantum-*.js' -print -quit)"
           cd ../cloudflare
           npx wrangler deploy --strict
@@ -125,7 +129,7 @@ jobs:
           curl -fLsS --retry 4 --retry-delay 2 "$PRODUCTION_URL/api/health?cb=${GITHUB_RUN_ID}" > /tmp/prod-health.json
           for attempt in 1 2 3 4 5; do
             curl -fLsS "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&theme=dark&cb=${GITHUB_RUN_ID}-${attempt}" > /tmp/prod-quantum.html
-            if grep -q 'font:8px/1.38 ui-monospace' /tmp/prod-quantum.html && grep -q 'font-size:6.5px; line-height:1.18;' /tmp/prod-quantum.html && grep -q '.trace::-webkit-scrollbar { display:none; }' /tmp/prod-quantum.html; then exit 0; fi
+            if grep -q 'font:7px/1.3 ui-monospace' /tmp/prod-quantum.html && grep -q 'width:min(42vw,160px); height:min(15vh,96px);' /tmp/prod-quantum.html && grep -q '.trace::-webkit-scrollbar { display:none; }' /tmp/prod-quantum.html; then exit 0; fi
             sleep 3
           done
           head -c 800 /tmp/prod-quantum.html || true
@@ -139,8 +143,8 @@ jobs:
           rm -rf local/dist
           cd local
           VITE_SEISEKI_API_BASE="$STAGING_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=staging npm run build
-          grep -q 'font:8px/1.38 ui-monospace' dist/quantum/chunk-network-entanglement-preview.html
-          grep -q 'font-size:6.5px; line-height:1.18;' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'font:7px/1.3 ui-monospace' dist/quantum/chunk-network-entanglement-preview.html
+          grep -q 'width:min(42vw,160px); height:min(15vh,96px);' dist/quantum/chunk-network-entanglement-preview.html
           cd ../cloudflare
           npx wrangler deploy --env staging --strict
 
@@ -152,7 +156,7 @@ jobs:
           curl -fLsS --retry 4 --retry-delay 2 "$STAGING_URL/api/health?cb=${GITHUB_RUN_ID}" > /tmp/stage-health.json
           for attempt in 1 2 3 4 5; do
             curl -fLsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&theme=dark&cb=${GITHUB_RUN_ID}-${attempt}" > /tmp/stage-quantum.html
-            if grep -q 'font:8px/1.38 ui-monospace' /tmp/stage-quantum.html && grep -q 'font-size:6.5px; line-height:1.18;' /tmp/stage-quantum.html && grep -q '.trace::-webkit-scrollbar { display:none; }' /tmp/stage-quantum.html; then exit 0; fi
+            if grep -q 'font:7px/1.3 ui-monospace' /tmp/stage-quantum.html && grep -q 'width:min(42vw,160px); height:min(15vh,96px);' /tmp/stage-quantum.html && grep -q '.trace::-webkit-scrollbar { display:none; }' /tmp/stage-quantum.html; then exit 0; fi
             sleep 3
           done
           head -c 800 /tmp/stage-quantum.html || true
@@ -177,7 +181,8 @@ jobs:
           - trace_accumulation: restored
           - trace_auto_scroll: enabled
           - visible_scrollbar: disabled
-          - quantum_text_size: reduced_web_and_mobile
+          - quantum_text_size: compact_web_extra_compact_mobile
+          - mobile_overlay_footprint: reduced_for_node_tapping
           - production_quantum: ${PRODUCTION_URL}/app/quantum
           - staging_quantum: ${STAGING_URL}/app/quantum
           - quantum_generator: 10000/10000 unique synthetic nodes verified
@@ -188,7 +193,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A QUANTUM_TRACE_LAYOUT_STATUS.md QUANTUM_TRACE_LAYOUT_PROGRESS.md || true
           if ! git diff --cached --quiet; then
-            git commit -m "Record quantum per-selection typewriter trace layout"
+            git commit -m "Record compact quantum overlay layout"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
@@ -219,6 +224,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add QUANTUM_TRACE_LAYOUT_PROGRESS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record incomplete quantum per-selection typewriter trace layout"
+            git commit -m "Record incomplete compact quantum overlay layout"
             git push origin HEAD:feature/quantum-app-integration
           fi
