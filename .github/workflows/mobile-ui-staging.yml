@@ -48,7 +48,7 @@ jobs:
           grep -q 'SFMono-Regular' core/ui.jsx
           grep -q 'font-synthesis: none' core/ui.jsx
           ! grep -q 'fonts.googleapis.com' core/ui.jsx
-          grep -q 'rev=quantum-stable-prodprep-v1' core/ui.jsx
+          grep -q 'rev=trace-layout-v2' core/ui.jsx
           grep -q 'count=10000&seed=prototype-10000' core/ui.jsx
           grep -q 'window.SEISEKI_RUNTIME_MODE === "staging"' core/ui.jsx
           grep -q 'VITE_SEISEKI_RUNTIME_MODE' local/src/main.jsx
@@ -86,7 +86,7 @@ jobs:
           test -s local/dist/index.html
           test -f local/dist/model/manifest.json
           grep -lq 'seiseki-api-staging' local/dist/assets/*.js
-          grep -lq 'quantum-stable-prodprep-v1' local/dist/assets/*.js
+          grep -lq 'trace-layout-v2' local/dist/assets/*.js
           grep -lq 'count=10000' local/dist/assets/*.js
           grep -lq 'seiseki-local-v1' local/dist/assets/*.js
           grep -lq 'staging' local/dist/assets/*.js
