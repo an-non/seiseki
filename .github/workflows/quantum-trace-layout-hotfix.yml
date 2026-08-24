@@ -1,4 +1,4 @@
-name: Deploy quantum typewriter trace layout
+name: Deploy quantum per-selection typewriter trace layout
 
 on:
   push:
@@ -61,10 +61,14 @@ jobs:
           grep -q 'font:8px/1.38 ui-monospace' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'font-size:6.5px; line-height:1.18;' local/quantum/chunk-network-entanglement-preview.html
           grep -q '.trace::-webkit-scrollbar { display:none; }' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'while (traceQueue.length) {' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'traceQueue.push(formatTrace(item, action, traceSequence));' local/quantum/chunk-network-entanglement-preview.html
+          grep -q 'void processTraceQueue();' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'for (const character of entry)' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'activeEntry += character;' local/quantum/chunk-network-entanglement-preview.html
           grep -q 'if (traceEntries.length > 48) traceEntries.shift();' local/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'traceQueue.length = 0;' local/quantum/chunk-network-entanglement-preview.html
+          ! grep -q 'generation !== traceGeneration' local/quantum/chunk-network-entanglement-preview.html
           node - <<'NODE'
           const fs=require('fs');
           const path='local/quantum/quantum-entanglement-engine.mjs';
@@ -169,6 +173,7 @@ jobs:
           - run_attempt: ${GITHUB_RUN_ATTEMPT}
           - mobile_typewriter_trace: restored
           - desktop_typewriter_trace: restored
+          - node_selection_trace: queued_every_selection
           - trace_accumulation: restored
           - trace_auto_scroll: enabled
           - visible_scrollbar: disabled
@@ -183,7 +188,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A QUANTUM_TRACE_LAYOUT_STATUS.md QUANTUM_TRACE_LAYOUT_PROGRESS.md || true
           if ! git diff --cached --quiet; then
-            git commit -m "Record quantum typewriter trace layout"
+            git commit -m "Record quantum per-selection typewriter trace layout"
             git push origin HEAD:feature/quantum-app-integration
           fi
 
@@ -214,6 +219,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add QUANTUM_TRACE_LAYOUT_PROGRESS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Record incomplete quantum typewriter trace layout"
+            git commit -m "Record incomplete quantum per-selection typewriter trace layout"
             git push origin HEAD:feature/quantum-app-integration
           fi
