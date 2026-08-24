@@ -2,9 +2,9 @@
 - outcome: incomplete
 - checkout: success
 - app_patch: success
-- quantum: failure
-- deps: skipped
-- prod: skipped
+- quantum: success
+- deps: success
+- prod: failure
 - prod_smoke: skipped
 - staging: skipped
 - staging_smoke: skipped
