@@ -1,0 +1,13 @@
+# SEISEKI quantum trace layout progress
+- outcome: incomplete
+- run_id: 32704807919
+- run_attempt: 1
+- checkout: success
+- app_patch: success
+- quantum: success
+- deps: success
+- prod: success
+- prod_smoke: success
+- staging: success
+- staging_smoke: failure
+- record: skipped
