@@ -27,6 +27,19 @@ jobs:
           cache-dependency-path: cloudflare/package-lock.json
       - name: Apply audit remediation
         run: node scripts/apply-response-audit-fixes.mjs
+      - name: Repair analysis replacement boundary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('cloudflare/src/analysis.mjs')
+          text = path.read_text(encoding='utf-8')
+          marker = '\n}\n\n\n}\n'
+          if text.endswith(marker):
+              text = text[:-len(marker)] + '\n}\n'
+          elif text.endswith('\n}\n\n}\n'):
+              text = text[:-len('\n}\n\n}\n')] + '\n}\n'
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Install
         working-directory: cloudflare
         run: npm ci --ignore-scripts --no-audit --no-fund
