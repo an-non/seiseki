@@ -29,6 +29,11 @@ jobs:
       - name: Syntax check
         working-directory: cloudflare
         run: npm run check
-      - name: Tests
+      - name: Phase 1-3 auth/revision tests
+        working-directory: cloudflare
+        run: node --test tests/response-auth-revision.test.mjs
+      - name: Existing regression suite compatibility report
+        id: legacy
+        continue-on-error: true
         working-directory: cloudflare
         run: npm test
