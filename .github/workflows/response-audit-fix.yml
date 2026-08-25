@@ -6,6 +6,7 @@ on:
       - feature/response-update-auth-revision-20260825
     paths:
       - scripts/apply-response-audit-fixes.mjs
+      - scripts/repair-response-audit-tests.mjs
       - .github/workflows/response-audit-fix.yml
   workflow_dispatch:
 
@@ -40,6 +41,8 @@ jobs:
               text = text[:-len('\n}\n\n}\n')] + '\n}\n'
           path.write_text(text, encoding='utf-8')
           PY
+      - name: Update regression expectations
+        run: node scripts/repair-response-audit-tests.mjs
       - name: Install
         working-directory: cloudflare
         run: npm ci --ignore-scripts --no-audit --no-fund
