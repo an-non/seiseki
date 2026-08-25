@@ -1,0 +1,33 @@
+name: Response audit inspect
+
+on:
+  push:
+    branches:
+      - feature/response-update-auth-revision-20260825
+    paths:
+      - .github/workflows/response-audit-inspect.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect UI auth call sites
+        run: |
+          grep -n -E 'cloudCreateInitialResponse|cloudLoadResponseAnalysis|cloudWaitForResponseAnalysis|cloudDeleteResponse|remoteId|session:current' core/ui.jsx || true
+          echo '--- cloud create callers ---'
+          grep -n -B 12 -A 24 'cloudCreateInitialResponse' core/ui.jsx || true
+          echo '--- delete callers ---'
+          grep -n -B 12 -A 24 'cloudDeleteResponse' core/ui.jsx || true
+      - name: Inspect analysis imports and tail
+        run: |
+          sed -n '1,45p' cloudflare/src/analysis.mjs
+          echo '--- tail ---'
+          sed -n '440,520p' cloudflare/src/analysis.mjs
+      - name: Inspect test migration fixtures
+        run: |
+          grep -R -n -A 10 -B 2 '0001_initial.sql' cloudflare/tests || true
