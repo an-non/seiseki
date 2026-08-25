@@ -1,4 +1,4 @@
-export async function insertPendingResponse(db, response, questionContext = [], manageTokenHash = null) {
+export async function insertPendingResponse(db, response, questionContext = [], manageTokenHash = null, accountId = null) {
   const statements = [
     db.prepare(`
       INSERT INTO responses (
@@ -53,7 +53,23 @@ export async function insertPendingResponse(db, response, questionContext = [], 
     `).bind(response.id, manageTokenHash, response.createdAt));
   }
 
-  await db.batch(statements);
+  if (accountId) {
+    statements.push(db.prepare(`
+      INSERT INTO account_responses (account_id, response_id, linked_at)
+      VALUES (?, ?, ?)
+    `).bind(accountId, response.id, response.createdAt));
+  }
+
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if (accountId && String(error?.message ?? "").toLowerCase().includes("unique")) {
+      const wrapped = new Error("RESPONSE_ALREADY_EXISTS");
+      wrapped.code = "RESPONSE_ALREADY_EXISTS";
+      throw wrapped;
+    }
+    throw error;
+  }
 }
 
 export async function getResponseMetadata(db, id) {
