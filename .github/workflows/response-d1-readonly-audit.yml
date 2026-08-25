@@ -31,16 +31,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          grep -q '"account_id": "5d1a16ce92c25012e162a15bf75a3609"' cloudflare/wrangler.jsonc
           grep -q '"database_name": "seiseki-db"' cloudflare/wrangler.jsonc
           grep -q '"database_id": "8ad5e023-3588-490c-ba61-3f180f8b2887"' cloudflare/wrangler.jsonc
           grep -q '"database_name": "seiseki-db-staging"' cloudflare/wrangler.jsonc
           grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' cloudflare/wrangler.jsonc
 
-      - name: Probe Cloudflare capability matrix without mutation
+      - name: Probe Cloudflare split-token capability matrix without mutation
         id: probe
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DB_API_TOKEN: ${{ secrets.DB_API }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
         run: |
@@ -59,13 +61,28 @@ jobs:
             ACCOUNT_MATCH=false
           fi
 
-          TOKEN_HTTP=$(curl -sS -o /tmp/cf-token.json -w '%{http_code}' \
+          if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then DEPLOY_TOKEN_PRESENT=true; else DEPLOY_TOKEN_PRESENT=false; fi
+          if [ -n "${DB_API_TOKEN:-}" ]; then DB_TOKEN_PRESENT=true; else DB_TOKEN_PRESENT=false; fi
+
+          DEPLOY_TOKEN_HTTP=$(curl -sS -o /tmp/cf-deploy-token.json -w '%{http_code}' \
             https://api.cloudflare.com/client/v4/user/tokens/verify \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" || true)
-          TOKEN_ACTIVE=$(node - <<'NODE'
+          DEPLOY_TOKEN_ACTIVE=$(node - <<'NODE'
           const fs = require('fs');
           try {
-            const x = JSON.parse(fs.readFileSync('/tmp/cf-token.json', 'utf8'));
+            const x = JSON.parse(fs.readFileSync('/tmp/cf-deploy-token.json', 'utf8'));
+            process.stdout.write(String(Boolean(x.success && x.result && x.result.status === 'active')));
+          } catch { process.stdout.write('false'); }
+          NODE
+          )
+
+          DB_TOKEN_HTTP=$(curl -sS -o /tmp/cf-db-token.json -w '%{http_code}' \
+            https://api.cloudflare.com/client/v4/user/tokens/verify \
+            -H "Authorization: Bearer ${DB_API_TOKEN}" || true)
+          DB_TOKEN_ACTIVE=$(node - <<'NODE'
+          const fs = require('fs');
+          try {
+            const x = JSON.parse(fs.readFileSync('/tmp/cf-db-token.json', 'utf8'));
             process.stdout.write(String(Boolean(x.success && x.result && x.result.status === 'active')));
           } catch { process.stdout.write('false'); }
           NODE
@@ -75,52 +92,85 @@ jobs:
           npx wrangler deployments list >/tmp/cf-deployments.out 2>/tmp/cf-deployments.err
           DEPLOYMENTS_EXIT=$?
           npx wrangler queues list >/tmp/cf-queues.out 2>/tmp/cf-queues.err
-          QUEUES_EXIT=$?
-          npx wrangler d1 list --json >/tmp/cf-d1-list.out 2>/tmp/cf-d1-list.err
+          CLOUDFLARE_API_TOKEN="$DB_API_TOKEN" npx wrangler d1 list --json >/tmp/cf-d1-list.out 2>/tmp/cf-d1-list.err
           D1_LIST_EXIT=$?
           set -e
 
           PROD_D1_HTTP=$(curl -sS -o /tmp/cf-prod-d1.json -w '%{http_code}' \
             "https://api.cloudflare.com/client/v4/accounts/${CONFIG_ACCOUNT_ID}/d1/database/8ad5e023-3588-490c-ba61-3f180f8b2887" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" || true)
+            -H "Authorization: Bearer ${DB_API_TOKEN}" || true)
           STAGING_D1_HTTP=$(curl -sS -o /tmp/cf-staging-d1.json -w '%{http_code}' \
             "https://api.cloudflare.com/client/v4/accounts/${CONFIG_ACCOUNT_ID}/d1/database/64468050-a8e5-4a5f-86a7-3dfca661df55" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" || true)
+            -H "Authorization: Bearer ${DB_API_TOKEN}" || true)
+
+          D1_IDENTITIES_MATCH=false
+          if [ "$D1_LIST_EXIT" -eq 0 ]; then
+            D1_IDENTITIES_MATCH=$(node - <<'NODE'
+          const fs = require('fs');
+          try {
+            const rows = JSON.parse(fs.readFileSync('/tmp/cf-d1-list.out', 'utf8'));
+            const prod = rows.find(x => x && x.name === 'seiseki-db');
+            const staging = rows.find(x => x && x.name === 'seiseki-db-staging');
+            const ok = (prod?.uuid || prod?.id) === '8ad5e023-3588-490c-ba61-3f180f8b2887'
+              && (staging?.uuid || staging?.id) === '64468050-a8e5-4a5f-86a7-3dfca661df55';
+            process.stdout.write(String(ok));
+          } catch { process.stdout.write('false'); }
+          NODE
+            )
+          fi
 
           echo "configured_account_matches_secret=${ACCOUNT_MATCH}"
-          echo "token_verify_http=${TOKEN_HTTP}"
-          echo "token_active=${TOKEN_ACTIVE}"
+          echo "deploy_token_present=${DEPLOY_TOKEN_PRESENT}"
+          echo "deploy_token_verify_http=${DEPLOY_TOKEN_HTTP}"
+          echo "deploy_token_active=${DEPLOY_TOKEN_ACTIVE}"
+          echo "db_token_present=${DB_TOKEN_PRESENT}"
+          echo "db_token_verify_http=${DB_TOKEN_HTTP}"
+          echo "db_token_active=${DB_TOKEN_ACTIVE}"
           echo "workers_deployments_exit=${DEPLOYMENTS_EXIT}"
           echo "queues_list_exit=${QUEUES_EXIT}"
-          echo "d1_list_exit=${D1_LIST_EXIT}"
+          echo "d1_list_via_db_token_exit=${D1_LIST_EXIT}"
+          echo "d1_identities_match_config=${D1_IDENTITIES_MATCH}"
           echo "production_d1_metadata_http=${PROD_D1_HTTP}"
           echo "staging_d1_metadata_http=${STAGING_D1_HTTP}"
 
           {
             echo "account_match=${ACCOUNT_MATCH}"
-            echo "token_http=${TOKEN_HTTP}"
-            echo "token_active=${TOKEN_ACTIVE}"
+            echo "deploy_token_present=${DEPLOY_TOKEN_PRESENT}"
+            echo "deploy_token_active=${DEPLOY_TOKEN_ACTIVE}"
+            echo "db_token_present=${DB_TOKEN_PRESENT}"
+            echo "db_token_active=${DB_TOKEN_ACTIVE}"
             echo "deployments_exit=${DEPLOYMENTS_EXIT}"
             echo "queues_exit=${QUEUES_EXIT}"
             echo "d1_list_exit=${D1_LIST_EXIT}"
+            echo "d1_identities_match=${D1_IDENTITIES_MATCH}"
             echo "prod_d1_http=${PROD_D1_HTTP}"
             echo "staging_d1_http=${STAGING_D1_HTTP}"
           } >> "$GITHUB_OUTPUT"
 
-          if [ "$ACCOUNT_MATCH" != true ] || [ "$TOKEN_HTTP" != 200 ] || [ "$TOKEN_ACTIVE" != true ]; then
-            echo "BLOCKED: base Cloudflare credential/account configuration is invalid"
+          if [ "$ACCOUNT_MATCH" != true ] || [ "$DEPLOY_TOKEN_PRESENT" != true ] || [ "$DB_TOKEN_PRESENT" != true ]; then
+            echo "BLOCKED: required Cloudflare credentials/account configuration is missing or mismatched"
             exit 1
           fi
 
-          if [ "$D1_LIST_EXIT" -ne 0 ] || [ "$PROD_D1_HTTP" != 200 ] || [ "$STAGING_D1_HTTP" != 200 ]; then
-            echo "BLOCKED: D1 capability is unavailable; SQL audit intentionally skipped"
+          if [ "$DEPLOY_TOKEN_HTTP" != 200 ] || [ "$DEPLOY_TOKEN_ACTIVE" != true ]; then
+            echo "BLOCKED: deploy token is inactive/invalid"
             exit 1
           fi
 
-      - name: Inspect production and staging D1 read-only
+          if [ "$DB_TOKEN_HTTP" != 200 ] || [ "$DB_TOKEN_ACTIVE" != true ]; then
+            echo "BLOCKED: dedicated DB_API token is inactive/invalid"
+            exit 1
+          fi
+
+          if [ "$D1_LIST_EXIT" -ne 0 ] || [ "$D1_IDENTITIES_MATCH" != true ] || [ "$PROD_D1_HTTP" != 200 ] || [ "$STAGING_D1_HTTP" != 200 ]; then
+            echo "BLOCKED: dedicated DB_API token cannot read the configured production + staging D1 resources; SQL audit intentionally skipped"
+            exit 1
+          fi
+
+      - name: Inspect production and staging D1 read-only with DB_API
         working-directory: cloudflare
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         shell: bash
         run: |
@@ -139,9 +189,8 @@ jobs:
             query "$db" "table list" "SELECT name, type FROM sqlite_master WHERE type IN ('table','index') ORDER BY type, name;"
             query "$db" "foreign key check" "PRAGMA foreign_key_check;"
             query "$db" "account duplicate count" "SELECT COUNT(*) AS duplicate_accounts FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1);"
-            query "$db" "account duplicate groups" "SELECT account_id, COUNT(*) AS response_count FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1 ORDER BY response_count DESC LIMIT 20;"
             query "$db" "row counts" "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM accounts) AS accounts, (SELECT COUNT(*) FROM account_responses) AS account_links, (SELECT COUNT(*) FROM analysis_runs) AS analysis_runs, (SELECT COUNT(*) FROM opinion_chunks) AS opinion_chunks;"
-            query "$db" "unlinked responses" "SELECT COUNT(*) AS responses_without_account_link FROM responses r LEFT JOIN account_responses ar ON ar.response_id = r.id WHERE ar.response_id IS NULL;"
+            query "$db" "responses without account link" "SELECT COUNT(*) AS responses_without_account_link FROM responses r LEFT JOIN account_responses ar ON ar.response_id = r.id WHERE ar.response_id IS NULL;"
             query "$db" "broken account links" "SELECT COUNT(*) AS broken_account_links FROM account_responses ar LEFT JOIN accounts a ON a.id=ar.account_id LEFT JOIN responses r ON r.id=ar.response_id WHERE a.id IS NULL OR r.id IS NULL;"
             query "$db" "responses schema" "PRAGMA table_info('responses');"
             query "$db" "analysis_runs schema" "PRAGMA table_info('analysis_runs');"
@@ -161,15 +210,19 @@ jobs:
             echo '### Response D1 read-only audit'
             echo
             echo '- Scope: production + staging D1'
-            echo '- Operation: capability probes + SELECT / PRAGMA only'
+            echo '- Operation: split-token capability probes + SELECT / PRAGMA only'
+            echo '- D1 credential: dedicated DB_API secret'
+            echo '- Worker/Queue credential: CLOUDFLARE_API_TOKEN secret'
             echo '- Migration applied: no'
             echo '- Worker deploy: no'
             echo '- Data mutation: no'
             echo "- account matches config: ${{ steps.probe.outputs.account_match || 'unknown' }}"
-            echo "- token active: ${{ steps.probe.outputs.token_active || 'unknown' }}"
+            echo "- deploy token active: ${{ steps.probe.outputs.deploy_token_active || 'unknown' }}"
+            echo "- DB token active: ${{ steps.probe.outputs.db_token_active || 'unknown' }}"
             echo "- Workers deployments probe exit: ${{ steps.probe.outputs.deployments_exit || 'unknown' }}"
             echo "- Queues list probe exit: ${{ steps.probe.outputs.queues_exit || 'unknown' }}"
-            echo "- D1 list probe exit: ${{ steps.probe.outputs.d1_list_exit || 'unknown' }}"
+            echo "- D1 list via DB_API exit: ${{ steps.probe.outputs.d1_list_exit || 'unknown' }}"
+            echo "- D1 identities match config: ${{ steps.probe.outputs.d1_identities_match || 'unknown' }}"
             echo "- production D1 metadata HTTP: ${{ steps.probe.outputs.prod_d1_http || 'unknown' }}"
             echo "- staging D1 metadata HTTP: ${{ steps.probe.outputs.staging_d1_http || 'unknown' }}"
           } >> "$GITHUB_STEP_SUMMARY"
