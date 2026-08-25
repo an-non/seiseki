@@ -1,0 +1,88 @@
+name: Response D1 read-only audit
+
+on:
+  push:
+    branches:
+      - feature/response-update-auth-revision-20260825
+    paths:
+      - .github/workflows/response-d1-readonly-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-response-d1-readonly-audit
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+
+      - name: Install Wrangler
+        working-directory: cloudflare
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify configured database identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"database_name": "seiseki-db"' cloudflare/wrangler.jsonc
+          grep -q '"database_id": "8ad5e023-3588-490c-ba61-3f180f8b2887"' cloudflare/wrangler.jsonc
+          grep -q '"database_name": "seiseki-db-staging"' cloudflare/wrangler.jsonc
+          grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' cloudflare/wrangler.jsonc
+
+      - name: Inspect production and staging D1 read-only
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          query() {
+            local db="$1"
+            local label="$2"
+            local sql="$3"
+            echo "===== ${db}: ${label} ====="
+            npx wrangler d1 execute "$db" --remote --command "$sql" --json
+          }
+
+          inspect_db() {
+            local db="$1"
+            query "$db" "table list" "SELECT name, type FROM sqlite_master WHERE type IN ('table','index') ORDER BY type, name;"
+            query "$db" "foreign key check" "PRAGMA foreign_key_check;"
+            query "$db" "account duplicate count" "SELECT COUNT(*) AS duplicate_accounts FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1);"
+            query "$db" "account duplicate groups" "SELECT account_id, COUNT(*) AS response_count FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1 ORDER BY response_count DESC LIMIT 20;"
+            query "$db" "row counts" "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM accounts) AS accounts, (SELECT COUNT(*) FROM account_responses) AS account_links, (SELECT COUNT(*) FROM analysis_runs) AS analysis_runs, (SELECT COUNT(*) FROM opinion_chunks) AS opinion_chunks;"
+            query "$db" "unlinked responses" "SELECT COUNT(*) AS responses_without_account_link FROM responses r LEFT JOIN account_responses ar ON ar.response_id = r.id WHERE ar.response_id IS NULL;"
+            query "$db" "broken account links" "SELECT COUNT(*) AS broken_account_links FROM account_responses ar LEFT JOIN accounts a ON a.id = ar.account_id LEFT JOIN responses r ON r.id = ar.response_id WHERE a.id IS NULL OR r.id IS NULL;"
+            query "$db" "responses schema" "PRAGMA table_info('responses');"
+            query "$db" "analysis_runs schema" "PRAGMA table_info('analysis_runs');"
+            query "$db" "account_responses indexes" "PRAGMA index_list('account_responses');"
+            query "$db" "analysis_runs indexes" "PRAGMA index_list('analysis_runs');"
+            query "$db" "migration tables" "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%migration%' ORDER BY name;"
+          }
+
+          inspect_db "seiseki-db"
+          inspect_db "seiseki-db-staging"
+
+      - name: Record audit gate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Response D1 read-only audit'
+            echo
+            echo '- Scope: production + staging D1'
+            echo '- Operation: SELECT / PRAGMA only'
+            echo '- Migration applied: no'
+            echo '- Worker deploy: no'
+            echo '- Data mutation: no'
+            echo '- Next gate: inspect duplicate/FK/schema results before applying 0006 to staging'
+          } >> "$GITHUB_STEP_SUMMARY"
