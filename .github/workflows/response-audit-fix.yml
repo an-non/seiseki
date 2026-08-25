@@ -1,0 +1,53 @@
+name: Apply response audit fixes
+
+on:
+  push:
+    branches:
+      - feature/response-update-auth-revision-20260825
+    paths:
+      - scripts/apply-response-audit-fixes.mjs
+      - .github/workflows/response-audit-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - name: Apply audit remediation
+        run: node scripts/apply-response-audit-fixes.mjs
+      - name: Install
+        working-directory: cloudflare
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check
+        working-directory: cloudflare
+        run: npm run check
+      - name: Full regression suite
+        working-directory: cloudflare
+        run: npm test
+      - name: Show diff
+        if: always()
+        run: git diff --stat && git diff -- cloudflare/migrations/0006_response_access_revision.sql cloudflare/src/db.mjs cloudflare/src/auth.mjs cloudflare/src/analysis.mjs cloudflare/src/index.mjs core/ui.jsx cloudflare/tests
+      - name: Commit remediated implementation
+        if: success()
+        run: |
+          git config user.name "SEISEKI audit remediation"
+          git config user.email "actions@users.noreply.github.com"
+          git add cloudflare/migrations/0006_response_access_revision.sql cloudflare/src/db.mjs cloudflare/src/auth.mjs cloudflare/src/analysis.mjs cloudflare/src/index.mjs core/ui.jsx cloudflare/tests
+          if git diff --cached --quiet; then
+            echo "No remediation changes to commit."
+            exit 0
+          fi
+          git commit -m "Fix audited response auth and revision races"
+          git push origin HEAD:feature/response-update-auth-revision-20260825
