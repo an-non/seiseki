@@ -183,7 +183,7 @@ async function handleCreateResponse(request, env, ctx) {
           }));
         }
       }
-      await analyzeStoredResponse(env, response.id);
+      await analyzeStoredResponse(env, response.id, 1);
     };
     ctx.waitUntil(dispatch().catch(error => {
       console.error(JSON.stringify({
@@ -327,7 +327,11 @@ export default {
           message.ack();
           continue;
         }
-        await analyzeStoredResponse(env, responseId);
+        const outcome = await analyzeStoredResponse(env, responseId, revision);
+        if (outcome?.status === "busy") {
+          message.retry({ delaySeconds: 30 });
+          continue;
+        }
         message.ack();
       } catch (error) {
         console.error(JSON.stringify({

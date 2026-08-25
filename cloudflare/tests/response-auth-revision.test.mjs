@@ -69,12 +69,12 @@ async function register(env, name) {
   return response.json();
 }
 
-async function createResponse(env, body = submission(), token = null) {
+async function createResponse(env, body = submission(), token = null, ctx = undefined) {
   const headers = { "content-type": "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
   return worker.fetch(new Request("http://local/api/responses", {
     method: "POST", headers, body: JSON.stringify(body)
-  }), env);
+  }), env, ctx);
 }
 
 test("anonymous response requires its one-time manage token for read and delete", async () => {
@@ -176,10 +176,13 @@ test("queue requires revision, ignores stale jobs, and deduplicates one revision
     AI_ANALYSIS_ENABLED: "true",
     ANALYSIS_QUEUE: { send: async body => { queued.push(body); } }
   };
-  const createdResponse = await createResponse(env);
+  const waits = [];
+  const createdResponse = await createResponse(env, submission(), null, {
+    waitUntil: promise => waits.push(promise)
+  });
   assert.equal(createdResponse.status, 201);
   const created = await createdResponse.json();
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await Promise.all(waits);
   assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]);
 
   let staleAck = 0;

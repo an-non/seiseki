@@ -1,6 +1,7 @@
 import {
   completeResponseAnalysis,
   getResponseForAnalysis,
+  renewAnalysisRunLease,
   startAnalysisRun
 } from "./db.mjs";
 
@@ -460,24 +461,35 @@ async function requestAiAnalysis(env, model, record, freeText) {
   throw lastError ?? new Error("AI_REQUEST_FAILED");
 }
 
-export async function analyzeStoredResponse(env, responseId) {
+export async function analyzeStoredResponse(env, responseId, expectedRevision = null) {
   const model = String(env.AI_MODEL || DEFAULT_MODEL);
   const record = await getResponseForAnalysis(env.DB, responseId);
-  if (!record || record.analysisStatus !== "pending") return;
-  const claimed = await startAnalysisRun(env.DB, responseId, ENGINE, model, PROMPT_VERSION);
-  if (!claimed) return;
+  if (!record || record.analysisStatus !== "pending") return { status: "done" };
+  const revision = expectedRevision == null ? Number(record.revision ?? 1) : Number(expectedRevision);
+  if (!Number.isInteger(revision) || revision < 1 || Number(record.revision ?? 1) !== revision) {
+    return { status: "stale" };
+  }
+  const leaseMs = Number(env.ANALYSIS_LEASE_MS || 300000);
+  const claim = await startAnalysisRun(env.DB, responseId, revision, ENGINE, model, PROMPT_VERSION, leaseMs);
+  if (!claim || claim.status !== "claimed") return claim || { status: "busy" };
+  const runId = claim.runId;
   const freeText = safeFreeText(record.freeText);
+  const finish = async (analysis, metadata) => {
+    const renewed = await renewAnalysisRunLease(env.DB, responseId, runId, revision, leaseMs);
+    if (!renewed) return { status: "stale", runId, revision };
+    const saved = await completeResponseAnalysis(env.DB, responseId, runId, revision, analysis, metadata);
+    return { status: saved ? "completed" : "stale", runId, revision };
+  };
   if (!freeText.trim()) {
-    await completeResponseAnalysis(env.DB, responseId, emptyAnalysis(freeText), {
+    return finish(emptyAnalysis(freeText), {
       engine: "rules-only-v1",
       model: "none",
       promptVersion: PROMPT_VERSION
     });
-    return;
   }
   try {
     const result = await requestAiAnalysis(env, model, record, freeText);
-    await completeResponseAnalysis(env.DB, responseId, result.analysis, {
+    return finish(result.analysis, {
       engine: ENGINE,
       model,
       promptVersion: PROMPT_VERSION,
@@ -486,12 +498,13 @@ export async function analyzeStoredResponse(env, responseId) {
   } catch (error) {
     const code = errorCode(error);
     const analysis = fallbackAnalysis(freeText);
-    await completeResponseAnalysis(env.DB, responseId, analysis, {
+    const outcome = await finish(analysis, {
       engine: analysis.engine,
       model: "none",
       promptVersion: PROMPT_VERSION,
       fallbackReason: code
     });
-    console.warn(JSON.stringify({ event: "analysis_fallback", responseId, errorCode: code }));
+    console.warn(JSON.stringify({ event: "analysis_fallback", responseId, revision, runId, errorCode: code }));
+    return outcome;
   }
 }

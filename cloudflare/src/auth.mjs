@@ -308,17 +308,15 @@ export async function deleteAccount(db, account, input) {
     throw new RequestError(401, "INVALID_CREDENTIALS", "current password is incorrect");
   }
 
-  const linked = await db.prepare(`
-    SELECT response_id AS responseId
-    FROM account_responses
-    WHERE account_id = ?
-  `).bind(account.id).all();
-  const statements = [];
-  for (const linkedRow of linked.results ?? []) {
-    statements.push(db.prepare("DELETE FROM responses WHERE id = ?").bind(linkedRow.responseId));
-  }
-  statements.push(db.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id));
-  await db.batch(statements);
+  await db.batch([
+    db.prepare(`
+      DELETE FROM responses
+      WHERE id IN (
+        SELECT response_id FROM account_responses WHERE account_id = ?
+      )
+    `).bind(account.id),
+    db.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id)
+  ]);
 }
 
 export async function linkResponseToAccount(db, accountId, responseId) {

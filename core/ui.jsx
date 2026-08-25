@@ -84,12 +84,35 @@ async function cloudCreateInitialResponse(resp, token) {
     },
     body: JSON.stringify(payload)
   });
-  return created && created.id ? created.id : null;
+  if (!created || !created.id) return null;
+  const result = {
+    id: String(created.id),
+    revision: Number(created.revision || 1),
+    manageToken: String(created.manageToken || "")
+  };
+  if (result.manageToken) {
+    await pSet("response-access:" + result.id, {
+      manageToken: result.manageToken,
+      createdAt: Date.now()
+    });
+  }
+  return result;
+}
+
+async function cloudResponseAuthHeaders(id) {
+  const headers = {};
+  const session = await pGet("session:current");
+  if (session && session.token) headers.authorization = "Bearer " + session.token;
+  const access = await pGet("response-access:" + id);
+  if (access && access.manageToken) headers["x-response-manage-token"] = access.manageToken;
+  return headers;
 }
 
 async function cloudLoadResponseAnalysis(id) {
   if (!cloudApiEnabled() || !id) return null;
-  const payload = await cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/analysis");
+  const payload = await cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/analysis", {
+    headers: await cloudResponseAuthHeaders(id)
+  });
   return normalizeCloudAnalysisResult(payload);
 }
 
@@ -270,10 +293,17 @@ function cloudRegistrationError(error) {
 async function cloudDeleteResponse(id) {
   if (!cloudApiEnabled() || !id) return true;
   try {
-    await cloudApiRequest("/api/responses/" + encodeURIComponent(id), { method: "DELETE" });
+    await cloudApiRequest("/api/responses/" + encodeURIComponent(id), {
+      method: "DELETE",
+      headers: await cloudResponseAuthHeaders(id)
+    });
+    await pDel("response-access:" + id);
     return true;
   } catch (e) {
-    if (e && e.status === 404) return true;
+    if (e && e.status === 404) {
+      await pDel("response-access:" + id);
+      return true;
+    }
     throw e;
   }
 }
@@ -1575,10 +1605,14 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let cloudAnalysisStatus = null;
     let cloudAnalysisMode = null;
     let remoteId = null;
-    /* 追記(seq=2)も同じ経路に載せる。解析はアカウントに紐付いたまま Cloudflare 側で行われる。 */
+    let remoteRevision = null;
+    /* Cloudflare作成結果には認可情報とrevisionが含まれる。匿名manage tokenはprivate scopeへ保存する。 */
     if (cloudApiEnabled()) {
       try {
-        remoteId = await cloudCreateInitialResponse(base, session && session.token);
+        const createdRemote = await cloudCreateInitialResponse(base, session && session.token);
+        remoteId = createdRemote && createdRemote.id;
+        remoteRevision = createdRemote && createdRemote.revision;
+        if (!remoteId) throw new Error("Cloudflare response id was not returned");
         const remote = await cloudWaitForResponseAnalysis(remoteId);
         cloudAnalysisStatus = remote.status;
         cloudAnalysisMode = remote.mode;
@@ -1624,6 +1658,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       analysis,
       analysisSource: analysisSource,
       remoteId: remoteId,
+      ...(remoteRevision ? { remoteRevision: remoteRevision } : {}),
       ...(remoteId ? { cloudAnalysisStatus: cloudAnalysisStatus || "pending" } : {}),
       ...(remoteId && cloudAnalysisMode ? { cloudAnalysisMode: cloudAnalysisMode } : {})
     };

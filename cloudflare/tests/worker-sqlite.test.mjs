@@ -55,7 +55,7 @@ class D1DatabaseAdapter {
 
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql"]) {
     const migration = readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
     database.exec(migration);
   }
@@ -111,7 +111,9 @@ test("Worker API stores a pending response and cascades its deletion", async () 
   assert.equal(database.prepare("SELECT count(*) AS count FROM response_questions WHERE response_id = ?").get(created.id).count, 3);
   assert.equal(database.prepare("SELECT count(*) AS count FROM opinion_chunks WHERE response_id = ?").get(created.id).count, 0);
 
-  const metadata = await worker.fetch(new Request(`http://local/api/responses/${created.id}`), env);
+  const metadata = await worker.fetch(new Request(`http://local/api/responses/${created.id}`, {
+    headers: { "x-response-manage-token": created.manageToken }
+  }), env);
   assert.equal(metadata.status, 200);
   assert.equal((await metadata.json()).analysisStatus, "pending");
 
@@ -128,7 +130,8 @@ test("Worker API stores a pending response and cascades its deletion", async () 
   });
 
   const remove = await worker.fetch(new Request(`http://local/api/responses/${created.id}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: { "x-response-manage-token": created.manageToken }
   }), env);
   assert.equal(remove.status, 204);
   assert.equal(database.prepare("SELECT count(*) AS count FROM responses").get().count, 0);
@@ -406,7 +409,9 @@ test("Workers AI output is validated and stored as neutral opinion chunks", asyn
     body: JSON.stringify(submission())
   }), env, ctx);
   assert.equal(create.status, 201);
-  const responseId = (await create.json()).id;
+  const createdPayload = await create.json();
+  const responseId = createdPayload.id;
+  const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
   await Promise.all(pending);
 
   const prompt = aiRequest.messages.find(message => message.role === "user").content;
@@ -416,7 +421,7 @@ test("Workers AI output is validated and stored as neutral opinion chunks", asyn
   assert.match(prompt, /1=財政支出を拡大し再分配を強化すべき \.\.\. 5=財政健全化と市場活力を優先すべき/u);
   assert.equal(prompt.includes("[論点分割候補"), false);
 
-  const analysisResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`), env);
+  const analysisResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`, { headers: responseAuthHeaders }), env);
   assert.equal(analysisResponse.status, 200);
   const analysis = await analysisResponse.json();
   assert.equal(analysis.analysisStatus, "completed");
@@ -445,10 +450,12 @@ test("Workers AI failures complete with deterministic rule fallback", async () =
     headers: { "content-type": "application/json" },
     body: JSON.stringify(submission())
   }), env, ctx);
-  const responseId = (await create.json()).id;
+  const createdPayload = await create.json();
+  const responseId = createdPayload.id;
+  const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
   await Promise.allSettled(pending);
 
-  const response = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`), env);
+  const response = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`, { headers: responseAuthHeaders }), env);
   const analysis = await response.json();
   assert.equal(analysis.analysisStatus, "completed");
   assert.equal(analysis.analysis.engine, "rules-fallback-v1");
@@ -478,7 +485,9 @@ test("rule fallback redacts contact details from stored public summaries", async
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   }), env, ctx);
-  const responseId = (await create.json()).id;
+  const createdPayload = await create.json();
+  const responseId = createdPayload.id;
+  const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
   await Promise.all(pending);
   const summaries = database.prepare("SELECT summary FROM opinion_chunks WHERE response_id = ? ORDER BY id").all(responseId);
   const stored = summaries.map(row => row.summary).join(" ");
@@ -519,9 +528,11 @@ test("Workers AI retries once before storing a valid result", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(submission())
   }), env, ctx);
-  const responseId = (await create.json()).id;
+  const createdPayload = await create.json();
+  const responseId = createdPayload.id;
+  const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
   await Promise.all(pending);
-  const stored = await (await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`), env)).json();
+  const stored = await (await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`, { headers: responseAuthHeaders }), env)).json();
   assert.equal(calls, 2);
   assert.equal(stored.analysisStatus, "completed");
   assert.equal(stored.analysis.engine, "workers-ai-hybrid-v1");
@@ -554,11 +565,13 @@ test("analysis queue defers processing and the consumer completes it", async () 
     headers: { "content-type": "application/json" },
     body: JSON.stringify(submission())
   }), env, ctx);
-  const responseId = (await create.json()).id;
+  const createdPayload = await create.json();
+  const responseId = createdPayload.id;
+  const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
   await Promise.all(pending);
-  assert.deepEqual(queued, [{ type: "analyze-response", responseId }]);
+  assert.deepEqual(queued, [{ type: "analyze-response", responseId, revision: 1 }]);
   assert.equal(database.prepare("SELECT analysis_status FROM responses WHERE id = ?").get(responseId).analysis_status, "pending");
-  const waitingResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`), env);
+  const waitingResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`, { headers: responseAuthHeaders }), env);
   const waitingAnalysis = await waitingResponse.json();
   assert.equal(waitingAnalysis.analysisStatus, "pending");
   assert.equal(waitingAnalysis.analysis, null);
@@ -573,7 +586,7 @@ test("analysis queue defers processing and the consumer completes it", async () 
   }] }, env);
   assert.equal(acknowledged, true);
   assert.equal(database.prepare("SELECT analysis_status FROM responses WHERE id = ?").get(responseId).analysis_status, "completed");
-  const completedResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`), env);
+  const completedResponse = await worker.fetch(new Request(`http://local/api/responses/${responseId}/analysis`, { headers: responseAuthHeaders }), env);
   const completedAnalysis = await completedResponse.json();
   assert.equal(completedAnalysis.analysisStatus, "completed");
   assert.equal(completedAnalysis.analysis.chunks.length, 1);
@@ -616,9 +629,10 @@ test("duplicate queue deliveries claim one analysis run and create one node set"
   const responseId = (await created.json()).id;
   await Promise.all(pending);
 
+  let retries = 0;
   const message = () => ({
     id: crypto.randomUUID(), body: queued[0], attempts: 1,
-    ack() {}, retry() { throw new Error("unexpected retry"); }
+    ack() {}, retry() { retries += 1; }
   });
   await Promise.all([
     worker.queue({ messages: [message()] }, env),
@@ -626,6 +640,7 @@ test("duplicate queue deliveries claim one analysis run and create one node set"
   ]);
 
   assert.equal(aiCalls, 1);
+  assert.equal(retries, 1);
   assert.equal(database.prepare("SELECT count(*) AS count FROM analysis_runs WHERE response_id = ?").get(responseId).count, 1);
   assert.equal(database.prepare("SELECT count(*) AS count FROM opinion_chunks WHERE response_id = ?").get(responseId).count, 1);
   assert.equal(database.prepare("SELECT analysis_status FROM responses WHERE id = ?").get(responseId).analysis_status, "completed");

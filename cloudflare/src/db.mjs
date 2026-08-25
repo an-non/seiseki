@@ -63,7 +63,10 @@ export async function insertPendingResponse(db, response, questionContext = [], 
   try {
     await db.batch(statements);
   } catch (error) {
-    if (accountId && String(error?.message ?? "").toLowerCase().includes("unique")) {
+    const message = String(error?.message ?? "").toLowerCase();
+    const accountConflict = message.includes("account_responses.account_id")
+      || message.includes("account_responses_account_unique");
+    if (accountId && accountConflict) {
       const wrapped = new Error("RESPONSE_ALREADY_EXISTS");
       wrapped.code = "RESPONSE_ALREADY_EXISTS";
       throw wrapped;
@@ -120,126 +123,161 @@ export async function getResponseForAnalysis(db, id) {
   };
 }
 
-export async function startAnalysisRun(db, responseId, engine, model, promptVersion) {
+export async function startAnalysisRun(db, responseId, expectedRevision, engine, model, promptVersion, leaseMs = 300000) {
+  const revision = Number(expectedRevision);
+  if (!Number.isInteger(revision) || revision < 1) return { status: "stale" };
   const current = await db.prepare(`
     SELECT revision, analysis_status AS analysisStatus
     FROM responses
     WHERE id = ?
   `).bind(responseId).first();
-  if (!current || current.analysisStatus !== "pending") return false;
-  const revision = Number(current.revision ?? 1);
+  if (!current || current.analysisStatus !== "pending" || Number(current.revision ?? 1) !== revision) {
+    return { status: "stale" };
+  }
+
+  const now = Date.now();
+  const leaseUntil = now + Math.max(30000, Math.min(900000, Number(leaseMs) || 300000));
+  const running = await db.prepare(`
+    SELECT id, lease_until AS leaseUntil
+    FROM analysis_runs
+    WHERE response_id = ? AND response_revision = ? AND status = 'running'
+    ORDER BY id DESC LIMIT 1
+  `).bind(responseId, revision).first();
+  if (running && Number(running.leaseUntil ?? 0) > now) {
+    return { status: "busy", runId: Number(running.id), revision, leaseUntil: Number(running.leaseUntil) };
+  }
+  if (running) {
+    await db.prepare(`
+      UPDATE analysis_runs
+      SET status = 'failed', completed_at = ?, error_code = 'LEASE_EXPIRED'
+      WHERE id = ? AND status = 'running' AND COALESCE(lease_until, 0) <= ?
+    `).bind(now, running.id, now).run();
+  }
+
   try {
-    const result = await db.prepare(`
+    await db.prepare(`
       INSERT INTO analysis_runs (
-        response_id, engine, model, prompt_version, status, started_at, response_revision
+        response_id, engine, model, prompt_version, status, started_at, response_revision, lease_until
       )
-      SELECT ?, ?, ?, ?, 'running', ?, ?
+      SELECT ?, ?, ?, ?, 'running', ?, ?, ?
       WHERE EXISTS (
         SELECT 1 FROM responses
         WHERE id = ? AND analysis_status = 'pending' AND revision = ?
-      ) AND NOT EXISTS (
-        SELECT 1 FROM analysis_runs
-        WHERE response_id = ? AND response_revision = ?
       )
     `).bind(
-      responseId, engine, model, promptVersion, Date.now(), revision,
-      responseId, revision, responseId, revision
+      responseId, engine, model, promptVersion, now, revision, leaseUntil,
+      responseId, revision
     ).run();
-    return Number(result.meta?.changes ?? 0) > 0;
   } catch (error) {
-    if (String(error?.message ?? "").toLowerCase().includes("unique")) return false;
+    const message = String(error?.message ?? "").toLowerCase();
+    if (message.includes("unique") || message.includes("analysis_runs_response_revision_running_unique")) {
+      return { status: "busy", revision };
+    }
     throw error;
   }
-}
 
-async function latestRunningRun(db, responseId) {
-  return db.prepare(`
-    SELECT id, response_revision AS responseRevision
+  const claimed = await db.prepare(`
+    SELECT id, lease_until AS leaseUntil
     FROM analysis_runs
-    WHERE response_id = ? AND status = 'running'
+    WHERE response_id = ? AND response_revision = ? AND status = 'running'
     ORDER BY id DESC LIMIT 1
-  `).bind(responseId).first();
+  `).bind(responseId, revision).first();
+  return claimed
+    ? { status: "claimed", runId: Number(claimed.id), revision, leaseUntil: Number(claimed.leaseUntil) }
+    : { status: "busy", revision };
 }
 
-async function markRunStale(db, runId) {
+export async function renewAnalysisRunLease(db, responseId, runId, expectedRevision, leaseMs = 300000) {
+  const now = Date.now();
+  const leaseUntil = now + Math.max(30000, Math.min(900000, Number(leaseMs) || 300000));
+  const result = await db.prepare(`
+    UPDATE analysis_runs
+    SET lease_until = ?
+    WHERE id = ? AND response_id = ? AND response_revision = ?
+      AND status = 'running' AND COALESCE(lease_until, 0) >= ?
+      AND EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ? AND analysis_status = 'pending')
+  `).bind(leaseUntil, runId, responseId, expectedRevision, now, responseId, expectedRevision).run();
+  return Number(result.meta?.changes ?? 0) > 0;
+}
+
+async function markRunStale(db, runId, errorCode = "STALE_REVISION") {
   if (!runId) return;
   await db.prepare(`
     UPDATE analysis_runs
-    SET status = 'failed', completed_at = ?, error_code = 'STALE_REVISION'
+    SET status = 'failed', completed_at = ?, error_code = ?, lease_until = NULL
     WHERE id = ? AND status = 'running'
-  `).bind(Date.now(), runId).run();
+  `).bind(Date.now(), errorCode, runId).run();
 }
 
-export async function completeResponseAnalysis(db, responseId, analysis, metadata) {
-  const run = await latestRunningRun(db, responseId);
-  const currentRevision = await getResponseRevision(db, responseId);
-  const runRevision = Number(run?.responseRevision ?? NaN);
-  if (!run || currentRevision == null || !Number.isFinite(runRevision) || runRevision !== currentRevision) {
-    await markRunStale(db, run?.id);
-    return false;
-  }
-
+export async function completeResponseAnalysis(db, responseId, runId, expectedRevision, analysis, metadata) {
+  const revision = Number(expectedRevision);
   const completedAt = Date.now();
+  const guardSql = `EXISTS (
+    SELECT 1
+    FROM responses r
+    JOIN analysis_runs ar ON ar.id = ?
+    WHERE r.id = ? AND r.revision = ?
+      AND ar.response_id = r.id AND ar.response_revision = ?
+      AND ar.status = 'running' AND COALESCE(ar.lease_until, 0) >= ?
+  )`;
   const statements = [
-    db.prepare("DELETE FROM opinion_chunks WHERE response_id = ?").bind(responseId),
     db.prepare(`
       UPDATE responses
       SET analysis_status = 'completed', analysis_json = ?
-      WHERE id = ? AND revision = ?
-    `).bind(JSON.stringify(analysis), responseId, runRevision)
+      WHERE id = ? AND revision = ? AND ${guardSql}
+    `).bind(JSON.stringify(analysis), responseId, revision, runId, responseId, revision, revision, completedAt),
+    db.prepare(`
+      DELETE FROM opinion_chunks
+      WHERE response_id = ? AND ${guardSql}
+    `).bind(responseId, runId, responseId, revision, revision, completedAt)
   ];
   for (const chunk of analysis.chunks) {
     statements.push(db.prepare(`
       INSERT INTO opinion_chunks (
         response_id, created_at, summary, category, topic,
         target_type, target_name, emotion, criticality, fact_status, provenance_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE ${guardSql}
     `).bind(
-      responseId,
-      completedAt,
-      chunk.s,
-      chunk.cat,
-      chunk.topic,
-      chunk.tt,
-      chunk.tn,
-      chunk.emo,
-      chunk.crit,
-      chunk.fact,
-      JSON.stringify({ ...metadata, responseRevision: runRevision })
+      responseId, completedAt, chunk.s, chunk.cat, chunk.topic,
+      chunk.tt, chunk.tn, chunk.emo, chunk.crit, chunk.fact,
+      JSON.stringify({ ...metadata, responseRevision: revision, analysisRunId: runId }),
+      runId, responseId, revision, revision, completedAt
     ));
   }
   statements.push(db.prepare(`
     UPDATE analysis_runs
-    SET status = 'completed', completed_at = ?, error_code = NULL
-    WHERE id = ? AND response_revision = ? AND status = 'running'
-  `).bind(completedAt, run.id, runRevision));
-  await db.batch(statements);
-  return true;
+    SET status = 'completed', completed_at = ?, error_code = NULL, lease_until = NULL
+    WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
+      AND EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)
+  `).bind(completedAt, runId, responseId, revision, responseId, revision));
+  const results = await db.batch(statements);
+  const updated = Number(results?.[0]?.meta?.changes ?? 0) > 0;
+  if (!updated) await markRunStale(db, runId);
+  return updated;
 }
 
-export async function failResponseAnalysis(db, responseId, errorCode) {
+export async function failResponseAnalysis(db, responseId, runId, expectedRevision, errorCode) {
+  const revision = Number(expectedRevision);
   const completedAt = Date.now();
-  const run = await latestRunningRun(db, responseId);
-  if (!run) return false;
-  const currentRevision = await getResponseRevision(db, responseId);
-  const runRevision = Number(run.responseRevision ?? NaN);
-  if (currentRevision == null || !Number.isFinite(runRevision) || runRevision !== currentRevision) {
-    await markRunStale(db, run.id);
-    return false;
-  }
-  await db.batch([
+  const results = await db.batch([
     db.prepare(`
       UPDATE responses
       SET analysis_status = 'failed', analysis_json = NULL
       WHERE id = ? AND revision = ?
-    `).bind(responseId, runRevision),
+        AND EXISTS (
+          SELECT 1 FROM analysis_runs
+          WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
+        )
+    `).bind(responseId, revision, runId, responseId, revision),
     db.prepare(`
       UPDATE analysis_runs
-      SET status = 'failed', completed_at = ?, error_code = ?
-      WHERE id = ? AND response_revision = ? AND status = 'running'
-    `).bind(completedAt, String(errorCode || "ANALYSIS_FAILED").slice(0, 80), run.id, runRevision)
+      SET status = 'failed', completed_at = ?, error_code = ?, lease_until = NULL
+      WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
+    `).bind(completedAt, String(errorCode || "ANALYSIS_FAILED").slice(0, 80), runId, responseId, revision)
   ]);
-  return true;
+  return Number(results?.[0]?.meta?.changes ?? 0) > 0;
 }
 
 export async function getResponseAnalysis(db, id) {
