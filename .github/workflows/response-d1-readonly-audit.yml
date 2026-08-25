@@ -204,6 +204,197 @@ jobs:
           inspect_db "seiseki-db"
           inspect_db "seiseki-db-staging"
 
+      - name: Investigate staging duplicate-response shape without identifiers or bodies
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          query() {
+            local label="$1"
+            local sql="$2"
+            echo "===== seiseki-db-staging duplicate cause: ${label} ====="
+            npx wrangler d1 execute seiseki-db-staging --remote --command "$sql" --json
+          }
+
+          query "duplicate group-size distribution" "
+            WITH dup AS (
+              SELECT account_id, COUNT(*) AS response_count
+              FROM account_responses
+              GROUP BY account_id
+              HAVING COUNT(*) > 1
+            )
+            SELECT response_count, COUNT(*) AS account_groups
+            FROM dup
+            GROUP BY response_count
+            ORDER BY response_count;"
+
+          query "duplicate-linked response structural shape" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            ), linked AS (
+              SELECT ar.account_id, r.id AS response_id, r.created_at, r.app_version,
+                     r.analysis_status, r.demo_flag, r.free_text,
+                     length(trim(COALESCE(r.free_text, ''))) AS free_len,
+                     (SELECT COUNT(*) FROM answers a WHERE a.response_id = r.id) AS answer_count,
+                     CASE WHEN COALESCE(trim(r.age), '') = ''
+                                AND COALESCE(trim(r.gender), '') = ''
+                                AND COALESCE(trim(r.region), '') = ''
+                                AND COALESCE(trim(r.occupation), '') = ''
+                                AND COALESCE(trim(r.party), '') = ''
+                          THEN 1 ELSE 0 END AS empty_demo
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            )
+            SELECT COUNT(*) AS linked_responses,
+                   SUM(CASE WHEN answer_count > 0 THEN 1 ELSE 0 END) AS survey_shaped,
+                   SUM(CASE WHEN answer_count = 0 AND empty_demo = 1 AND free_len > 0 THEN 1 ELSE 0 END) AS addendum_shaped,
+                   SUM(CASE WHEN answer_count = 0 AND free_len = 0 THEN 1 ELSE 0 END) AS empty_submission_shaped,
+                   SUM(CASE WHEN demo_flag = 1 THEN 1 ELSE 0 END) AS demo_rows
+            FROM linked;"
+
+          query "per-account structural pattern" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            ), linked AS (
+              SELECT ar.account_id, r.id AS response_id, r.created_at,
+                     length(trim(COALESCE(r.free_text, ''))) AS free_len,
+                     (SELECT COUNT(*) FROM answers a WHERE a.response_id = r.id) AS answer_count,
+                     CASE WHEN COALESCE(trim(r.age), '') = ''
+                                AND COALESCE(trim(r.gender), '') = ''
+                                AND COALESCE(trim(r.region), '') = ''
+                                AND COALESCE(trim(r.occupation), '') = ''
+                                AND COALESCE(trim(r.party), '') = ''
+                          THEN 1 ELSE 0 END AS empty_demo
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            ), per_account AS (
+              SELECT account_id,
+                     COUNT(*) AS response_count,
+                     SUM(CASE WHEN answer_count > 0 THEN 1 ELSE 0 END) AS survey_shaped,
+                     SUM(CASE WHEN answer_count = 0 AND empty_demo = 1 AND free_len > 0 THEN 1 ELSE 0 END) AS addendum_shaped,
+                     MIN(created_at) AS first_at,
+                     MAX(created_at) AS last_at
+              FROM linked
+              GROUP BY account_id
+            )
+            SELECT response_count, survey_shaped, addendum_shaped, COUNT(*) AS account_groups
+            FROM per_account
+            GROUP BY response_count, survey_shaped, addendum_shaped
+            ORDER BY response_count, survey_shaped, addendum_shaped;"
+
+          query "response position pattern within duplicate accounts" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            ), linked AS (
+              SELECT ar.account_id, r.id AS response_id, r.created_at,
+                     length(trim(COALESCE(r.free_text, ''))) AS free_len,
+                     (SELECT COUNT(*) FROM answers a WHERE a.response_id = r.id) AS answer_count,
+                     CASE WHEN COALESCE(trim(r.age), '') = ''
+                                AND COALESCE(trim(r.gender), '') = ''
+                                AND COALESCE(trim(r.region), '') = ''
+                                AND COALESCE(trim(r.occupation), '') = ''
+                                AND COALESCE(trim(r.party), '') = ''
+                          THEN 1 ELSE 0 END AS empty_demo
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            ), ranked AS (
+              SELECT *, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY created_at, response_id) AS position
+              FROM linked
+            )
+            SELECT position, COUNT(*) AS rows_at_position,
+                   SUM(CASE WHEN answer_count > 0 THEN 1 ELSE 0 END) AS survey_shaped,
+                   SUM(CASE WHEN answer_count = 0 AND empty_demo = 1 AND free_len > 0 THEN 1 ELSE 0 END) AS addendum_shaped
+            FROM ranked
+            GROUP BY position
+            ORDER BY position;"
+
+          query "time-span buckets per duplicate account" "
+            WITH dup AS (
+              SELECT ar.account_id,
+                     COUNT(*) AS response_count,
+                     MIN(r.created_at) AS first_at,
+                     MAX(r.created_at) AS last_at
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              GROUP BY ar.account_id
+              HAVING COUNT(*) > 1
+            )
+            SELECT CASE
+                     WHEN last_at - first_at <= 10000 THEN '<=10s'
+                     WHEN last_at - first_at <= 60000 THEN '10s-1m'
+                     WHEN last_at - first_at <= 300000 THEN '1m-5m'
+                     WHEN last_at - first_at <= 3600000 THEN '5m-1h'
+                     WHEN last_at - first_at <= 86400000 THEN '1h-1d'
+                     ELSE '>1d'
+                   END AS span_bucket,
+                   COUNT(*) AS account_groups
+            FROM dup
+            GROUP BY span_bucket
+            ORDER BY MIN(last_at - first_at);"
+
+          query "duplicate-linked response day and shape" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            ), linked AS (
+              SELECT ar.account_id, r.id AS response_id, r.created_at,
+                     length(trim(COALESCE(r.free_text, ''))) AS free_len,
+                     (SELECT COUNT(*) FROM answers a WHERE a.response_id = r.id) AS answer_count,
+                     CASE WHEN COALESCE(trim(r.age), '') = ''
+                                AND COALESCE(trim(r.gender), '') = ''
+                                AND COALESCE(trim(r.region), '') = ''
+                                AND COALESCE(trim(r.occupation), '') = ''
+                                AND COALESCE(trim(r.party), '') = ''
+                          THEN 1 ELSE 0 END AS empty_demo
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            )
+            SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') AS utc_day,
+                   COUNT(*) AS linked_responses,
+                   SUM(CASE WHEN answer_count > 0 THEN 1 ELSE 0 END) AS survey_shaped,
+                   SUM(CASE WHEN answer_count = 0 AND empty_demo = 1 AND free_len > 0 THEN 1 ELSE 0 END) AS addendum_shaped
+            FROM linked
+            GROUP BY utc_day
+            ORDER BY utc_day;"
+
+          query "duplicate-linked app version and analysis status" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            )
+            SELECT r.app_version, r.analysis_status, COUNT(*) AS linked_responses
+            FROM account_responses ar
+            JOIN responses r ON r.id = ar.response_id
+            WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            GROUP BY r.app_version, r.analysis_status
+            ORDER BY r.app_version, r.analysis_status;"
+
+          query "pairwise exact free-text repetition without exposing text" "
+            WITH dup_accounts AS (
+              SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1
+            ), linked AS (
+              SELECT ar.account_id, r.id AS response_id, r.created_at, r.free_text
+              FROM account_responses ar
+              JOIN responses r ON r.id = ar.response_id
+              WHERE ar.account_id IN (SELECT account_id FROM dup_accounts)
+            ), pairs AS (
+              SELECT a.account_id,
+                     ABS(b.created_at - a.created_at) AS gap_ms,
+                     CASE WHEN COALESCE(a.free_text, '') = COALESCE(b.free_text, '') THEN 1 ELSE 0 END AS same_free
+              FROM linked a
+              JOIN linked b ON b.account_id = a.account_id AND b.response_id > a.response_id
+            )
+            SELECT COUNT(*) AS pair_count,
+                   SUM(same_free) AS same_free_pairs,
+                   SUM(CASE WHEN same_free = 1 AND gap_ms <= 10000 THEN 1 ELSE 0 END) AS rapid_same_free_pairs
+            FROM pairs;"
+
       - name: Record audit gate summary
         if: always()
         shell: bash
@@ -218,6 +409,7 @@ jobs:
             echo '- Migration applied: no'
             echo '- Worker deploy: no'
             echo '- Data mutation: no'
+            echo '- Duplicate-cause diagnostics: aggregate only; no account IDs or response bodies emitted'
             echo "- account matches config: ${{ steps.probe.outputs.account_match || 'unknown' }}"
             echo "- deploy token active: ${{ steps.probe.outputs.deploy_token_active || 'unknown' }}"
             echo "- DB token active: ${{ steps.probe.outputs.db_token_active || 'unknown' }}"
