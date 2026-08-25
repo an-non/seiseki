@@ -29,14 +29,16 @@ exact(
 );
 
 // Preserve the anonymous one-time token in AI tests instead of discarding the create payload.
-text = text.replaceAll(
+for (const waitExpression of ["Promise.all(pending)", "Promise.allSettled(pending)"]) {
+  text = text.replaceAll(
 `  const responseId = (await create.json()).id;
-  await Promise.all(pending);`,
+  await ${waitExpression};`,
 `  const createdPayload = await create.json();
   const responseId = createdPayload.id;
   const responseAuthHeaders = { "x-response-manage-token": createdPayload.manageToken };
-  await Promise.all(pending);`
-);
+  await ${waitExpression};`
+  );
+}
 
 text = text.replaceAll(
 `new Request(\`http://local/api/responses/\${responseId}/analysis\`), env)`,
