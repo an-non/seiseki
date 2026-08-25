@@ -8,9 +8,10 @@ import {
 import { getResponseAnalysis } from "./db.mjs";
 import {
   authenticateRequest,
+  authorizeResponseAccess,
+  createResponseManageToken,
   deleteAccount,
   getAccount,
-  linkResponseToAccount,
   listAccountResponses,
   loginAccount,
   logoutAccount,
@@ -43,7 +44,7 @@ function corsHeaders(origin) {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "Authorization, Content-Type",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Response-Manage-Token",
     "access-control-max-age": "86400",
     "vary": "Origin"
   };
@@ -104,9 +105,6 @@ async function verifyTurnstile(body, request, env) {
     return;
   }
 
-  /* Optional mode allows the current release client to submit without a widget.
-     If a token is supplied, it is still verified so the browser flow can be added
-     incrementally before enforcement is switched on. */
   if (!token) {
     if (required) throw new RequestError(400, "TURNSTILE_REQUIRED", "Turnstile token is required");
     return;
@@ -139,24 +137,48 @@ async function handleCreateResponse(request, env, ctx) {
   if (!validateAnswersAgainstQuestions(normalized.answers, questions, normalized.demoFlag)) {
     throw new RequestError(400, "INVALID_ANSWER", "answers do not match the active questions");
   }
+
   const account = await authenticateRequest(env.DB, request, false);
+  if (account) {
+    const current = await getAccount(env.DB, account);
+    if (current?.account?.responseId) {
+      throw new RequestError(409, "RESPONSE_ALREADY_EXISTS", "this account already has an active response");
+    }
+  }
+
+  const manageAccess = account ? null : await createResponseManageToken();
   const response = {
     ...normalized,
     id: createResponseId(),
     createdAt: Date.now()
   };
-  await insertPendingResponse(env.DB, response, snapshotQuestions(questions));
-  if (account) await linkResponseToAccount(env.DB, account.id, response.id);
+
+  try {
+    await insertPendingResponse(
+      env.DB,
+      response,
+      snapshotQuestions(questions),
+      manageAccess?.tokenHash ?? null,
+      account?.id ?? null
+    );
+  } catch (error) {
+    if (error?.code === "RESPONSE_ALREADY_EXISTS" || String(error?.message ?? "") === "RESPONSE_ALREADY_EXISTS") {
+      throw new RequestError(409, "RESPONSE_ALREADY_EXISTS", "this account already has an active response");
+    }
+    throw error;
+  }
+
   if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() === "true" && ctx) {
     const dispatch = async () => {
       if (env.ANALYSIS_QUEUE?.send) {
         try {
-          await env.ANALYSIS_QUEUE.send({ type: "analyze-response", responseId: response.id });
+          await env.ANALYSIS_QUEUE.send({ type: "analyze-response", responseId: response.id, revision: 1 });
           return;
         } catch (error) {
           console.error(JSON.stringify({
             event: "analysis_enqueue_failed",
             responseId: response.id,
+            revision: 1,
             error: String(error?.message ?? "unknown").slice(0, 160)
           }));
         }
@@ -167,14 +189,18 @@ async function handleCreateResponse(request, env, ctx) {
       console.error(JSON.stringify({
         event: "analysis_failed",
         responseId: response.id,
+        revision: 1,
         error: String(error?.message ?? "unknown").slice(0, 160)
       }));
     }));
   }
+
   return json({
     id: response.id,
+    revision: 1,
     status: "stored",
-    analysisStatus: "pending"
+    analysisStatus: "pending",
+    ...(manageAccess ? { manageToken: manageAccess.token } : {})
   }, 201);
 }
 
@@ -236,6 +262,7 @@ async function handleRequest(request, env, ctx) {
 
   const analysisId = routeAnalysisId(url.pathname);
   if (analysisId && request.method === "GET") {
+    await authorizeResponseAccess(env.DB, request, analysisId);
     const analysis = await getResponseAnalysis(env.DB, analysisId);
     if (!analysis) throw new RequestError(404, "NOT_FOUND", "response was not found");
     return json(analysis);
@@ -243,11 +270,13 @@ async function handleRequest(request, env, ctx) {
 
   const id = routeId(url.pathname);
   if (id && request.method === "GET") {
+    await authorizeResponseAccess(env.DB, request, id);
     const response = await getResponseMetadata(env.DB, id);
     if (!response) throw new RequestError(404, "NOT_FOUND", "response was not found");
     return json(response);
   }
   if (id && request.method === "DELETE") {
+    await authorizeResponseAccess(env.DB, request, id);
     const deleted = await deleteResponse(env.DB, id);
     if (!deleted) throw new RequestError(404, "NOT_FOUND", "response was not found");
     return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
@@ -280,18 +309,31 @@ export default {
     for (const message of batch.messages) {
       const body = message.body;
       const responseId = body?.type === "analyze-response" ? String(body.responseId ?? "") : "";
-      if (!/^r_[A-Za-z0-9_-]{12,62}$/u.test(responseId)) {
+      const revision = Number(body?.revision);
+      if (!/^r_[A-Za-z0-9_-]{12,62}$/u.test(responseId) || !Number.isInteger(revision) || revision < 1) {
         console.warn(JSON.stringify({ event: "analysis_queue_invalid_message", messageId: message.id }));
         message.ack();
         continue;
       }
       try {
+        const current = await getResponseMetadata(env.DB, responseId);
+        if (!current || Number(current.revision ?? 1) !== revision) {
+          console.warn(JSON.stringify({
+            event: "analysis_queue_stale_message",
+            responseId,
+            queuedRevision: revision,
+            currentRevision: current ? Number(current.revision ?? 1) : null
+          }));
+          message.ack();
+          continue;
+        }
         await analyzeStoredResponse(env, responseId);
         message.ack();
       } catch (error) {
         console.error(JSON.stringify({
           event: "analysis_queue_failed",
           responseId,
+          revision,
           error: String(error?.message ?? "unknown").slice(0, 160)
         }));
         message.retry({ delaySeconds: Math.min(60, Math.max(1, Number(message.attempts ?? 1) * 5)) });
