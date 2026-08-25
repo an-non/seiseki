@@ -36,6 +36,59 @@ jobs:
           grep -q '"database_name": "seiseki-db-staging"' cloudflare/wrangler.jsonc
           grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' cloudflare/wrangler.jsonc
 
+      - name: Diagnose Cloudflare credential scope without exposing secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG_ACCOUNT_ID=$(node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('cloudflare/wrangler.jsonc', 'utf8');
+          const match = text.match(/"account_id"\s*:\s*"([^"]+)"/);
+          process.stdout.write(match ? match[1] : '');
+          NODE
+          )
+          test -n "$CONFIG_ACCOUNT_ID"
+
+          if [ "${CLOUDFLARE_ACCOUNT_ID:-}" = "$CONFIG_ACCOUNT_ID" ]; then
+            echo "configured_account_matches_secret=true"
+          else
+            echo "configured_account_matches_secret=false"
+            echo "BLOCKED: CLOUDFLARE_ACCOUNT_ID secret does not match wrangler.jsonc account_id"
+            exit 1
+          fi
+
+          TOKEN_HTTP=$(curl -sS -o /tmp/cf-token.json -w '%{http_code}' \
+            https://api.cloudflare.com/client/v4/user/tokens/verify \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          TOKEN_ACTIVE=$(node - <<'NODE'
+          const fs = require('fs');
+          try {
+            const x = JSON.parse(fs.readFileSync('/tmp/cf-token.json', 'utf8'));
+            process.stdout.write(String(Boolean(x.success && x.result && x.result.status === 'active')));
+          } catch {
+            process.stdout.write('false');
+          }
+          NODE
+          )
+          echo "token_verify_http=${TOKEN_HTTP}"
+          echo "token_active=${TOKEN_ACTIVE}"
+          if [ "$TOKEN_HTTP" != "200" ] || [ "$TOKEN_ACTIVE" != "true" ]; then
+            echo "BLOCKED: Cloudflare API token is not active/valid for API access"
+            exit 1
+          fi
+
+          D1_HTTP=$(curl -sS -o /tmp/cf-d1.json -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/${CONFIG_ACCOUNT_ID}/d1/database/8ad5e023-3588-490c-ba61-3f180f8b2887" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          echo "production_d1_metadata_http=${D1_HTTP}"
+          if [ "$D1_HTTP" != "200" ]; then
+            echo "BLOCKED: token/account cannot read configured production D1 metadata"
+            exit 1
+          fi
+
       - name: Inspect production and staging D1 read-only
         working-directory: cloudflare
         env:
@@ -61,7 +114,7 @@ jobs:
             query "$db" "account duplicate groups" "SELECT account_id, COUNT(*) AS response_count FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1 ORDER BY response_count DESC LIMIT 20;"
             query "$db" "row counts" "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM accounts) AS accounts, (SELECT COUNT(*) FROM account_responses) AS account_links, (SELECT COUNT(*) FROM analysis_runs) AS analysis_runs, (SELECT COUNT(*) FROM opinion_chunks) AS opinion_chunks;"
             query "$db" "unlinked responses" "SELECT COUNT(*) AS responses_without_account_link FROM responses r LEFT JOIN account_responses ar ON ar.response_id = r.id WHERE ar.response_id IS NULL;"
-            query "$db" "broken account links" "SELECT COUNT(*) AS broken_account_links FROM account_responses ar LEFT JOIN accounts a ON a.id = ar.account_id LEFT JOIN responses r ON r.id = ar.response_id WHERE a.id IS NULL OR r.id IS NULL;"
+            query "$db" "broken account links" "SELECT COUNT(*) AS broken_account_links FROM account_responses ar LEFT JOIN accounts a ON a.id=ar.account_id LEFT JOIN responses r ON r.id=ar.response_id WHERE a.id IS NULL OR r.id IS NULL;"
             query "$db" "responses schema" "PRAGMA table_info('responses');"
             query "$db" "analysis_runs schema" "PRAGMA table_info('analysis_runs');"
             query "$db" "account_responses indexes" "PRAGMA index_list('account_responses');"
@@ -84,5 +137,5 @@ jobs:
             echo '- Migration applied: no'
             echo '- Worker deploy: no'
             echo '- Data mutation: no'
-            echo '- Next gate: inspect duplicate/FK/schema results before applying 0006 to staging'
+            echo '- Next gate: inspect credential/duplicate/FK/schema results before applying 0006 to staging'
           } >> "$GITHUB_STEP_SUMMARY"
