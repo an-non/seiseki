@@ -1,3 +1,4 @@
+# Refreshed DB_API verification rerun: 2026-08-25
 name: Response D1 read-only audit
 
 on:
@@ -92,6 +93,7 @@ jobs:
           npx wrangler deployments list >/tmp/cf-deployments.out 2>/tmp/cf-deployments.err
           DEPLOYMENTS_EXIT=$?
           npx wrangler queues list >/tmp/cf-queues.out 2>/tmp/cf-queues.err
+          QUEUES_EXIT=$?
           CLOUDFLARE_API_TOKEN="$DB_API_TOKEN" npx wrangler d1 list --json >/tmp/cf-d1-list.out 2>/tmp/cf-d1-list.err
           D1_LIST_EXIT=$?
           set -e
