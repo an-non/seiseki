@@ -126,6 +126,44 @@ async function accountPayload(db, account, session = null) {
   };
 }
 
+export async function createResponseManageToken() {
+  const token = randomToken();
+  return { token, tokenHash: await sha256Hex(token) };
+}
+
+export async function accountOwnsResponse(db, accountId, responseId) {
+  if (!accountId || !responseId) return false;
+  const row = await db.prepare(`
+    SELECT 1 AS found
+    FROM account_responses
+    WHERE account_id = ? AND response_id = ?
+    LIMIT 1
+  `).bind(accountId, responseId).first();
+  return row?.found === 1;
+}
+
+export async function authorizeResponseAccess(db, request, responseId) {
+  const account = await authenticateRequest(db, request, false);
+  if (account && await accountOwnsResponse(db, account.id, responseId)) {
+    return { kind: "account", account };
+  }
+
+  const token = String(request.headers.get("x-response-manage-token") ?? "").trim();
+  if (/^[A-Za-z0-9_-]{40,64}$/u.test(token)) {
+    const tokenHash = await sha256Hex(token);
+    const row = await db.prepare(`
+      SELECT 1 AS found
+      FROM response_access
+      WHERE response_id = ? AND manage_token_hash = ?
+      LIMIT 1
+    `).bind(responseId, tokenHash).first();
+    if (row?.found === 1) return { kind: "manage-token" };
+  }
+
+  if (account) throw new RequestError(403, "RESPONSE_FORBIDDEN", "response does not belong to this account");
+  throw new RequestError(401, "RESPONSE_AUTH_REQUIRED", "response access authorization is required");
+}
+
 export async function registerAccount(db, input, configuredIterations) {
   const { name, normalized } = normalizeAccountName(input?.name);
   const password = validatePassword(input?.password);
@@ -263,20 +301,43 @@ export async function deleteAccount(db, account, input) {
            password_iterations AS passwordIterations
     FROM accounts WHERE id = ?
   `).bind(account.id).first();
+  if (!row) throw new RequestError(404, "ACCOUNT_NOT_FOUND", "account was not found");
   const password = validatePassword(input?.currentPassword, "currentPassword");
   const actual = await derivePassword(password, row.passwordSalt, row.passwordIterations);
   if (!equalHex(actual, row.passwordHash)) {
     throw new RequestError(401, "INVALID_CREDENTIALS", "current password is incorrect");
   }
-  await db.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id).run();
+
+  const linked = await db.prepare(`
+    SELECT response_id AS responseId
+    FROM account_responses
+    WHERE account_id = ?
+  `).bind(account.id).all();
+  const statements = [];
+  for (const linkedRow of linked.results ?? []) {
+    statements.push(db.prepare("DELETE FROM responses WHERE id = ?").bind(linkedRow.responseId));
+  }
+  statements.push(db.prepare("DELETE FROM accounts WHERE id = ?").bind(account.id));
+  await db.batch(statements);
 }
 
 export async function linkResponseToAccount(db, accountId, responseId) {
   if (!accountId) return;
-  await db.prepare(`
-    INSERT INTO account_responses (account_id, response_id, linked_at)
-    VALUES (?, ?, ?)
-  `).bind(accountId, responseId, Date.now()).run();
+  const existing = await latestResponseId(db, accountId);
+  if (existing) {
+    throw new RequestError(409, "RESPONSE_ALREADY_EXISTS", "this account already has an active response");
+  }
+  try {
+    await db.prepare(`
+      INSERT INTO account_responses (account_id, response_id, linked_at)
+      VALUES (?, ?, ?)
+    `).bind(accountId, responseId, Date.now()).run();
+  } catch (error) {
+    if (String(error?.message ?? "").toLowerCase().includes("unique")) {
+      throw new RequestError(409, "RESPONSE_ALREADY_EXISTS", "this account already has an active response");
+    }
+    throw error;
+  }
 }
 
 export async function listAccountResponses(db, accountId) {
@@ -285,12 +346,13 @@ export async function listAccountResponses(db, accountId) {
            r.consent_version AS consentVersion, r.consent_at AS consentAt,
            r.age, r.gender, r.region, r.occupation, r.party,
            r.free_text AS freeText, r.analysis_status AS analysisStatus,
-           r.analysis_json AS analysisJson, r.demo_flag AS demoFlag
+           r.analysis_json AS analysisJson, r.demo_flag AS demoFlag,
+           r.revision AS revision
     FROM account_responses ar
     JOIN responses r ON r.id = ar.response_id
     WHERE ar.account_id = ?
     ORDER BY ar.linked_at DESC
-    LIMIT 20
+    LIMIT 1
   `).bind(accountId).all();
   const responses = rows.results ?? [];
   if (responses.length === 0) return [];
@@ -314,7 +376,8 @@ export async function listAccountResponses(db, accountId) {
       id: row.id,
       ts: Number(row.createdAt),
       ver: String(row.appVersion ?? ""),
-      seq: 1,
+      seq: Number(row.revision ?? 1),
+      revision: Number(row.revision ?? 1),
       demoFlag: Number(row.demoFlag) === 1,
       consent: { version: String(row.consentVersion ?? ""), ts: Number(row.consentAt) },
       demo: {
