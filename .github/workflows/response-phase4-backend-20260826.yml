@@ -6,6 +6,7 @@ on:
       - feature/response-update-auth-revision-20260825
     paths:
       - scripts/apply-response-phase4-backend-20260826.mjs
+      - scripts/run-response-phase4-backend-20260826.mjs
       - .github/workflows/response-phase4-backend-20260826.yml
   workflow_dispatch:
 
@@ -26,7 +27,7 @@ jobs:
           cache: npm
           cache-dependency-path: cloudflare/package-lock.json
       - name: Apply Phase 4 backend
-        run: node scripts/apply-response-phase4-backend-20260826.mjs
+        run: node scripts/run-response-phase4-backend-20260826.mjs
       - name: Install
         working-directory: cloudflare
         run: npm ci --ignore-scripts --no-audit --no-fund
