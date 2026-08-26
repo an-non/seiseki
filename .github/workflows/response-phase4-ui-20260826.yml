@@ -46,24 +46,6 @@ jobs:
           git diff --check -- core/ui.jsx app/seiseki.jsx local/src/App.jsx
       - name: Existing core logic tests
         run: node tests/test.js
-      - name: Route paths
-        run: node --test --test-name-pattern='入口・回答・完了・本人・Admin' tests/page-routing.test.mjs
-      - name: App view paths
-        run: node --test --test-name-pattern='概要・集計・意見ツリー・意見一覧' tests/page-routing.test.mjs
-      - name: Browser history routing
-        run: node --test --test-name-pattern='画面遷移はブラウザ履歴' tests/page-routing.test.mjs
-      - name: Admin navigation isolation
-        run: node --test --test-name-pattern='Adminは通常ナビ' tests/page-routing.test.mjs
-      - name: Survey navigation order
-        run: node --test --test-name-pattern='回答を先頭' tests/page-routing.test.mjs
-      - name: Account settings auth
-        run: node --test --test-name-pattern='名前とパスワード' tests/page-routing.test.mjs
-      - name: Completion routing
-        run: node --test --test-name-pattern='回答完了は独立' tests/page-routing.test.mjs
-      - name: Answer action and share
-        run: node --test --test-name-pattern='回答導線を常時強調' tests/page-routing.test.mjs
-      - name: Quantum navigation
-        run: node --test --test-name-pattern='量子観測は通常ナビ' tests/page-routing.test.mjs
       - name: Existing page routing tests
         run: node tests/page-routing.test.mjs
       - name: Existing local bridge tests
