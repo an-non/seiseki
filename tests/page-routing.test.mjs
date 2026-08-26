@@ -72,10 +72,11 @@ test("回答導線を常時強調し、概要ノードへ全体比率を渡す",
 });
 
 
-test("量子観測は通常ナビから /app/quantum へ遷移し、検証Workerだけを埋め込む", () => {
+test("量子観測は通常ナビから /app/quantum へ遷移し、同梱プレビューだけを埋め込む", () => {
   const navLine = ui.split("\n").find(line => line.startsWith("const NAVS =")) || "";
   assert.match(navLine, /\["quantum", "量子観測"\]/);
   assert.match(ui, /quantum: "\/app\/quantum"/);
-  assert.match(ui, /seiseki-opinion-network-preview\.tokyo-odh-129\.workers\.dev/);
+  assert.match(ui, /const QUANTUM_PREVIEW_URL = "\/quantum\/chunk-network-entanglement-preview\.html\?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1"/);
+  assert.doesNotMatch(ui, /seiseki-opinion-network-preview\.tokyo-odh-129\.workers\.dev/);
   assert.match(ui, /<QuantumObservation \/>/);
 });
