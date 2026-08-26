@@ -1759,6 +1759,7 @@ function normalizeCloudAnalysisResult(payload) {
     status: knownStatuses.has(rawStatus) ? rawStatus : "pending",
     analysis: analysis,
     errorCode: String(payload && payload.errorCode || ""),
+    revision: Number(payload && payload.revision || 0),
     mode: analysis && analysis.engine === "rules-fallback-v1" ? "fallback" : "ai"
   };
 }
@@ -2011,7 +2012,7 @@ async function acctStorageKey(name) {
   return "acct:" + (await sha256Hex("acct|" + name)).slice(0, 32);
 }
 function normAcctName(s) { return cleanStr(s, 20); }
-async function acctGet(name) {
+async function acctGet(name, strictRemote) {
   const nm = normAcctName(name);
   if (!nm) return null;
   if (cloudApiEnabled()) {
@@ -2020,7 +2021,10 @@ async function acctGet(name) {
     try {
       const result = await cloudAccountCall("/api/accounts/me", "GET", undefined, session.token);
       return cloudAccountRecord(result, session.token);
-    } catch (e) { return null; }
+    } catch (e) {
+      if (strictRemote) throw e;
+      return null;
+    }
   }
   return await sGet(await acctStorageKey(nm));
 }
@@ -2815,12 +2819,21 @@ export default function App() {
       let ss = await pGet("session:current");
       let mid = "";
       if (ss && ss.name) {
-        const rec = await acctGet(ss.name);   // アカウントに紐付いた回答IDを優先
-        if (cloudApiEnabled() && !rec) {
-          await pDel("session:current");
-          ss = null;
-        } else {
-          mid = (rec && rec.respId) || "";
+        try {
+          const rec = await acctGet(ss.name, cloudApiEnabled()); // アカウントに紐付いた回答IDを優先
+          if (cloudApiEnabled() && !rec) {
+            await pDel("session:current");
+            ss = null;
+          } else {
+            mid = (rec && rec.respId) || "";
+          }
+        } catch (error) {
+          if (Number(error && error.status) === 401) {
+            await pDel("session:current");
+            ss = null;
+          } else {
+            console.warn("account session check failed", error);
+          }
         }
       } else {
         const last = await pGet("last:id");   // 旧バージョンからの引き継ぎ(端末ローカル)
@@ -3147,6 +3160,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const [restored, setRestored] = useState(false);
   const [currentResponse, setCurrentResponse] = useState(null);
   const [currentLoading, setCurrentLoading] = useState(false);
+  const [currentLoadError, setCurrentLoadError] = useState("");
+  const [currentLoadNonce, setCurrentLoadNonce] = useState(0);
   const [editMode, setEditMode] = useState(null); // append | free | answers
   const [editText, setEditText] = useState("");
   const busyRef = useRef(false);
@@ -3162,12 +3177,13 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   useEffect(() => {
     let alive = true;
     setCurrentResponse(null);
+    setCurrentLoadError("");
     setEditMode(null);
     (async () => {
       if (!session) return;
       setCurrentLoading(true);
       try {
-        const rec = await acctGet(session.name);
+        const rec = await acctGet(session.name, true);
         if (!alive || !rec || !rec.respId) return;
         let current = null;
         if (cloudApiEnabled() && session.token) {
@@ -3181,12 +3197,48 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         setCurrentResponse(current);
       } catch (error) {
         console.warn("current response load failed", error);
+        if (alive) setCurrentLoadError("現在の回答を確認できませんでした。重複回答を避けるため、初回アンケートは開始していません。");
       } finally {
         if (alive) setCurrentLoading(false);
       }
     })();
     return () => { alive = false; };
-  }, [session]);
+  }, [session, currentLoadNonce]);
+
+  /* PATCH/requeue後は現在revisionの解析だけを追跡する。
+     古いrevisionの完了通知で、編集中の回答を巻き戻さない。 */
+  useEffect(() => {
+    if (!session || !session.token || !currentResponse || !cloudApiEnabled()) return;
+    const id = currentResponse.remoteId || currentResponse.id;
+    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
+    const status = currentResponse.cloudAnalysisStatus || currentResponse.analysisStatus || "pending";
+    if (!id || (status !== "pending" && status !== "running")) return;
+    let alive = true;
+    let timer = null;
+    async function poll() {
+      try {
+        const fresh = await cloudLoadOwnResponse(id, session.token);
+        if (!alive || !fresh) return;
+        const freshRevision = Number(fresh.remoteRevision || fresh.revision || fresh.seq || 1);
+        if (freshRevision < revision) return;
+        await sSet("resp:" + id, fresh);
+        setCurrentResponse(fresh);
+        const freshStatus = fresh.cloudAnalysisStatus || fresh.analysisStatus || "pending";
+        if (freshStatus === "pending" || freshStatus === "running") {
+          timer = setTimeout(poll, freshStatus === "running" ? 1800 : 4000);
+        }
+      } catch (error) {
+        if (alive) timer = setTimeout(poll, 5000);
+      }
+    }
+    timer = setTimeout(poll, status === "running" ? 1000 : 2500);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [
+    session && session.token,
+    currentResponse && (currentResponse.remoteId || currentResponse.id),
+    currentResponse && Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1),
+    currentResponse && (currentResponse.cloudAnalysisStatus || currentResponse.analysisStatus || "pending")
+  ]);
 
   /* 下書きの復元。タブを移動しても、閉じても、書きかけが消えないようにする。
      下書きは個人スコープに保存されるため、他の利用者からは見えない。 */
@@ -3333,6 +3385,17 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     return currentResponse;
   }
 
+  async function handleRevisionConflict(successMessage) {
+    try {
+      const fresh = await refreshCurrentResponse();
+      setErr(fresh
+        ? successMessage
+        : "別の更新が先に反映されましたが、最新の回答を読み込めませんでした。再読み込みしてから編集してください。");
+    } catch (error) {
+      setErr("別の更新が先に反映されましたが、最新の回答を読み込めませんでした。再読み込みしてから編集してください。");
+    }
+  }
+
   async function submitCurrentFreeText(mode) {
     if (busyRef.current || !currentResponse) return;
     const id = currentResponse.remoteId || currentResponse.id;
@@ -3358,8 +3421,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       notify(mode === "append" ? "自由記述を追記しました。再解析を開始します" : "自由記述を更新しました。再解析を開始します");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
-        await refreshCurrentResponse();
-        setErr("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
       } else {
         setErr("回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
       }
@@ -3388,8 +3450,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       notify("アンケート回答を更新しました。現在の自由記述全文を再解析します");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
-        await refreshCurrentResponse();
-        setErr("別の更新が先に反映されました。最新の回答を読み直しました。");
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
       } else {
         setErr("アンケート回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
       }
@@ -3406,8 +3467,11 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       setCurrentResponse({ ...currentResponse, cloudAnalysisStatus: "pending" });
       notify("現在の回答を解析キューへ再投入しました");
     } catch (error) {
-      if (error && error.code === "REVISION_CONFLICT") await refreshCurrentResponse();
-      setErr("解析の再試行を開始できませんでした" + (error && error.code ? " (" + error.code + ")" : ""));
+      if (error && error.code === "REVISION_CONFLICT") {
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
+      } else {
+        setErr("解析の再試行を開始できませんでした" + (error && error.code ? " (" + error.code + ")" : ""));
+      }
     } finally { busyRef.current = false; }
   }
 
@@ -3441,6 +3505,18 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   if (currentLoading && phase === "consent") {
     return (
       <div style={{ display: "flex", justifyContent: "center", padding: "56px 0" }}><Spinner /></div>
+    );
+  }
+
+  if (currentLoadError && phase === "consent") {
+    return (
+      <div style={{ maxWidth: 620, margin: "0 auto" }}>
+        <H2 eyebrow="RESPONSE CHECK" sub="既存回答の有無を確認してから回答画面を開きます">回答状況を確認できません</H2>
+        <Card>
+          <div style={{ fontSize: 13, color: C.sub, marginBottom: 12 }}>{currentLoadError}</div>
+          <Btn onClick={() => setCurrentLoadNonce(currentLoadNonce + 1)}>もう一度確認する</Btn>
+        </Card>
+      </div>
     );
   }
 
