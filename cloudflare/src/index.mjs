@@ -2,8 +2,11 @@ import {
   deleteResponse,
   getBasicStats,
   getResponseMetadata,
+  getResponseQuestionSnapshot,
   insertPendingResponse,
-  listPublicDemoResponses
+  listPublicDemoResponses,
+  updateResponseAnswers,
+  updateResponseFreeText
 } from "./db.mjs";
 import { getResponseAnalysis } from "./db.mjs";
 import {
@@ -20,7 +23,14 @@ import {
 } from "./auth.mjs";
 import { analyzeStoredResponse } from "./analysis.mjs";
 import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
-import { createResponseId, normalizeSubmission, RequestError } from "./validation.mjs";
+import {
+  createResponseId,
+  normalizeAnswersUpdate,
+  normalizeExpectedRevision,
+  normalizeFreeTextUpdate,
+  normalizeSubmission,
+  RequestError
+} from "./validation.mjs";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
 import { getPublicAggregate } from "./public-aggregate.mjs";
 
@@ -75,6 +85,21 @@ function routeId(pathname) {
 
 function routeAnalysisId(pathname) {
   const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/analysis$/u);
+  return match ? match[1] : null;
+}
+
+function routeFreeTextId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/free-text$/u);
+  return match ? match[1] : null;
+}
+
+function routeAnswersId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/answers$/u);
+  return match ? match[1] : null;
+}
+
+function routeRequeueId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/analysis\/requeue$/u);
   return match ? match[1] : null;
 }
 
@@ -138,7 +163,7 @@ async function handleCreateResponse(request, env, ctx) {
     throw new RequestError(400, "INVALID_ANSWER", "answers do not match the active questions");
   }
 
-  const account = await authenticateRequest(env.DB, request, false);
+  const account = await authenticateRequest(env.DB, request, request.headers.has("authorization"));
   if (account) {
     const current = await getAccount(env.DB, account);
     if (current?.account?.responseId) {
@@ -211,6 +236,37 @@ function retryDelayForLease(outcome, now = Date.now()) {
   return Math.min(86400, Math.max(1, Math.ceil((remainingMs + jitterMs) / 1000)));
 }
 
+async function enqueueAnalysisRevision(env, responseId, revision) {
+  if (!env.ANALYSIS_QUEUE?.send) {
+    throw new RequestError(503, "ANALYSIS_QUEUE_UNAVAILABLE", "analysis queue is not available");
+  }
+  try {
+    await env.ANALYSIS_QUEUE.send({ type: "analyze-response", responseId, revision });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "analysis_enqueue_failed",
+      responseId,
+      revision,
+      error: String(error?.message ?? "unknown").slice(0, 160)
+    }));
+    throw new RequestError(503, "ANALYSIS_ENQUEUE_FAILED", "analysis could not be queued");
+  }
+}
+
+function dispatchUpdatedAnalysis(env, ctx, responseId, revision) {
+  if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() !== "true" || !ctx) return;
+  ctx.waitUntil((async () => {
+    try {
+      await enqueueAnalysisRevision(env, responseId, revision);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "analysis_update_enqueue_pending", responseId, revision,
+        code: error?.code || "UNKNOWN"
+      }));
+    }
+  })());
+}
+
 async function handleRequest(request, env, ctx) {
   if (!env.DB) throw new RequestError(503, "DB_NOT_BOUND", "D1 binding DB is not configured");
   const url = new URL(request.url);
@@ -265,6 +321,52 @@ async function handleRequest(request, env, ctx) {
   if (request.method === "GET" && url.pathname === "/api/accounts/me/responses") {
     const account = await authenticateRequest(env.DB, request, true);
     return json({ responses: await listAccountResponses(env.DB, account.id) });
+  }
+
+  const freeTextId = routeFreeTextId(url.pathname);
+  if (freeTextId && request.method === "PATCH") {
+    await authorizeResponseAccess(env.DB, request, freeTextId);
+    const input = normalizeFreeTextUpdate(await readJson(request));
+    const nextRevision = await updateResponseFreeText(env.DB, freeTextId, input.expectedRevision, input.freeText);
+    if (nextRevision == null) {
+      throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
+    }
+    dispatchUpdatedAnalysis(env, ctx, freeTextId, nextRevision);
+    return json({ id: freeTextId, revision: nextRevision, analysisStatus: "pending" });
+  }
+
+  const answersId = routeAnswersId(url.pathname);
+  if (answersId && request.method === "PATCH") {
+    await authorizeResponseAccess(env.DB, request, answersId);
+    const input = normalizeAnswersUpdate(await readJson(request));
+    const snapshot = await getResponseQuestionSnapshot(env.DB, answersId);
+    if (!snapshot.length || input.answers.length !== snapshot.length ||
+        !validateAnswersAgainstQuestions(input.answers, snapshot, false)) {
+      throw new RequestError(400, "INVALID_ANSWER", "answers do not match the saved question snapshot");
+    }
+    const nextRevision = await updateResponseAnswers(env.DB, answersId, input.expectedRevision, input.answers);
+    if (nextRevision == null) {
+      throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
+    }
+    dispatchUpdatedAnalysis(env, ctx, answersId, nextRevision);
+    return json({ id: answersId, revision: nextRevision, analysisStatus: "pending" });
+  }
+
+  const requeueId = routeRequeueId(url.pathname);
+  if (requeueId && request.method === "POST") {
+    await authorizeResponseAccess(env.DB, request, requeueId);
+    const body = await readJson(request);
+    const expectedRevision = normalizeExpectedRevision(body?.expectedRevision);
+    const current = await getResponseMetadata(env.DB, requeueId);
+    if (!current) throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (Number(current.revision ?? 1) !== expectedRevision) {
+      throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before retrying");
+    }
+    if (current.analysisStatus !== "pending") {
+      throw new RequestError(409, "ANALYSIS_NOT_PENDING", "only a pending analysis can be requeued");
+    }
+    await enqueueAnalysisRevision(env, requeueId, expectedRevision);
+    return json({ id: requeueId, revision: expectedRevision, analysisStatus: "pending", queued: true }, 202);
   }
 
   const analysisId = routeAnalysisId(url.pathname);

@@ -86,6 +86,46 @@ export function normalizeSubmission(input) {
   });
 }
 
+export function normalizeExpectedRevision(value) {
+  const revision = Number(value);
+  if (!Number.isInteger(revision) || revision < 1) {
+    throw new RequestError(400, "INVALID_REVISION", "expectedRevision must be a positive integer");
+  }
+  return revision;
+}
+
+export function normalizeFreeTextUpdate(input) {
+  const body = requireObject(input, "body");
+  const allowed = new Set(["expectedRevision", "freeText"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) throw new RequestError(400, "INVALID_FIELD", "unsupported field: " + key);
+  }
+  return Object.freeze({
+    expectedRevision: normalizeExpectedRevision(body.expectedRevision),
+    freeText: cleanText(body.freeText, 1500, "freeText")
+  });
+}
+
+export function normalizeAnswersUpdate(input) {
+  const body = requireObject(input, "body");
+  const allowed = new Set(["expectedRevision", "answers"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) throw new RequestError(400, "INVALID_FIELD", "unsupported field: " + key);
+  }
+  const answerInput = requireObject(body.answers, "answers");
+  const answers = [];
+  for (const [rawQid, rawValue] of Object.entries(answerInput)) {
+    const qid = cleanText(rawQid, 64, "answer qid", true);
+    const value = cleanText(rawValue, 60, "answers." + qid, true);
+    if (!/^[A-Za-z0-9_-]{1,64}$/u.test(qid)) {
+      throw new RequestError(400, "INVALID_FIELD", "answers." + qid + " has an invalid qid");
+    }
+    answers.push(Object.freeze({ qid, value }));
+  }
+  if (answers.length > 100) throw new RequestError(400, "INVALID_FIELD", "too many answers");
+  return Object.freeze({ expectedRevision: normalizeExpectedRevision(body.expectedRevision), answers: Object.freeze(answers) });
+}
+
 export function createResponseId(randomUUID = () => crypto.randomUUID()) {
   return `r_${randomUUID().replaceAll("-", "")}`;
 }

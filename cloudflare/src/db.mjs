@@ -337,6 +337,83 @@ export async function getResponseAnalysis(db, id) {
   };
 }
 
+export async function getResponseQuestionSnapshot(db, id) {
+  const rows = await db.prepare(`
+    SELECT qid, position, type, text, options_json AS optionsJson,
+           left_label AS leftLabel, right_label AS rightLabel
+    FROM response_questions
+    WHERE response_id = ?
+    ORDER BY position
+  `).bind(id).all();
+  return (rows.results ?? []).map(row => {
+    let options = [];
+    try { options = JSON.parse(row.optionsJson); } catch { options = []; }
+    return {
+      id: row.qid, qid: row.qid, position: row.position, type: row.type,
+      text: row.text, options, left: row.leftLabel || "", right: row.rightLabel || ""
+    };
+  });
+}
+
+function expectedRevisionGuard() {
+  return "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)";
+}
+
+export async function updateResponseFreeText(db, id, expectedRevision, freeText) {
+  const now = Date.now();
+  const guard = expectedRevisionGuard();
+  const statements = [
+    db.prepare(`DELETE FROM opinion_chunks WHERE response_id = ? AND ${guard}`)
+      .bind(id, id, expectedRevision),
+    db.prepare(`
+      UPDATE analysis_runs
+      SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL
+      WHERE response_id = ? AND response_revision = ? AND status = 'running' AND ${guard}
+    `).bind(now, id, expectedRevision, id, expectedRevision),
+    db.prepare(`
+      UPDATE responses
+      SET free_text = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
+      WHERE id = ? AND revision = ?
+    `).bind(freeText, id, expectedRevision)
+  ];
+  const results = await db.batch(statements);
+  if (Number(results?.[2]?.meta?.changes ?? 0) !== 1) return null;
+  return expectedRevision + 1;
+}
+
+export async function updateResponseAnswers(db, id, expectedRevision, answers) {
+  const now = Date.now();
+  const guard = expectedRevisionGuard();
+  const statements = [
+    db.prepare(`DELETE FROM answers WHERE response_id = ? AND ${guard}`)
+      .bind(id, id, expectedRevision)
+  ];
+  for (const answer of answers) {
+    statements.push(db.prepare(`
+      INSERT INTO answers (response_id, qid, value)
+      SELECT ?, ?, ? WHERE ${guard}
+    `).bind(id, answer.qid, answer.value, id, expectedRevision));
+  }
+  statements.push(
+    db.prepare(`DELETE FROM opinion_chunks WHERE response_id = ? AND ${guard}`)
+      .bind(id, id, expectedRevision),
+    db.prepare(`
+      UPDATE analysis_runs
+      SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL
+      WHERE response_id = ? AND response_revision = ? AND status = 'running' AND ${guard}
+    `).bind(now, id, expectedRevision, id, expectedRevision),
+    db.prepare(`
+      UPDATE responses
+      SET revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
+      WHERE id = ? AND revision = ?
+    `).bind(id, expectedRevision)
+  );
+  const results = await db.batch(statements);
+  const final = results?.[results.length - 1];
+  if (Number(final?.meta?.changes ?? 0) !== 1) return null;
+  return expectedRevision + 1;
+}
+
 export async function deleteResponse(db, id) {
   const result = await db.prepare("DELETE FROM responses WHERE id = ?").bind(id).run();
   return Number(result.meta?.changes ?? 0) > 0;
