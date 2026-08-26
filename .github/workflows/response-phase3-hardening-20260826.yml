@@ -1,0 +1,56 @@
+name: Response Phase 3 hardening 20260826
+
+on:
+  push:
+    branches:
+      - feature/response-update-auth-revision-20260825
+    paths:
+      - scripts/apply-response-phase3-hardening-20260826.mjs
+      - .github/workflows/response-phase3-hardening-20260826.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  harden-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - name: Apply Phase 3 hardening
+        run: node scripts/apply-response-phase3-hardening-20260826.mjs
+      - name: Install
+        working-directory: cloudflare
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Syntax check
+        working-directory: cloudflare
+        run: npm run check
+      - name: Focused hardening tests
+        working-directory: cloudflare
+        run: node --test tests/response-analysis-hardening.test.mjs tests/response-auth-revision.test.mjs tests/response-revision-queue.test.mjs
+      - name: Full regression suite
+        working-directory: cloudflare
+        run: npm test
+      - name: Show diff
+        if: always()
+        run: git diff --stat && git diff -- cloudflare/src/db.mjs cloudflare/src/index.mjs cloudflare/wrangler.jsonc cloudflare/tests/response-analysis-hardening.test.mjs
+      - name: Commit Phase 3 hardening
+        if: success()
+        run: |
+          git config user.name "SEISEKI phase3 hardening"
+          git config user.email "actions@users.noreply.github.com"
+          git add cloudflare/src/db.mjs cloudflare/src/index.mjs cloudflare/wrangler.jsonc cloudflare/tests/response-analysis-hardening.test.mjs
+          if git diff --cached --quiet; then
+            echo "No Phase 3 hardening changes to commit."
+            exit 0
+          fi
+          git commit -m "Harden response analysis lease and revision handling"
+          git push origin HEAD:feature/response-update-auth-revision-20260825
