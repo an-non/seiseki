@@ -43,7 +43,7 @@ jobs:
           grep -q 'REVISION_CONFLICT' core/ui.jsx
           ! grep -q 'setAddendum' core/ui.jsx
           ! grep -q 'setLimit' core/ui.jsx
-          git diff --exit-code core/ui.jsx app/seiseki.jsx local/src/App.jsx --check
+          git diff --check -- core/ui.jsx app/seiseki.jsx local/src/App.jsx
       - name: Existing application tests
         run: |
           node tests/test.js
