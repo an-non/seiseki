@@ -1,0 +1,118 @@
+name: Phase 4 staging deploy and E2E 20260826
+
+on:
+  push:
+    branches:
+      - feature/response-update-auth-revision-20260825
+    paths:
+      - scripts/staging-phase4-e2e-20260826.mjs
+      - .github/workflows/phase4-staging-deploy-e2e-20260826.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-phase4-staging-e2e
+  cancel-in-progress: false
+
+jobs:
+  deploy-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+      STAGING_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - name: Verify staging-only resources and migrated schema
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          grep -q '"database_name": "seiseki-db-staging"' wrangler.jsonc
+          grep -q '"queue": "seiseki-analysis-staging"' wrangler.jsonc
+          grep -q '"dead_letter_queue": "seiseki-analysis-staging-dlq"' wrangler.jsonc
+          npx wrangler d1 execute DB --env staging --remote --command "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM account_responses) AS active_links, (SELECT COUNT(*) FROM account_responses_legacy_20260826) AS archived_links, (SELECT COUNT(*) FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1)) AS duplicate_groups; PRAGMA foreign_key_check;" --json > /tmp/schema-preflight.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/schema-preflight.json','utf8'));
+          const first = x?.[0]?.results?.[0] || {};
+          const fk = x?.[1]?.results || [];
+          console.log(JSON.stringify({counts:first,fkViolations:fk.length}));
+          if (Number(first.responses) !== 49) throw new Error('staging responses changed before E2E');
+          if (Number(first.active_links) !== 10) throw new Error('active ownership count is not 10');
+          if (Number(first.archived_links) !== 19) throw new Error('historical links are not fully preserved');
+          if (Number(first.duplicate_groups) !== 0) throw new Error('duplicate ownership remains');
+          if (fk.length) throw new Error('foreign key violations remain');
+          NODE
+      - name: Verify repo tests before deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          cd cloudflare
+          npm run check
+          npm test
+      - name: Fresh staging UI build
+        working-directory: local
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build:staging
+      - name: Ensure staging DLQ exists
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if npx wrangler queues list | grep -Fq 'seiseki-analysis-staging-dlq'; then
+            echo 'staging DLQ already exists'
+          else
+            npx wrangler queues create seiseki-analysis-staging-dlq
+          fi
+      - name: Deploy Worker and UI to staging only
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --env staging --strict
+      - name: Run live Phase 4 E2E with cleanup
+        run: node scripts/staging-phase4-e2e-20260826.mjs
+      - name: Verify preserved historical staging data after E2E
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --env staging --remote --command "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM account_responses) AS active_links, (SELECT COUNT(*) FROM account_responses_legacy_20260826) AS archived_links, (SELECT COUNT(*) FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1)) AS duplicate_groups; PRAGMA foreign_key_check;" --json > /tmp/post-e2e.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/post-e2e.json','utf8'));
+          const c = x?.[0]?.results?.[0] || {};
+          const fk = x?.[1]?.results || [];
+          console.log(JSON.stringify({counts:c,fkViolations:fk.length}));
+          if (Number(c.responses) !== 49) throw new Error('E2E cleanup did not restore response count');
+          if (Number(c.active_links) !== 10) throw new Error('E2E cleanup did not restore active links');
+          if (Number(c.archived_links) !== 19) throw new Error('historical link archive changed');
+          if (Number(c.duplicate_groups) !== 0) throw new Error('duplicate ownership reappeared');
+          if (fk.length) throw new Error('FK violation after E2E');
+          NODE
