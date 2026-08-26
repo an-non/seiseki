@@ -6,6 +6,7 @@ on:
       - feature/response-update-auth-revision-20260825
     paths:
       - scripts/apply-response-phase3-hardening-20260826.mjs
+      - scripts/repair-response-phase3-completion-20260826.mjs
       - .github/workflows/response-phase3-hardening-20260826.yml
   workflow_dispatch:
 
@@ -27,6 +28,8 @@ jobs:
           cache-dependency-path: cloudflare/package-lock.json
       - name: Apply Phase 3 hardening
         run: node scripts/apply-response-phase3-hardening-20260826.mjs
+      - name: Repair completion transaction ordering
+        run: node scripts/repair-response-phase3-completion-20260826.mjs
       - name: Install
         working-directory: cloudflare
         run: npm ci --ignore-scripts --no-audit --no-fund
