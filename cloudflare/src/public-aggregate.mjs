@@ -161,12 +161,19 @@ export async function getPublicAggregate(db) {
       SELECT id, created_at AS createdAt, age, gender, region, occupation, party,
              analysis_status AS analysisStatus, analysis_json AS analysisJson, demo_flag AS demoFlag
       FROM responses
+      WHERE demo_flag = 0
+        AND analysis_status = 'completed'
+        AND analysis_json IS NOT NULL
       ORDER BY created_at ASC
     `).all(),
     db.prepare(`
-      SELECT response_id AS responseId, qid, value
-      FROM answers
-      ORDER BY response_id, qid
+      SELECT a.response_id AS responseId, a.qid, a.value
+      FROM answers a
+      JOIN responses r ON r.id = a.response_id
+      WHERE r.demo_flag = 0
+        AND r.analysis_status = 'completed'
+        AND r.analysis_json IS NOT NULL
+      ORDER BY a.response_id, a.qid
     `).all()
   ]);
 
