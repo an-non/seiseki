@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import worker from "../src/index.mjs";
-import { completeResponseAnalysis, getResponseAnalysis, startAnalysisRun } from "../src/db.mjs";
+import { completeResponseAnalysis, failResponseAnalysis, getResponseAnalysis, startAnalysisRun } from "../src/db.mjs";
 
 class Statement {
   constructor(database, sql) { this.database = database; this.sql = sql; this.values = []; }
@@ -39,6 +39,21 @@ test("expired lease cannot mark analysis run completed", async () => {
                     VALUES ('r_testhardening0001', 't', 't', 'v', 'running', ?, 1, 0)`).run(Date.now() - 1000);
   const runId = Number(database.prepare("SELECT id FROM analysis_runs ORDER BY id DESC LIMIT 1").get().id);
   const saved = await completeResponseAnalysis(db, "r_testhardening0001", runId, 1, emptyAnalysis, {});
+  assert.equal(saved, false);
+  assert.equal(database.prepare("SELECT analysis_status AS s FROM responses WHERE id='r_testhardening0001'").get().s, "pending");
+  const run = database.prepare("SELECT status, error_code AS e FROM analysis_runs WHERE id=?").get(runId);
+  assert.equal(run.status, "failed");
+  assert.equal(run.e, "LEASE_EXPIRED");
+  database.close();
+});
+
+test("expired lease cannot mark the current response failed", async () => {
+  const database = makeDb();
+  const db = new D1(database);
+  database.prepare(`INSERT INTO analysis_runs (response_id, engine, model, prompt_version, status, started_at, response_revision, lease_until)
+                    VALUES ('r_testhardening0001', 't', 't', 'v', 'running', ?, 1, 0)`).run(Date.now() - 1000);
+  const runId = Number(database.prepare("SELECT id FROM analysis_runs ORDER BY id DESC LIMIT 1").get().id);
+  const saved = await failResponseAnalysis(db, "r_testhardening0001", runId, 1, "AI_REQUEST_FAILED");
   assert.equal(saved, false);
   assert.equal(database.prepare("SELECT analysis_status AS s FROM responses WHERE id='r_testhardening0001'").get().s, "pending");
   const run = database.prepare("SELECT status, error_code AS e FROM analysis_runs WHERE id=?").get(runId);

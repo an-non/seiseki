@@ -83,6 +83,8 @@ test("stale expectedRevision returns 409 without partial mutation", async () => 
   const database = createDatabase(); const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
   const owner = await register(env, "競合所有者"); const cr = await create(env, owner.token); const created = await cr.json();
   database.prepare("UPDATE responses SET revision=2 WHERE id=?").run(created.id);
+  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'保持','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
+  database.prepare("INSERT INTO analysis_runs (response_id,engine,model,prompt_version,status,started_at,response_revision,lease_until) VALUES (?,'t','t','v','running',?,2,?)").run(created.id, Date.now(), Date.now() + 300000);
   const before = database.prepare("SELECT free_text AS t FROM responses WHERE id=?").get(created.id).t;
   const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/free-text`, {
     method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
@@ -90,6 +92,8 @@ test("stale expectedRevision returns 409 without partial mutation", async () => 
   }), env);
   assert.equal(r.status, 409); assert.equal((await r.json()).error, "REVISION_CONFLICT");
   assert.equal(database.prepare("SELECT free_text AS t FROM responses WHERE id=?").get(created.id).t, before);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 1);
+  assert.equal(database.prepare("SELECT status FROM analysis_runs WHERE response_id=? AND response_revision=2").get(created.id).status, "running");
   database.close();
 });
 
@@ -121,5 +125,37 @@ test("pending current revision can be requeued with authorization", async () => 
   }), env);
   assert.equal(r.status, 202);
   assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]);
+  database.close();
+});
+
+test("invalid bearer cannot fall through to an anonymous manage token", async () => {
+  const database = createDatabase(); const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
+  const cr = await create(env, null); const created = await cr.json();
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}`, {
+    headers: {
+      authorization: "Bearer invalid-token-value-that-is-long-enough-12345678901234567890",
+      "x-response-manage-token": created.manageToken
+    }
+  }), env);
+  assert.equal(r.status, 401);
+  assert.equal((await r.json()).error, "SESSION_INVALID");
+  database.close();
+});
+
+test("analysis requeue is rate limited per response", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const cr = await create(env, null); const created = await cr.json();
+  let last;
+  for (let index = 0; index < 4; index += 1) {
+    last = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken },
+      body: JSON.stringify({ expectedRevision: 1 })
+    }), env);
+  }
+  assert.equal(last.status, 429);
+  assert.equal((await last.json()).error, "RATE_LIMITED");
+  assert.equal(queued.length, 3);
   database.close();
 });

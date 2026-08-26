@@ -355,6 +355,7 @@ async function handleRequest(request, env, ctx) {
   const requeueId = routeRequeueId(url.pathname);
   if (requeueId && request.method === "POST") {
     await authorizeResponseAccess(env.DB, request, requeueId);
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.analysisRequeue, requeueId);
     const body = await readJson(request);
     const expectedRevision = normalizeExpectedRevision(body?.expectedRevision);
     const current = await getResponseMetadata(env.DB, requeueId);

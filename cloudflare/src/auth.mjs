@@ -143,7 +143,7 @@ export async function accountOwnsResponse(db, accountId, responseId) {
 }
 
 export async function authorizeResponseAccess(db, request, responseId) {
-  const account = await authenticateRequest(db, request, false);
+  const account = await authenticateRequest(db, request, request.headers.has("authorization"));
   if (account && await accountOwnsResponse(db, account.id, responseId)) {
     return { kind: "account", account };
   }

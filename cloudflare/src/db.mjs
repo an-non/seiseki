@@ -290,6 +290,7 @@ export async function completeResponseAnalysis(db, responseId, runId, expectedRe
 export async function failResponseAnalysis(db, responseId, runId, expectedRevision, errorCode) {
   const revision = Number(expectedRevision);
   const completedAt = Date.now();
+  const normalizedErrorCode = String(errorCode || "ANALYSIS_FAILED").slice(0, 80);
   const results = await db.batch([
     db.prepare(`
       UPDATE responses
@@ -298,13 +299,26 @@ export async function failResponseAnalysis(db, responseId, runId, expectedRevisi
         AND EXISTS (
           SELECT 1 FROM analysis_runs
           WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
+            AND COALESCE(lease_until, 0) >= ?
         )
-    `).bind(responseId, revision, runId, responseId, revision),
+    `).bind(responseId, revision, runId, responseId, revision, completedAt),
     db.prepare(`
       UPDATE analysis_runs
-      SET status = 'failed', completed_at = ?, error_code = ?, lease_until = NULL
+      SET status = 'failed', completed_at = ?,
+          error_code = CASE
+            WHEN COALESCE(lease_until, 0) < ? THEN 'LEASE_EXPIRED'
+            WHEN NOT EXISTS (
+              SELECT 1 FROM responses
+              WHERE id = ? AND revision = ?
+            ) THEN 'STALE_REVISION'
+            ELSE ?
+          END,
+          lease_until = NULL
       WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
-    `).bind(completedAt, String(errorCode || "ANALYSIS_FAILED").slice(0, 80), runId, responseId, revision)
+    `).bind(
+      completedAt, completedAt, responseId, revision, normalizedErrorCode,
+      runId, responseId, revision
+    )
   ]);
   return Number(results?.[0]?.meta?.changes ?? 0) > 0;
 }
