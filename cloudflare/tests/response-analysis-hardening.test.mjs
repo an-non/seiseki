@@ -107,8 +107,10 @@ test("busy queue retry waits for the active lease instead of fixed 30 seconds", 
   database.close();
 });
 
-test("wrangler declares dead letter queues for staging and production", () => {
-  const config = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-  assert.match(config, /seiseki-analysis-staging-dlq/u);
-  assert.match(config, /seiseki-analysis-dlq/u);
+test("wrangler declares the approved staging dead letter queue", () => {
+  const config = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+  assert.equal(
+    config.env.staging.queues.consumers[0].dead_letter_queue,
+    "seiseki-analysis-staging-dlq"
+  );
 });

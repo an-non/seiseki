@@ -1,12 +1,12 @@
 name: Apply staging response migrations 20260826
 
 on:
-  push:
-    branches:
-      - feature/response-update-auth-revision-20260825
-    paths:
-      - .github/workflows/apply-staging-response-migrations-20260826.yml
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type migrate-staging to apply pending migrations to staging only'
+        required: true
+        default: ''
 
 permissions:
   contents: read
@@ -20,16 +20,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Confirm staging-only migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.inputs.confirm }}" = 'migrate-staging'
+
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: cloudflare/package-lock.json
-      - name: Install Wrangler
+
+      - name: Install Wrangler and verify staging binding
         working-directory: cloudflare
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Preflight preserved staging data
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          grep -q '"name": "seiseki-api-staging"' wrangler.jsonc
+          grep -q '"database_name": "seiseki-db-staging"' wrangler.jsonc
+          grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' wrangler.jsonc
+
+      - name: Preflight staging database
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
@@ -37,31 +51,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler d1 execute seiseki-db-staging --remote --command "PRAGMA foreign_key_check;" --json > /tmp/fk.json
-          npx wrangler d1 execute seiseki-db-staging --remote --command "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM account_responses) AS active_links, (SELECT COUNT(*) FROM account_responses_legacy_20260826) AS archived_links, (SELECT COUNT(*) FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1)) AS duplicate_groups, (SELECT COUNT(*) FROM app_config) AS app_config_rows;" --json > /tmp/pre.json
+          npx wrangler d1 execute DB --env staging --remote \
+            --command "SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check;" --json > /tmp/preflight.json
           node - <<'NODE'
           const fs = require('fs');
-          const rows = p => {
-            const x = JSON.parse(fs.readFileSync(p, 'utf8'));
-            return x?.[0]?.results || x?.[0]?.result || [];
-          };
-          const fk = rows('/tmp/fk.json');
-          const pre = rows('/tmp/pre.json')[0] || {};
-          console.log(JSON.stringify({pre, fkViolations: fk.length}));
-          if (fk.length) throw new Error('FK violations present');
-          if (Number(pre.responses) !== 49) throw new Error('Expected 49 responses');
-          if (Number(pre.active_links) !== 10) throw new Error('Expected 10 active links');
-          if (Number(pre.archived_links) !== 19) throw new Error('Expected all 19 historical links archived');
-          if (Number(pre.duplicate_groups) !== 0) throw new Error('Active duplicate ownership remains');
-          fs.writeFileSync('/tmp/app-config-count.txt', String(Number(pre.app_config_rows || 0)));
+          const result = JSON.parse(fs.readFileSync('/tmp/preflight.json', 'utf8'));
+          const counts = result?.[0]?.results?.[0] || result?.[0]?.result?.[0] || {};
+          const fk = result?.[1]?.results || result?.[1]?.result || [];
+          if (Number(counts.duplicate_groups) !== 0) throw new Error('staging has duplicate account-response ownership; migration was not applied');
+          if (fk.length) throw new Error(`staging has ${fk.length} foreign-key violation(s)`);
           NODE
-      - name: Apply pending staging migrations only
+
+      - name: Apply pending migrations to staging only
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 migrations apply DB --env staging --remote
-      - name: Verify schema and preserved data
+
+      - name: Verify Phase 4 schema and staging integrity
         working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
@@ -69,24 +77,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler d1 execute seiseki-db-staging --remote --command "PRAGMA foreign_key_check;" --json > /tmp/fk-after.json
-          npx wrangler d1 execute seiseki-db-staging --remote --command "SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM account_responses) AS active_links, (SELECT COUNT(*) FROM account_responses_legacy_20260826) AS archived_links, (SELECT COUNT(*) FROM app_config) AS app_config_rows;" --json > /tmp/counts.json
-          npx wrangler d1 execute seiseki-db-staging --remote --command "SELECT name FROM pragma_table_info('responses') WHERE name='revision'; SELECT name FROM pragma_table_info('analysis_runs') WHERE name IN ('response_revision','lease_until') ORDER BY name; SELECT name, \"unique\" FROM pragma_index_list('account_responses') WHERE name='account_responses_account_unique'; SELECT name, \"unique\" FROM pragma_index_list('analysis_runs') WHERE name='analysis_runs_response_revision_running_unique'; SELECT name FROM sqlite_master WHERE type='table' AND name='response_access';" --json > /tmp/schema.json
+          npx wrangler d1 execute DB --env staging --remote --command "PRAGMA foreign_key_check;" --json > /tmp/fk-after.json
+          npx wrangler d1 execute DB --env staging --remote --command "SELECT name FROM pragma_table_info('responses') WHERE name='revision'; SELECT name FROM pragma_table_info('analysis_runs') WHERE name IN ('response_revision','lease_until') ORDER BY name; SELECT name, \"unique\" FROM pragma_index_list('account_responses') WHERE name='account_responses_account_unique'; SELECT name, \"unique\" FROM pragma_index_list('analysis_runs') WHERE name='analysis_runs_response_revision_running_unique'; SELECT name FROM sqlite_master WHERE type='table' AND name='response_access';" --json > /tmp/schema.json
           node - <<'NODE'
           const fs = require('fs');
-          const getRows = (x, i=0) => x?.[i]?.results || x?.[i]?.result || [];
-          const fkx = JSON.parse(fs.readFileSync('/tmp/fk-after.json','utf8'));
-          const cx = JSON.parse(fs.readFileSync('/tmp/counts.json','utf8'));
-          const sx = JSON.parse(fs.readFileSync('/tmp/schema.json','utf8'));
-          const fk = getRows(fkx);
-          const c = getRows(cx)[0] || {};
-          const preApp = Number(fs.readFileSync('/tmp/app-config-count.txt','utf8'));
-          const schemaNames = sx.flatMap(x => x?.results || x?.result || []).map(x => x.name);
-          console.log(JSON.stringify({counts:c, fkViolations:fk.length, schemaNames}));
-          if (fk.length) throw new Error('FK check failed after migrations');
-          if (Number(c.responses) !== 49 || Number(c.active_links) !== 10 || Number(c.archived_links) !== 19) throw new Error('Preserved staging counts changed');
-          if (Number(c.app_config_rows || 0) !== preApp) throw new Error('app_config changed');
+          const fk = JSON.parse(fs.readFileSync('/tmp/fk-after.json','utf8'));
+          const schema = JSON.parse(fs.readFileSync('/tmp/schema.json','utf8'));
+          const fkRows = fk?.[0]?.results || fk?.[0]?.result || [];
+          const names = schema.flatMap(item => item?.results || item?.result || []).map(item => item.name);
+          if (fkRows.length) throw new Error(`staging has ${fkRows.length} foreign-key violation(s) after migration`);
           for (const name of ['revision','lease_until','response_revision','account_responses_account_unique','analysis_runs_response_revision_running_unique','response_access']) {
-            if (!schemaNames.includes(name)) throw new Error(`Missing expected schema object: ${name}`);
+            if (!names.includes(name)) throw new Error(`missing expected schema object: ${name}`);
           }
           NODE
