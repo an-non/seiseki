@@ -35,8 +35,6 @@ jobs:
       - name: Phase 3 revision/queue test
         working-directory: cloudflare
         run: node --test tests/response-revision-queue.test.mjs
-      - name: Existing regression suite compatibility report
-        id: legacy
-        continue-on-error: true
+      - name: Required full regression suite
         working-directory: cloudflare
         run: npm test
