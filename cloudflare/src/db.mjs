@@ -137,19 +137,21 @@ export async function startAnalysisRun(db, responseId, expectedRevision, engine,
 
   const now = Date.now();
   const leaseUntil = now + Math.max(30000, Math.min(900000, Number(leaseMs) || 300000));
-  const running = await db.prepare(`
+  const findRunning = () => db.prepare(`
     SELECT id, lease_until AS leaseUntil
     FROM analysis_runs
     WHERE response_id = ? AND response_revision = ? AND status = 'running'
     ORDER BY id DESC LIMIT 1
   `).bind(responseId, revision).first();
+
+  const running = await findRunning();
   if (running && Number(running.leaseUntil ?? 0) > now) {
     return { status: "busy", runId: Number(running.id), revision, leaseUntil: Number(running.leaseUntil) };
   }
   if (running) {
     await db.prepare(`
       UPDATE analysis_runs
-      SET status = 'failed', completed_at = ?, error_code = 'LEASE_EXPIRED'
+      SET status = 'failed', completed_at = ?, error_code = 'LEASE_EXPIRED', lease_until = NULL
       WHERE id = ? AND status = 'running' AND COALESCE(lease_until, 0) <= ?
     `).bind(now, running.id, now).run();
   }
@@ -171,20 +173,22 @@ export async function startAnalysisRun(db, responseId, expectedRevision, engine,
   } catch (error) {
     const message = String(error?.message ?? "").toLowerCase();
     if (message.includes("unique") || message.includes("analysis_runs_response_revision_running_unique")) {
-      return { status: "busy", revision };
+      const active = await findRunning();
+      return {
+        status: "busy",
+        runId: active ? Number(active.id) : null,
+        revision,
+        leaseUntil: active ? Number(active.leaseUntil ?? now + 1000) : now + 1000
+      };
     }
     throw error;
   }
 
-  const claimed = await db.prepare(`
-    SELECT id, lease_until AS leaseUntil
-    FROM analysis_runs
-    WHERE response_id = ? AND response_revision = ? AND status = 'running'
-    ORDER BY id DESC LIMIT 1
-  `).bind(responseId, revision).first();
-  return claimed
-    ? { status: "claimed", runId: Number(claimed.id), revision, leaseUntil: Number(claimed.leaseUntil) }
-    : { status: "busy", revision };
+  const claimed = await findRunning();
+  if (claimed) {
+    return { status: "claimed", runId: Number(claimed.id), revision, leaseUntil: Number(claimed.leaseUntil) };
+  }
+  return { status: "stale", revision };
 }
 
 export async function renewAnalysisRunLease(db, responseId, runId, expectedRevision, leaseMs = 300000) {
@@ -212,23 +216,21 @@ async function markRunStale(db, runId, errorCode = "STALE_REVISION") {
 export async function completeResponseAnalysis(db, responseId, runId, expectedRevision, analysis, metadata) {
   const revision = Number(expectedRevision);
   const completedAt = Date.now();
-  const guardSql = `EXISTS (
+  const preCompletionGuard = `EXISTS (
     SELECT 1
     FROM responses r
     JOIN analysis_runs ar ON ar.id = ?
-    WHERE r.id = ? AND r.revision = ?
+    WHERE r.id = ? AND r.revision = ? AND r.analysis_status = 'pending'
       AND ar.response_id = r.id AND ar.response_revision = ?
       AND ar.status = 'running' AND COALESCE(ar.lease_until, 0) >= ?
   )`;
+
+  // D1 batch statements execute in order inside one transaction. Keep every chunk mutation
+  // before the response flips pending -> completed so the same pre-completion guard remains true.
   const statements = [
     db.prepare(`
-      UPDATE responses
-      SET analysis_status = 'completed', analysis_json = ?
-      WHERE id = ? AND revision = ? AND ${guardSql}
-    `).bind(JSON.stringify(analysis), responseId, revision, runId, responseId, revision, revision, completedAt),
-    db.prepare(`
       DELETE FROM opinion_chunks
-      WHERE response_id = ? AND ${guardSql}
+      WHERE response_id = ? AND ${preCompletionGuard}
     `).bind(responseId, runId, responseId, revision, revision, completedAt)
   ];
   for (const chunk of analysis.chunks) {
@@ -238,7 +240,7 @@ export async function completeResponseAnalysis(db, responseId, runId, expectedRe
         target_type, target_name, emotion, criticality, fact_status, provenance_json
       )
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      WHERE ${guardSql}
+      WHERE ${preCompletionGuard}
     `).bind(
       responseId, completedAt, chunk.s, chunk.cat, chunk.topic,
       chunk.tt, chunk.tn, chunk.emo, chunk.crit, chunk.fact,
@@ -246,16 +248,43 @@ export async function completeResponseAnalysis(db, responseId, runId, expectedRe
       runId, responseId, revision, revision, completedAt
     ));
   }
+
+  const responseResultIndex = statements.length;
+  statements.push(db.prepare(`
+    UPDATE responses
+    SET analysis_status = 'completed', analysis_json = ?
+    WHERE id = ? AND revision = ? AND analysis_status = 'pending'
+      AND EXISTS (
+        SELECT 1 FROM analysis_runs
+        WHERE id = ? AND response_id = ? AND response_revision = ?
+          AND status = 'running' AND COALESCE(lease_until, 0) >= ?
+      )
+  `).bind(JSON.stringify(analysis), responseId, revision, runId, responseId, revision, completedAt));
+
+  const runResultIndex = statements.length;
   statements.push(db.prepare(`
     UPDATE analysis_runs
     SET status = 'completed', completed_at = ?, error_code = NULL, lease_until = NULL
     WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
-      AND EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)
-  `).bind(completedAt, runId, responseId, revision, responseId, revision));
+      AND COALESCE(lease_until, 0) >= ?
+      AND EXISTS (
+        SELECT 1 FROM responses
+        WHERE id = ? AND revision = ? AND analysis_status = 'completed'
+      )
+  `).bind(completedAt, runId, responseId, revision, completedAt, responseId, revision));
+
   const results = await db.batch(statements);
-  const updated = Number(results?.[0]?.meta?.changes ?? 0) > 0;
-  if (!updated) await markRunStale(db, runId);
-  return updated;
+  const responseUpdated = Number(results?.[responseResultIndex]?.meta?.changes ?? 0) === 1;
+  const runUpdated = Number(results?.[runResultIndex]?.meta?.changes ?? 0) === 1;
+  if (responseUpdated && runUpdated) return true;
+
+  const runState = await db.prepare(`
+    SELECT lease_until AS leaseUntil, status
+    FROM analysis_runs WHERE id = ?
+  `).bind(runId).first();
+  const code = Number(runState?.leaseUntil ?? 0) < completedAt ? "LEASE_EXPIRED" : "STALE_REVISION";
+  await markRunStale(db, runId, code);
+  return false;
 }
 
 export async function failResponseAnalysis(db, responseId, runId, expectedRevision, errorCode) {
@@ -287,12 +316,13 @@ export async function getResponseAnalysis(db, id) {
     WHERE id = ?
   `).bind(id).first();
   if (!row) return null;
+  const revision = Number(row.revision ?? 1);
   const run = await db.prepare(`
     SELECT status, error_code AS errorCode, response_revision AS responseRevision
     FROM analysis_runs
-    WHERE response_id = ?
+    WHERE response_id = ? AND response_revision = ?
     ORDER BY id DESC LIMIT 1
-  `).bind(id).first();
+  `).bind(id, revision).first();
   let analysis = null;
   if (row.analysisJson) {
     try { analysis = JSON.parse(row.analysisJson); } catch { analysis = null; }
@@ -301,7 +331,7 @@ export async function getResponseAnalysis(db, id) {
     analysisStatus: row.analysisStatus === "pending" && run?.status === "running"
       ? "running"
       : row.analysisStatus,
-    revision: Number(row.revision ?? 1),
+    revision,
     analysis,
     ...(run?.errorCode ? { errorCode: run.errorCode } : {})
   };

@@ -204,6 +204,13 @@ async function handleCreateResponse(request, env, ctx) {
   }, 201);
 }
 
+function retryDelayForLease(outcome, now = Date.now()) {
+  const leaseUntil = Number(outcome?.leaseUntil ?? 0);
+  const remainingMs = Math.max(0, leaseUntil - now);
+  const jitterMs = Math.floor(Math.random() * 2000);
+  return Math.min(86400, Math.max(1, Math.ceil((remainingMs + jitterMs) / 1000)));
+}
+
 async function handleRequest(request, env, ctx) {
   if (!env.DB) throw new RequestError(503, "DB_NOT_BOUND", "D1 binding DB is not configured");
   const url = new URL(request.url);
@@ -329,7 +336,17 @@ export default {
         }
         const outcome = await analyzeStoredResponse(env, responseId, revision);
         if (outcome?.status === "busy") {
-          message.retry({ delaySeconds: 30 });
+          const delaySeconds = retryDelayForLease(outcome);
+          console.warn(JSON.stringify({
+            event: "analysis_queue_busy_retry",
+            responseId,
+            revision,
+            runId: outcome?.runId ?? null,
+            leaseUntil: outcome?.leaseUntil ?? null,
+            delaySeconds,
+            attempts: Number(message.attempts ?? 1)
+          }));
+          message.retry({ delaySeconds });
           continue;
         }
         message.ack();

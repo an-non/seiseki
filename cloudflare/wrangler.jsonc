@@ -58,6 +58,7 @@
             "max_batch_size": 3,
             "max_batch_timeout": 2,
             "max_retries": 3,
+            "dead_letter_queue": "seiseki-analysis-staging-dlq",
             "max_concurrency": 1,
             "retry_delay": 10
           }
@@ -91,6 +92,7 @@
         "max_batch_size": 3,
         "max_batch_timeout": 2,
         "max_retries": 3,
+        "dead_letter_queue": "seiseki-analysis-dlq",
         "max_concurrency": 1,
         "retry_delay": 10
       }
