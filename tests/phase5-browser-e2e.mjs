@@ -12,7 +12,7 @@ const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const DIST = join(ROOT, "local", "dist");
 const ARTIFACTS = join(ROOT, "phase5-browser-e2e-artifacts");
 const ORIGIN = "https://127.0.0.1:4175";
-const CDP_PORT = 9223;
+const CDP_PORT = 9000 + (process.pid % 1000);
 const PASSWORD = "phase5-e2e-password-20260827";
 
 mkdirSync(ARTIFACTS, { recursive: true });
@@ -344,15 +344,16 @@ async function fillByPlaceholder(fragment, value) {
 }
 
 async function fillPassword(value) {
-  const result = await evaluate(`(() => {
-    const el = [...document.querySelectorAll('input[type="password"]')].find(node => node.offsetWidth || node.offsetHeight || node.getClientRects().length);
-    if (!el) return false;
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
+  const count = await evaluate(`(() => {
+    const visible = [...document.querySelectorAll('input[type="password"]')].filter(node => node.offsetWidth || node.offsetHeight || node.getClientRects().length);
+    for (const el of visible) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return visible.length;
   })()`);
-  assert.equal(result, true, "visible password input was not found");
+  assert.ok(count >= 1, "visible password input was not found");
 }
 
 async function fillVisibleTextarea(value) {
@@ -453,7 +454,7 @@ try {
   const demoGroups = await evaluate(`(() => {
     const h2 = [...document.querySelectorAll('h2')].find(el => (el.textContent || '').includes('あなたについて教えてください'));
     if (!h2) return 0;
-    const root = h2.parentElement;
+    const root = h2.parentElement?.parentElement;
     return [...root.children].filter(child => {
       const buttons = [...child.querySelectorAll('button')].filter(b => b.offsetWidth || b.offsetHeight || b.getClientRects().length);
       if (buttons.length < 2) return false;
@@ -465,7 +466,7 @@ try {
   for (let index = 0; index < demoGroups; index += 1) {
     const clicked = await evaluate(`(() => {
       const h2 = [...document.querySelectorAll('h2')].find(el => (el.textContent || '').includes('あなたについて教えてください'));
-      const root = h2?.parentElement;
+      const root = h2?.parentElement?.parentElement;
       if (!root) return false;
       const groups = [...root.children].filter(child => {
         const buttons = [...child.querySelectorAll('button')].filter(b => b.offsetWidth || b.offsetHeight || b.getClientRects().length);
@@ -664,6 +665,6 @@ try {
   server.close();
   database.close();
   rmSync(certificate.dir, { recursive: true, force: true });
-  rmSync(chromeProfile, { recursive: true, force: true });
+  // Hosted Chrome can still be flushing its profile after SIGTERM; the runner is ephemeral.
   if (chrome.exitCode && chrome.exitCode !== 0) console.error(chromeStderr.slice(-4000));
 }
