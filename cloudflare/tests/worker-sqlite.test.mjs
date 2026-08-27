@@ -183,8 +183,6 @@ test("public demo endpoint returns display data without raw text or source IDs",
   const database = createDatabase();
   const env = { DB: new D1DatabaseAdapter(database), TURNSTILE_REQUIRED: "false" };
   const body = submission();
-  body.demoFlag = true;
-  body.answers.demo_batch = "demo-test-v1";
   body.freeText = "公開してはいけない合成自由記述原文";
   const create = await worker.fetch(new Request("http://local/api/responses", {
     method: "POST",
@@ -192,6 +190,11 @@ test("public demo endpoint returns display data without raw text or source IDs",
     body: JSON.stringify(body)
   }), env);
   const sourceId = (await create.json()).id;
+  /* Demo classification is server-owned; emulate the trusted seed path instead
+     of asking the public POST body to set demoFlag. */
+  database.prepare("UPDATE responses SET demo_flag = 1 WHERE id = ?").run(sourceId);
+  database.prepare("INSERT INTO answers (response_id, qid, value) VALUES (?, 'demo_batch', 'demo-test-v1')")
+    .run(sourceId);
   const analysis = {
     params: { emo: { pol: -0.2, label: "懸念" }, valid: 70, crit: 65, motiv: 60 },
     ideology: { econ: -42, soc: 28, confidence: 76 },

@@ -114,6 +114,7 @@ export const RATE_LIMIT_POLICIES = Object.freeze({
       Object.freeze({ label: "day", limit: 50, windowMs: 24 * 60 * 60 * 1000 })
     ]),
     subject: Object.freeze([
+      Object.freeze({ label: "cooldown", limit: 1, windowMs: 15 * 1000 }),
       Object.freeze({ label: "ten-minute", limit: 3, windowMs: 10 * 60 * 1000 })
     ])
   })

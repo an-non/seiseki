@@ -142,20 +142,61 @@ test("invalid bearer cannot fall through to an anonymous manage token", async ()
   database.close();
 });
 
-test("analysis requeue is rate limited per response", async () => {
+test("analysis requeue has a short per-response revision cooldown", async () => {
   const database = createDatabase(); const queued = [];
   const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
   const cr = await create(env, null); const created = await cr.json();
-  let last;
-  for (let index = 0; index < 4; index += 1) {
-    last = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, {
+  const request = () => new Request(`http://local/api/responses/${created.id}/analysis/requeue`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken },
       body: JSON.stringify({ expectedRevision: 1 })
-    }), env);
-  }
-  assert.equal(last.status, 429);
-  assert.equal((await last.json()).error, "RATE_LIMITED");
-  assert.equal(queued.length, 3);
+    });
+  const first = await worker.fetch(request(), env);
+  const second = await worker.fetch(request(), env);
+  assert.equal(first.status, 202);
+  assert.equal(second.status, 429);
+  assert.equal((await second.json()).error, "RATE_LIMITED");
+  assert.equal(queued.length, 1);
+  database.close();
+});
+
+test("stale loser leaves response, answers, chunks, and runs completely untouched", async () => {
+  const database = createDatabase();
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
+  const owner = await register(env, "stale-snapshot-owner");
+  const created = await (await create(env, owner.token)).json();
+  const now = Date.now();
+  database.prepare("UPDATE responses SET revision=2 WHERE id=?").run(created.id);
+  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?, 'keep', '評価', 'その他', 'その他', '',0,0,'意見','{}')")
+    .run(created.id, now);
+  database.prepare("INSERT INTO analysis_runs (response_id,engine,model,prompt_version,status,started_at,response_revision,lease_until) VALUES (?,'test','test','v1','running',?,2,?)")
+    .run(created.id, now, now + 60000);
+  const answers = Object.fromEntries(
+    database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id)
+      .map(row => [row.qid, row.value])
+  );
+  const snapshot = () => ({
+    response: database.prepare("SELECT revision,free_text,analysis_status,analysis_json FROM responses WHERE id=?").get(created.id),
+    answers: database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id),
+    chunks: database.prepare("SELECT summary,category,topic FROM opinion_chunks WHERE response_id=? ORDER BY id").all(created.id),
+    runs: database.prepare("SELECT id,status,error_code,response_revision,lease_until FROM analysis_runs WHERE response_id=? ORDER BY id").all(created.id)
+  });
+  const before = snapshot();
+
+  const staleText = await worker.fetch(new Request(`http://local/api/responses/${created.id}/free-text`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+    body: JSON.stringify({ expectedRevision: 1, freeText: "stale update" })
+  }), env);
+  assert.equal(staleText.status, 409);
+  assert.deepEqual(snapshot(), before);
+
+  const staleAnswers = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+    body: JSON.stringify({ expectedRevision: 1, answers })
+  }), env);
+  assert.equal(staleAnswers.status, 409);
+  assert.deepEqual(snapshot(), before);
   database.close();
 });

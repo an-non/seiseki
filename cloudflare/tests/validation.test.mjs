@@ -51,3 +51,8 @@ test("response ids are opaque capability identifiers", () => {
   assert.equal(id, "r_0123456789abcdef0123456789abcdef");
 });
 
+test("public submission cannot classify itself as demo data", () => {
+  const result = normalizeSubmission(fixture({ demoFlag: true }));
+  assert.equal(result.demoFlag, false);
+});
+

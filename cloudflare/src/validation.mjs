@@ -82,7 +82,9 @@ export function normalizeSubmission(input) {
     demo: Object.freeze(demo),
     answers: Object.freeze(answers),
     freeText: cleanText(body.freeText ?? body.free, 1500, "freeText"),
-    demoFlag: body.demoFlag === true
+    /* Public submissions cannot classify themselves as demo data. Demo rows are
+       marked only by a trusted server-side seeding or administration path. */
+    demoFlag: false
   });
 }
 
