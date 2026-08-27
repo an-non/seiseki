@@ -49,6 +49,10 @@ jobs:
           one(String.raw`src.includes('const FONT_BODY = \'"Zen Kaku Gothic New"')`, String.raw`src.includes('const FONT_BODY = \\'"Zen Kaku Gothic New"')`);
           one(String.raw`src.includes('const FONT_DISP = \'"Shippori Mincho"')`, String.raw`src.includes('const FONT_DISP = \\'"Shippori Mincho"')`);
           one(String.raw`src.includes('const FONT_MONO = \'"IBM Plex Mono"')`, String.raw`src.includes('const FONT_MONO = \\'"IBM Plex Mono"')`);
+          const blockStart = s.indexOf('replaceOnce(".github/workflows/mobile-ui-staging.yml",');
+          const blockEnd = s.indexOf('\n\nconst migration = ', blockStart);
+          if (blockStart < 0 || blockEnd < 0) throw new Error('mobile workflow runner block not found');
+          s = s.slice(0, blockStart) + s.slice(blockEnd + 2);
           fs.writeFileSync(p, s);
           NODE
           git checkout --detach "$BASELINE_SHA"
@@ -64,11 +68,27 @@ jobs:
           npm --prefix local ci --no-audit --no-fund
           test -z "$(git status --porcelain)"
 
-      - name: Apply Phase 5 and run full local regression
+      - name: Apply Phase 5 and patch workflow font contract
         shell: bash
         run: |
           set -euo pipefail
           node /tmp/SEISEKI_PHASE5_APPLY_20260827.mjs --repo="$GITHUB_WORKSPACE"
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = '.github/workflows/mobile-ui-staging.yml';
+          let s = fs.readFileSync(p, 'utf8');
+          function replaceLine(fragment, next) {
+            const lines = s.split('\n');
+            const indexes = lines.map((line, i) => line.includes(fragment) ? i : -1).filter(i => i >= 0);
+            if (indexes.length !== 1) throw new Error(`expected one workflow line for ${fragment}, found ${indexes.length}`);
+            lines[indexes[0]] = next;
+            s = lines.join('\n');
+          }
+          replaceLine('const FONT_BODY = ', `          grep -Fq 'const FONT_BODY = ' core/ui.jsx && grep -Fq '"Zen Kaku Gothic New"' core/ui.jsx`);
+          replaceLine('const FONT_DISP = ', `          grep -Fq 'const FONT_DISP = ' core/ui.jsx && grep -Fq '"Shippori Mincho"' core/ui.jsx`);
+          replaceLine('SFMono-Regular', `          grep -Fq 'const FONT_MONO = ' core/ui.jsx && grep -Fq '"IBM Plex Mono"' core/ui.jsx`);
+          fs.writeFileSync(p, s);
+          NODE
           node tests/local-bridge.test.js
           node tests/phase4-ui-contract.test.mjs
           git diff --check
@@ -82,6 +102,9 @@ jobs:
           grep -q 'tree: "/app/tree"' core/ui.jsx
           grep -q 'ANALYSIS_NOT_RETRYABLE' cloudflare/src/index.mjs
           grep -q 'ANALYSIS_STALL_AFTER_MS = 60000' cloudflare/src/db.mjs
+          grep -Fq '"Zen Kaku Gothic New"' .github/workflows/mobile-ui-staging.yml
+          grep -Fq '"Shippori Mincho"' .github/workflows/mobile-ui-staging.yml
+          grep -Fq '"IBM Plex Mono"' .github/workflows/mobile-ui-staging.yml
           ! git diff -- cloudflare/wrangler.jsonc | grep -E 'database_id|queue|name'
 
       - name: Commit tested implementation to isolated Phase 5 branch
