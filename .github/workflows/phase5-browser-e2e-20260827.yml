@@ -1,0 +1,79 @@
+name: Phase 5 real browser E2E 20260827
+
+on:
+  push:
+    branches:
+      - codex/phase5-implementation-20260827
+    paths:
+      - tests/phase5-browser-e2e.mjs
+      - core/**
+      - app/seiseki.jsx
+      - local/**
+      - cloudflare/src/**
+      - cloudflare/migrations/**
+      - cloudflare/tests/**
+      - .github/workflows/phase5-browser-e2e-20260827.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-phase5-real-browser-e2e
+  cancel-in-progress: false
+
+jobs:
+  real-browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VITE_SEISEKI_API_BASE: https://127.0.0.1:4175
+      VITE_SEISEKI_API_REQUIRED: 'true'
+      VITE_SEISEKI_RUNTIME_MODE: local
+    steps:
+      - name: Checkout tested Phase 5 branch
+        uses: actions/checkout@v4
+
+      - name: Install local-only dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Rebuild generated app and local bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          npm --prefix local run build
+          test -s local/dist/index.html
+          test -s local/dist/quantum/chunk-network-entanglement-preview.html
+
+      - name: Run Phase 5 real-browser E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tests/phase5-browser-e2e.mjs
+          node tests/phase5-browser-e2e.mjs
+
+      - name: Verify evidence bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s phase5-browser-e2e-artifacts/report.json
+          test -s phase5-browser-e2e-artifacts/desktop-app.png
+          test -s phase5-browser-e2e-artifacts/desktop-survey.png
+          test -s phase5-browser-e2e-artifacts/mobile-app.png
+          test -s phase5-browser-e2e-artifacts/mobile-survey.png
+          grep -q '"revision": 4' phase5-browser-e2e-artifacts/report.json
+          grep -q '"analysisStatus": "completed"' phase5-browser-e2e-artifacts/report.json
+
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-browser-e2e-${{ github.sha }}
+          path: phase5-browser-e2e-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
