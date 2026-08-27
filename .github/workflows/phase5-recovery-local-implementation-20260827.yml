@@ -49,10 +49,11 @@ jobs:
           one(String.raw`src.includes('const FONT_BODY = \'"Zen Kaku Gothic New"')`, String.raw`src.includes('const FONT_BODY = \\'"Zen Kaku Gothic New"')`);
           one(String.raw`src.includes('const FONT_DISP = \'"Shippori Mincho"')`, String.raw`src.includes('const FONT_DISP = \\'"Shippori Mincho"')`);
           one(String.raw`src.includes('const FONT_MONO = \'"IBM Plex Mono"')`, String.raw`src.includes('const FONT_MONO = \\'"IBM Plex Mono"')`);
-          one(
-            '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,',
-            '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running"\n      ? "running"\n      : row.analysisStatus,'
-          );
+          const compactAnalysis = '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,';
+          const firstAnalysis = s.indexOf(compactAnalysis);
+          if (firstAnalysis < 0) throw new Error('compact baseline analysis anchor not found');
+          const expandedAnalysis = '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running"\n      ? "running"\n      : row.analysisStatus,';
+          s = s.slice(0, firstAnalysis) + expandedAnalysis + s.slice(firstAnalysis + compactAnalysis.length);
           const blockStart = s.indexOf('replaceOnce(".github/workflows/mobile-ui-staging.yml",');
           const blockEnd = s.indexOf('\n\nconst migration = ', blockStart);
           if (blockStart < 0 || blockEnd < 0) throw new Error('mobile workflow runner block not found');
