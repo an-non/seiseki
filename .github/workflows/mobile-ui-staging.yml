@@ -43,9 +43,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'const FONT_BODY = '\''"Hiragino Sans"' core/ui.jsx
-          grep -q 'const FONT_DISP = '\''"Hiragino Sans"' core/ui.jsx
-          grep -q 'SFMono-Regular' core/ui.jsx
+          grep -Fq 'const FONT_BODY = ' core/ui.jsx && grep -Fq '"Zen Kaku Gothic New"' core/ui.jsx
+          grep -Fq 'const FONT_DISP = ' core/ui.jsx && grep -Fq '"Shippori Mincho"' core/ui.jsx
+          grep -Fq 'const FONT_MONO = ' core/ui.jsx && grep -Fq '"IBM Plex Mono"' core/ui.jsx
           grep -q 'font-synthesis: none' core/ui.jsx
           ! grep -q 'fonts.googleapis.com' core/ui.jsx
           grep -q 'rev=trace-layout-v2' core/ui.jsx
@@ -128,7 +128,7 @@ jobs:
           set -euo pipefail
           npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
           printf '\n### Production-prep staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- typography: Hiragino-first / no external fonts\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- typography: historical body/display/mono roles / no external fonts\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- runtime mode: staging\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- quantum: stable relation rendering / 10000 nodes\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
