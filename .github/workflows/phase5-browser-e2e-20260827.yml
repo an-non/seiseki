@@ -54,6 +54,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The hosted Chrome process can still be flushing its temporary profile
+          # after SIGTERM. Do not let profile cleanup mask the primary E2E result.
+          sed -i '/rmSync(chromeProfile/d' tests/phase5-browser-e2e.mjs
           node --check tests/phase5-browser-e2e.mjs
           node tests/phase5-browser-e2e.mjs
 
