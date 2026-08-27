@@ -3,19 +3,21 @@ import fs from "node:fs";
 const file = "core/ui.jsx";
 let src = fs.readFileSync(file, "utf8");
 
-const stableJapaneseSans = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
+const stableJapaneseBody = '"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif';
+const stableJapaneseDisplay = '"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif';
+const stableMono = '"IBM Plex Mono","SF Mono","Consolas",monospace';
 
 src = src.replace(
   /const FONT_BODY = '[^']+';/u,
-  `const FONT_BODY = '${stableJapaneseSans}';`
+  `const FONT_BODY = '${stableJapaneseBody}';`
 );
 src = src.replace(
   /const FONT_DISP = '[^']+';/u,
-  `const FONT_DISP = '${stableJapaneseSans}';`
+  `const FONT_DISP = '${stableJapaneseDisplay}';`
 );
 src = src.replace(
   /const FONT_MONO = '[^']+';/u,
-  'const FONT_MONO = \'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace\';'
+  `const FONT_MONO = '${stableMono}';`
 );
 
 src = src.replace(/\n\s*@import url\([^\n]+fonts\.googleapis\.com[^\n]+\);/u, "");
@@ -48,8 +50,9 @@ if (!src.includes('rev=trace-layout-v2')) throw new Error("embedded quantum cach
 if (!src.includes('const QUANTUM_PREVIEW_URL = "/quantum/')) throw new Error("same-origin quantum URL missing");
 if (src.includes('seiseki-opinion-network-preview.tokyo-odh-129.workers.dev/chunk-network-entanglement-preview.html')) throw new Error("external quantum iframe dependency still present");
 if (src.includes('fonts.googleapis.com')) throw new Error("external Google font import still present");
-if (!src.includes('const FONT_BODY = \'"Hiragino Sans"')) throw new Error("Hiragino-first body font missing");
-if (!src.includes('const FONT_DISP = \'"Hiragino Sans"')) throw new Error("Hiragino-first display font missing");
+if (!src.includes('const FONT_BODY = \'"Zen Kaku Gothic New"')) throw new Error("historical body font role missing");
+if (!src.includes('const FONT_DISP = \'"Shippori Mincho"')) throw new Error("historical display font role missing");
+if (!src.includes('const FONT_MONO = \'"IBM Plex Mono"')) throw new Error("historical mono font role missing");
 if (!src.includes('font-synthesis: none')) throw new Error("font synthesis guard missing");
 if (!src.includes('window.SEISEKI_RUNTIME_MODE === "staging"')) throw new Error("explicit staging runtime guard missing");
 

@@ -340,7 +340,7 @@ export async function linkResponseToAccount(db, accountId, responseId) {
 
 export async function listAccountResponses(db, accountId) {
   const rows = await db.prepare(`
-    SELECT r.id, r.created_at AS createdAt, r.app_version AS appVersion,
+    SELECT r.id, r.created_at AS createdAt, r.updated_at AS updatedAt, r.app_version AS appVersion,
            r.consent_version AS consentVersion, r.consent_at AS consentAt,
            r.age, r.gender, r.region, r.occupation, r.party,
            r.free_text AS freeText, r.analysis_status AS analysisStatus,
@@ -399,6 +399,7 @@ export async function listAccountResponses(db, accountId) {
     return {
       id: row.id,
       ts: Number(row.createdAt),
+      updatedAt: Number(row.updatedAt || row.createdAt || 0),
       ver: String(row.appVersion ?? ""),
       seq: Number(row.revision ?? 1),
       revision: Number(row.revision ?? 1),

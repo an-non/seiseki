@@ -22,7 +22,7 @@ class D1 {
 }
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql"]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   return database;
@@ -115,17 +115,53 @@ test("answers PATCH validates saved question snapshot and replaces answers at on
   database.close();
 });
 
-test("pending current revision can be requeued with authorization", async () => {
+test("healthy pending current revision is not manually requeued", async () => {
   const database = createDatabase(); const queued = [];
   const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
   const cr = await create(env, null); const created = await cr.json();
-  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, {
-    method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken },
-    body: JSON.stringify({ expectedRevision: 1 })
-  }), env);
-  assert.equal(r.status, 202);
-  assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]);
-  database.close();
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, { method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken }, body: JSON.stringify({ expectedRevision: 1 }) }), env);
+  assert.equal(r.status, 409); assert.equal((await r.json()).error, "ANALYSIS_NOT_RETRYABLE"); assert.deepEqual(queued, []); database.close();
+});
+
+test("failed current revision can be requeued without changing the response body", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const cr = await create(env, null); const created = await cr.json();
+  const before = database.prepare("SELECT free_text AS t, updated_at AS u FROM responses WHERE id=?").get(created.id);
+  database.prepare("UPDATE responses SET analysis_status='failed' WHERE id=?").run(created.id);
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, { method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken }, body: JSON.stringify({ expectedRevision: 1 }) }), env);
+  assert.equal(r.status, 202); assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]);
+  const after = database.prepare("SELECT free_text AS t, updated_at AS u, analysis_status AS s FROM responses WHERE id=?").get(created.id);
+  assert.deepEqual([after.t, after.u, after.s], [before.t, before.u, "pending"]); database.close();
+});
+
+test("stalled pending current revision can be requeued", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const cr = await create(env, null); const created = await cr.json();
+  database.prepare("UPDATE responses SET updated_at=? WHERE id=?").run(Date.now() - 120000, created.id);
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, { method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken }, body: JSON.stringify({ expectedRevision: 1 }) }), env);
+  assert.equal(r.status, 202); assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]); database.close();
+});
+
+test("active running current revision is not manually requeued", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const cr = await create(env, null); const created = await cr.json(); const now = Date.now();
+  database.prepare("INSERT INTO analysis_runs (response_id,engine,model,prompt_version,status,started_at,response_revision,lease_until) VALUES (?,'test','test','v','running',?,1,?)").run(created.id, now, now + 60000);
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, { method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken }, body: JSON.stringify({ expectedRevision: 1 }) }), env);
+  assert.equal(r.status, 409); assert.equal((await r.json()).error, "ANALYSIS_NOT_RETRYABLE"); assert.deepEqual(queued, []); database.close();
+});
+
+test("expired running current revision is requeued and its stale run is closed", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const cr = await create(env, null); const created = await cr.json(); const now = Date.now();
+  database.prepare("INSERT INTO analysis_runs (response_id,engine,model,prompt_version,status,started_at,response_revision,lease_until) VALUES (?,'test','test','v','running',?,1,?)").run(created.id, now - 120000, now - 1000);
+  const r = await worker.fetch(new Request(`http://local/api/responses/${created.id}/analysis/requeue`, { method: "POST", headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken }, body: JSON.stringify({ expectedRevision: 1 }) }), env);
+  assert.equal(r.status, 202); assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 1 }]);
+  const oldRun = database.prepare("SELECT status,error_code AS errorCode FROM analysis_runs WHERE response_id=? ORDER BY id DESC LIMIT 1").get(created.id);
+  assert.deepEqual([oldRun.status, oldRun.errorCode], ["failed", "LEASE_EXPIRED"]); database.close();
 });
 
 test("invalid bearer cannot fall through to an anonymous manage token", async () => {
@@ -146,6 +182,7 @@ test("analysis requeue has a short per-response revision cooldown", async () => 
   const database = createDatabase(); const queued = [];
   const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
   const cr = await create(env, null); const created = await cr.json();
+  database.prepare("UPDATE responses SET analysis_status='failed' WHERE id=?").run(created.id);
   const request = () => new Request(`http://local/api/responses/${created.id}/analysis/requeue`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-response-manage-token": created.manageToken },

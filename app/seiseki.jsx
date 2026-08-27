@@ -1781,6 +1781,13 @@ function normalizeCloudAnalysisResult(payload) {
     analysis: analysis,
     errorCode: String(payload && payload.errorCode || ""),
     revision: Number(payload && payload.revision || 0),
+    updatedAt: Number(payload && payload.updatedAt || 0),
+    lastActivityAt: Number(payload && payload.lastActivityAt || 0),
+    startedAt: Number(payload && payload.startedAt || 0),
+    completedAt: Number(payload && payload.completedAt || 0),
+    leaseUntil: Number(payload && payload.leaseUntil || 0),
+    stalled: payload && payload.stalled === true,
+    retryable: payload && payload.retryable === true,
     mode: analysis && analysis.engine === "rules-fallback-v1" ? "fallback" : "ai"
   };
 }
@@ -1789,6 +1796,9 @@ function analysisStateLabel(response) {
   if (!response) return null;
   if (response.analysis && response.analysis.engine === "rules-fallback-v1") {
     return { tone: "warning", title: "規則による代替解析", detail: "AI解析が完了しなかったため、保存済み回答を規則解析で処理しました。" };
+  }
+  if (response.cloudAnalysisStalled === true) {
+    return { tone: "warning", title: "AI解析が停止している可能性", detail: "回答本文は保存済みです。現在revisionだけを再試行できます。" };
   }
   if (response.cloudAnalysisStatus === "running") {
     return { tone: "neutral", title: "AI解析中", detail: "回答は保存済みです。解析完了後に結果と意見ノードへ反映されます。" };
@@ -1925,14 +1935,28 @@ async function cloudLoadOwnResponse(id, token) {
     : null;
   const response = sanitizeResponse(raw);
   if (response) {
-    const state = normalizeCloudAnalysisResult(raw);
+    const rawRevision = Number(raw && raw.revision || response.revision || response.seq || 1);
+    let state = normalizeCloudAnalysisResult(raw);
+    try {
+      const currentState = await cloudLoadResponseAnalysis(id);
+      if (currentState && Number(currentState.revision || 0) === rawRevision) state = currentState;
+    } catch (error) { console.warn("current analysis metadata load failed", error); }
     response.remoteId = id;
-    response.remoteRevision = Number(raw && raw.revision || response.revision || response.seq || 1);
+    response.remoteRevision = rawRevision;
     response.revision = response.remoteRevision;
+    response.updatedAt = Number(raw && raw.updatedAt || response.updatedAt || response.ts || 0);
     response.analysis = state.analysis;
     response.analysisSource = "cloudflare";
     response.cloudAnalysisStatus = state.status;
     response.cloudAnalysisMode = state.mode;
+    response.cloudAnalysisErrorCode = state.errorCode;
+    response.cloudAnalysisUpdatedAt = state.updatedAt || response.updatedAt;
+    response.cloudAnalysisLastActivityAt = state.lastActivityAt;
+    response.cloudAnalysisStartedAt = state.startedAt;
+    response.cloudAnalysisCompletedAt = state.completedAt;
+    response.cloudAnalysisLeaseUntil = state.leaseUntil;
+    response.cloudAnalysisStalled = state.stalled;
+    response.cloudAnalysisRetryable = state.retryable;
   }
   return response;
 }
@@ -2038,10 +2062,24 @@ async function acctGet(name, strictRemote) {
   if (!nm) return null;
   if (cloudApiEnabled()) {
     const session = await pGet("session:current");
-    if (!session || !session.token) return null;
+    if (!session || !session.token) {
+      if (strictRemote) {
+        const error = new Error("remote account session is missing");
+        error.status = 401;
+        error.code = "AUTH_SESSION_MISSING";
+        throw error;
+      }
+      return null;
+    }
     try {
       const result = await cloudAccountCall("/api/accounts/me", "GET", undefined, session.token);
-      return cloudAccountRecord(result, session.token);
+      const record = cloudAccountRecord(result, session.token);
+      if (!record && strictRemote) {
+        const error = new Error("remote account payload is invalid");
+        error.code = "ACCOUNT_PAYLOAD_INVALID";
+        throw error;
+      }
+      return record;
     } catch (e) {
       if (strictRemote) throw e;
       return null;
@@ -2195,9 +2233,9 @@ const C = {
   slate: "#3D5573", slateSoft: "#E6EAF1",
   gray: "#9C988B"
 };
-const FONT_BODY = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
-const FONT_DISP = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic UI","Yu Gothic","Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif';
-const FONT_MONO = 'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace';
+const FONT_BODY = '"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif';
+const FONT_DISP = '"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif';
+const FONT_MONO = '"IBM Plex Mono","SF Mono","Consolas",monospace';
 
 const SUP_COLORS = {
   "支持する": "#175E54",
@@ -2457,19 +2495,20 @@ const VIEW_PATHS = {
   survey: "/survey",
   complete: "/survey/complete",
   dash: "/app/dashboard",
-  tree: "/app/network",
+  tree: "/app/tree",
   quantum: "/app/quantum",
   opinions: "/app/opinions",
   mine: "/account/response",
   admin: "/admin"
 };
+const VIEW_PATH_ALIASES = { "/app/network": "tree" };
 
 function viewFromPath(pathname) {
   const path = String(pathname || "/").replace(/\/+$/, "") || "/";
   for (const key of Object.keys(VIEW_PATHS)) {
     if (VIEW_PATHS[key] === path) return key;
   }
-  return "entry";
+  return VIEW_PATH_ALIASES[path] || "entry";
 }
 
 function currentPath() {
@@ -2891,9 +2930,6 @@ export default function App() {
     if (cloudApiEnabled() && ["home", "dash", "tree", "opinions"].includes(v)) {
       refreshAgg().catch(error => console.warn("aggregate navigation refresh failed", error));
     }
-    if (cloudApiEnabled() && ["home", "dash", "tree", "opinions"].includes(v)) {
-      refreshAgg().catch(error => console.warn("aggregate navigation refresh failed", error));
-    }
   }
   function goBack() {
     const p = prevRef.current;
@@ -2987,7 +3023,14 @@ export default function App() {
         ) : view === "survey" ? (
           <Survey questions={questions} policy={policy} notify={notify} onFinished={(a, result) => { const shown = withCloudDemos(a, cloudDemos); setAgg(shown); setCompletion({ ...result, agg: shown }); goView("complete"); }} goto={goView}
             session={session} onAuthed={onAuthed}
-            onDraftChange={d => { setHasDraft(d); if (!d && session) acctGet(session.name).then(r => setMyId((r && r.respId) || "")); }} />
+            onDraftChange={d => {
+              setHasDraft(d);
+              if (!d && session) {
+                acctGet(session.name, cloudApiEnabled())
+                  .then(r => { if (r && r.respId) setMyId(r.respId); })
+                  .catch(error => console.warn("account response refresh failed", error));
+              }
+            }} />
         ) : view === "complete" ? (
           completion ? <Completion result={completion} notify={notify} goto={goView} session={session} /> : <CompletionUnavailable goto={goView} />
         ) : view === "dash" ? (
@@ -3435,7 +3478,10 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       const next = {
         ...currentResponse, id: id, remoteId: id,
         free: nextText, revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending"
+        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        updatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
       };
       await sSet("resp:" + id, next);
       setCurrentResponse(next); setEditMode(null); setEditText("");
@@ -3464,7 +3510,10 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       const next = {
         ...currentResponse, id: id, remoteId: id,
         answers: payload, revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending"
+        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        updatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
       };
       await sSet("resp:" + id, next);
       setCurrentResponse(next); setEditMode(null);
@@ -3485,7 +3534,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     busyRef.current = true; setErr("");
     try {
       await cloudRequeueAnalysis(id, revision);
-      setCurrentResponse({ ...currentResponse, cloudAnalysisStatus: "pending" });
+      setCurrentResponse({ ...currentResponse, cloudAnalysisStatus: "pending", cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: "" });
       notify("現在の回答を解析キューへ再投入しました");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
@@ -3570,8 +3619,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
             placeholder={append ? "追加したい内容を書いてください" : "現在の自由記述を編集してください"}
             style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }}
           />
-          <div style={{ fontSize: 11, color: C.sub, marginTop: 4 }}>
-            {append ? "追記後の全文" : "編集後全文"}が1500字以内で保存され、全文を再解析します。
+          <div style={{ fontSize: 11, color: C.sub, marginTop: 4, lineHeight: 1.8 }}>
+            {append ? "現在の全文は残したまま、この入力を新しい段落として末尾へ追加します。結合後の全文が1500字以内で保存され、その全文を再解析します。" : "現在の自由記述全文を、この入力内容で置き換えます。保存後は置き換え後の全文を再解析します。"}
           </div>
           {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -3609,28 +3658,35 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       );
     }
 
+    const currentAnalysisState = analysisStateLabel(currentResponse);
+    const analysisUpdatedAt = Number(currentResponse.cloudAnalysisLastActivityAt || currentResponse.cloudAnalysisUpdatedAt || currentResponse.updatedAt || currentResponse.ts || 0);
+    const canRetryAnalysis = currentResponse.cloudAnalysisRetryable === true;
     return (
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
         <H2 eyebrow="CURRENT RESPONSE" sub={"回答ID " + id + " / revision " + revision}>現在の回答</H2>
         <Card style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.8 }}>
-            このアカウントには回答が1件あります。新しい回答を作らず、この回答を更新します。
+          <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.8 }}>このアカウントには回答が1件あります。新しい回答を作らず、この回答を更新します。</div>
+          <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13 }}>{currentResponse.free || "（自由記述なし）"}</div>
+        </Card>
+        <Card pad={13} style={{ marginBottom: 14, borderColor: currentAnalysisState && currentAnalysisState.tone === "error" ? C.bengara : C.rule }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 5 }}>解析状態</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, fontSize: 11, color: C.sub }}>
+            <div>revision <span style={{ fontFamily: FONT_MONO, color: C.ink }}>{revision}</span></div>
+            <div>状態 <span style={{ color: C.ink }}>{currentAnalysisState ? currentAnalysisState.title : (currentResponse.cloudAnalysisStatus || "pending")}</span></div>
+            <div>更新 <span style={{ color: C.ink }}>{analysisUpdatedAt ? fmtDT(analysisUpdatedAt) : "確認中"}</span></div>
           </div>
-          <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13 }}>
-            {currentResponse.free || "（自由記述なし）"}
-          </div>
-          <div style={{ marginTop: 10, fontSize: 11, color: C.sub }}>
-            解析状態: {currentResponse.cloudAnalysisStatus || currentResponse.analysisStatus || "pending"}
-          </div>
+          {currentAnalysisState ? <div style={{ fontSize: 11, color: C.sub, marginTop: 7 }}>{currentAnalysisState.detail}</div> : null}
+          {currentResponse.cloudAnalysisErrorCode ? <div style={{ fontSize: 11, color: C.bengara, marginTop: 5 }}>error: {currentResponse.cloudAnalysisErrorCode}</div> : null}
+          {canRetryAnalysis ? <div style={{ marginTop: 10 }}><Btn small kind="ghost" onClick={retryCurrentAnalysis}>現在revisionの解析を再試行</Btn></div> : null}
         </Card>
         {err ? <div style={{ color: C.bengara, fontSize: 12, marginBottom: 10 }}>{err}</div> : null}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Btn onClick={() => { setEditText(""); setEditMode("append"); setErr(""); }}>自由記述を追記</Btn>
-          <Btn kind="ghost" onClick={() => { setEditText(String(currentResponse.free || "")); setEditMode("free"); setErr(""); }}>自由記述を修正</Btn>
-          <Btn kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケート回答を修正</Btn>
-          {(currentResponse.cloudAnalysisStatus === "pending") ? <Btn kind="ghost" onClick={retryCurrentAnalysis}>解析を再試行</Btn> : null}
-          <Btn kind="ghost" onClick={() => goto("mine")}>自分の回答を確認</Btn>
+        <H2 eyebrow="UPDATE RESPONSE" sub="変更内容ごとに操作を分けています。どの更新でも保存後に現在revisionを再解析します。">回答を更新する</H2>
+        <div style={{ display: "grid", gap: 10 }}>
+          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を追記</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の全文を残し、新しい段落を末尾へ追加してから全文を再解析します。</div><Btn small onClick={() => { setEditText(""); setEditMode("append"); setErr(""); }}>追記する</Btn></Card>
+          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を全文修正</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の自由記述全文を置き換え、置き換え後の全文を再解析します。</div><Btn small kind="ghost" onClick={() => { setEditText(String(currentResponse.free || "")); setEditMode("free"); setErr(""); }}>全文を修正する</Btn></Card>
+          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>アンケート回答を修正</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>初回回答時に保存された設問スナップショットだけを修正します。自由記述は変えず、現在の全文を再解析します。</div><Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正する</Btn></Card>
         </div>
+        <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答を確認</Btn></div>
       </div>
     );
   }
@@ -4792,25 +4848,34 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
   const [confirming, setConfirming] = useState(false);
 
   const [noSelf, setNoSelf] = useState(false); // ログイン済みだが未回答
+  const [selfLookupError, setSelfLookupError] = useState("");
+  const [selfLookupNonce, setSelfLookupNonce] = useState(0);
 
   /* ログイン中はアカウントに紐付いた回答を自動表示する(IDの入力は不要)。
-     未ログインでも、回答IDによる照会(合鍵)は引き続き使える。 */
+     通信失敗と「回答なし」は分離し、失敗時に未回答扱いへ落とさない。 */
   useEffect(() => {
     let alive = true;
     setNoSelf(false);
+    setSelfLookupError("");
     (async () => {
       if (session) {
-        const rec = await acctGet(session.name);
-        if (!alive) return;
-        if (rec && rec.respId) { setIdv(rec.respId); lookup(rec.respId); }
-        else setNoSelf(true);
+        try {
+          const rec = await acctGet(session.name, cloudApiEnabled());
+          if (!alive) return;
+          if (rec && rec.respId) { setIdv(rec.respId); lookup(rec.respId); }
+          else setNoSelf(true);
+        } catch (error) {
+          if (!alive) return;
+          console.warn("account response lookup failed", error);
+          setSelfLookupError("本人回答を確認できませんでした。通信状態を確認して、もう一度試してください。");
+        }
         return;
       }
       const last = await pGet("last:id");
       if (alive && last && last.id) setIdv(last.id);
     })();
     return () => { alive = false; };
-  }, [session]);
+  }, [session, selfLookupNonce]);
 
   async function lookup(idArg) {
     setErr("");
@@ -5051,7 +5116,15 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
       <H2 eyebrow="MY RESPONSE" sub={session ? "ログイン中: アカウントに紐付いた回答を表示します" : "回答ID(合鍵)でも、ログインなしで照会できます"}>自分の回答</H2>
       {session ? <AccountSettings session={session} onUpdated={onAccountUpdated} /> : null}
-      {session && noSelf ? (
+      {session && selfLookupError ? (
+        <Card pad={13} style={{ marginBottom: 12, borderColor: C.bengara }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>{selfLookupError}</div>
+            <Btn small kind="ghost" onClick={() => setSelfLookupNonce(selfLookupNonce + 1)}>もう一度確認する</Btn>
+          </div>
+        </Card>
+      ) : null}
+      {session && noSelf && !selfLookupError ? (
         <Card pad={13} style={{ marginBottom: 12, borderColor: C.green }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>

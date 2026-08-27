@@ -21,7 +21,7 @@ test("概要・集計・意見ツリー・意見一覧は固有URLを持つ", ()
   for (const view of [
     'home: "/app"',
     'dash: "/app/dashboard"',
-    'tree: "/app/network"',
+    'tree: "/app/tree"',
     'quantum: "/app/quantum"',
     'opinions: "/app/opinions"'
   ]) {

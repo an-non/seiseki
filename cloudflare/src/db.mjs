@@ -2,12 +2,13 @@ export async function insertPendingResponse(db, response, questionContext = [], 
   const statements = [
     db.prepare(`
       INSERT INTO responses (
-        id, created_at, app_version, consent_version, consent_at,
+        id, created_at, updated_at, app_version, consent_version, consent_at,
         age, gender, region, occupation, party, free_text,
         analysis_status, analysis_json, demo_flag, revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, 1)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, 1)
     `).bind(
       response.id,
+      response.createdAt,
       response.createdAt,
       response.appVersion,
       response.consentVersion,
@@ -77,7 +78,7 @@ export async function insertPendingResponse(db, response, questionContext = [], 
 
 export async function getResponseMetadata(db, id) {
   return db.prepare(`
-    SELECT id, created_at AS createdAt, app_version AS appVersion,
+    SELECT id, created_at AS createdAt, updated_at AS updatedAt, app_version AS appVersion,
            consent_version AS consentVersion, analysis_status AS analysisStatus,
            demo_flag AS demoFlag, revision
     FROM responses
@@ -323,32 +324,96 @@ export async function failResponseAnalysis(db, responseId, runId, expectedRevisi
   return Number(results?.[0]?.meta?.changes ?? 0) > 0;
 }
 
-export async function getResponseAnalysis(db, id) {
+export const ANALYSIS_STALL_AFTER_MS = 60000;
+
+export function analysisRetryState(row, run, now = Date.now()) {
+  const responseStatus = String(row?.analysisStatus || "");
+  const runStatus = String(run?.status || "");
+  const updatedAt = Number(row?.updatedAt || 0);
+  const startedAt = Number(run?.startedAt || 0);
+  const completedAt = Number(run?.completedAt || 0);
+  const leaseUntil = Number(run?.leaseUntil || 0);
+  const lastActivityAt = Math.max(updatedAt, startedAt, completedAt);
+  const expiredRunning = responseStatus === "pending" && runStatus === "running" && ((leaseUntil > 0 && leaseUntil <= now) || (leaseUntil <= 0 && startedAt > 0 && now - startedAt >= ANALYSIS_STALL_AFTER_MS));
+  const waitingTooLong = responseStatus === "pending" && runStatus !== "running" && lastActivityAt > 0 && now - lastActivityAt >= ANALYSIS_STALL_AFTER_MS;
+  const stalled = expiredRunning || waitingTooLong;
+  return { stalled, retryable: responseStatus === "failed" || stalled, lastActivityAt, leaseUntil };
+}
+
+async function currentAnalysisRow(db, id) {
   const row = await db.prepare(`
-    SELECT analysis_status AS analysisStatus, analysis_json AS analysisJson, revision
-    FROM responses
-    WHERE id = ?
+    SELECT analysis_status AS analysisStatus, analysis_json AS analysisJson, revision, updated_at AS updatedAt
+    FROM responses WHERE id = ?
   `).bind(id).first();
-  if (!row) return null;
+  if (!row) return { row: null, run: null };
   const revision = Number(row.revision ?? 1);
   const run = await db.prepare(`
-    SELECT status, error_code AS errorCode, response_revision AS responseRevision
-    FROM analysis_runs
-    WHERE response_id = ? AND response_revision = ?
-    ORDER BY id DESC LIMIT 1
+    SELECT id, status, error_code AS errorCode, response_revision AS responseRevision,
+           started_at AS startedAt, completed_at AS completedAt, lease_until AS leaseUntil
+    FROM analysis_runs WHERE response_id = ? AND response_revision = ? ORDER BY id DESC LIMIT 1
   `).bind(id, revision).first();
+  return { row, run };
+}
+
+export async function getResponseAnalysis(db, id) {
+  const { row, run } = await currentAnalysisRow(db, id);
+  if (!row) return null;
+  const revision = Number(row.revision ?? 1);
   let analysis = null;
-  if (row.analysisJson) {
-    try { analysis = JSON.parse(row.analysisJson); } catch { analysis = null; }
-  }
+  if (row.analysisJson) { try { analysis = JSON.parse(row.analysisJson); } catch { analysis = null; } }
+  const retry = analysisRetryState(row, run);
   return {
-    analysisStatus: row.analysisStatus === "pending" && run?.status === "running"
-      ? "running"
-      : row.analysisStatus,
+    analysisStatus: row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,
     revision,
     analysis,
+    updatedAt: Number(row.updatedAt || 0),
+    lastActivityAt: retry.lastActivityAt,
+    stalled: retry.stalled,
+    retryable: retry.retryable,
+    ...(run?.startedAt ? { startedAt: Number(run.startedAt) } : {}),
+    ...(run?.completedAt ? { completedAt: Number(run.completedAt) } : {}),
+    ...(run?.leaseUntil ? { leaseUntil: Number(run.leaseUntil) } : {}),
     ...(run?.errorCode ? { errorCode: run.errorCode } : {})
   };
+}
+
+export async function prepareResponseAnalysisRetry(db, id, expectedRevision) {
+  const revision = Number(expectedRevision);
+  const now = Date.now();
+  const { row, run } = await currentAnalysisRow(db, id);
+  if (!row) return { status: "not_found" };
+  if (Number(row.revision ?? 1) !== revision) return { status: "stale" };
+  const retry = analysisRetryState(row, run, now);
+  if (!retry.retryable) return { status: "not_retryable", stalled: retry.stalled };
+  if (run?.status === "running" && retry.stalled) {
+    await db.prepare(`
+      UPDATE analysis_runs SET status = 'failed', completed_at = ?, error_code = 'LEASE_EXPIRED', lease_until = NULL
+      WHERE id = ? AND response_id = ? AND response_revision = ? AND status = 'running'
+        AND ((COALESCE(lease_until, 0) > 0 AND lease_until <= ?) OR (COALESCE(lease_until, 0) <= 0 AND started_at <= ?))
+    `).bind(now, run.id, id, revision, now, now - ANALYSIS_STALL_AFTER_MS).run();
+  }
+  let resetFromFailed = false;
+  if (row.analysisStatus === "failed") {
+    const result = await db.prepare(`
+      UPDATE responses SET analysis_status = 'pending', analysis_json = NULL
+      WHERE id = ? AND revision = ? AND analysis_status = 'failed'
+        AND NOT EXISTS (SELECT 1 FROM analysis_runs WHERE response_id = ? AND response_revision = ? AND status = 'running' AND COALESCE(lease_until, 0) > ?)
+    `).bind(id, revision, id, revision, now).run();
+    if (Number(result.meta?.changes ?? 0) !== 1) return { status: "not_retryable" };
+    resetFromFailed = true;
+  }
+  return { status: "ready", revision, resetFromFailed };
+}
+
+export async function restoreResponseAnalysisFailure(db, id, expectedRevision) {
+  const revision = Number(expectedRevision);
+  const now = Date.now();
+  const result = await db.prepare(`
+    UPDATE responses SET analysis_status = 'failed', analysis_json = NULL
+    WHERE id = ? AND revision = ? AND analysis_status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM analysis_runs WHERE response_id = ? AND response_revision = ? AND status = 'running' AND COALESCE(lease_until, 0) > ?)
+  `).bind(id, revision, id, revision, now).run();
+  return Number(result.meta?.changes ?? 0) === 1;
 }
 
 export async function getResponseQuestionSnapshot(db, id) {
@@ -386,9 +451,9 @@ export async function updateResponseFreeText(db, id, expectedRevision, freeText)
     `).bind(now, id, expectedRevision, id, expectedRevision),
     db.prepare(`
       UPDATE responses
-      SET free_text = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
+      SET free_text = ?, updated_at = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
       WHERE id = ? AND revision = ?
-    `).bind(freeText, id, expectedRevision)
+    `).bind(freeText, now, id, expectedRevision)
   ];
   const results = await db.batch(statements);
   if (Number(results?.[2]?.meta?.changes ?? 0) !== 1) return null;
@@ -418,9 +483,9 @@ export async function updateResponseAnswers(db, id, expectedRevision, answers) {
     `).bind(now, id, expectedRevision, id, expectedRevision),
     db.prepare(`
       UPDATE responses
-      SET revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
+      SET updated_at = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
       WHERE id = ? AND revision = ?
-    `).bind(id, expectedRevision)
+    `).bind(now, id, expectedRevision)
   );
   const results = await db.batch(statements);
   const final = results?.[results.length - 1];

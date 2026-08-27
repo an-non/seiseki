@@ -39,7 +39,7 @@ function createDatabase() {
     "0003_staging_kdf_range.sql",
     "0004_response_question_context.sql",
     "0005_rate_limits.sql",
-    "0006_response_access_revision.sql"
+    "0006_response_access_revision.sql", "0007_response_updated_at.sql"
   ]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }

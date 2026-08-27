@@ -8,7 +8,7 @@ import {
   updateResponseAnswers,
   updateResponseFreeText
 } from "./db.mjs";
-import { getResponseAnalysis } from "./db.mjs";
+import { getResponseAnalysis, prepareResponseAnalysisRetry, restoreResponseAnalysisFailure } from "./db.mjs";
 import {
   authenticateRequest,
   authorizeResponseAccess,
@@ -332,7 +332,8 @@ async function handleRequest(request, env, ctx) {
       throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     }
     dispatchUpdatedAnalysis(env, ctx, freeTextId, nextRevision);
-    return json({ id: freeTextId, revision: nextRevision, analysisStatus: "pending" });
+    const current = await getResponseMetadata(env.DB, freeTextId);
+    return json({ id: freeTextId, revision: nextRevision, analysisStatus: "pending", updatedAt: Number(current?.updatedAt || Date.now()) });
   }
 
   const answersId = routeAnswersId(url.pathname);
@@ -349,7 +350,8 @@ async function handleRequest(request, env, ctx) {
       throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     }
     dispatchUpdatedAnalysis(env, ctx, answersId, nextRevision);
-    return json({ id: answersId, revision: nextRevision, analysisStatus: "pending" });
+    const current = await getResponseMetadata(env.DB, answersId);
+    return json({ id: answersId, revision: nextRevision, analysisStatus: "pending", updatedAt: Number(current?.updatedAt || Date.now()) });
   }
 
   const requeueId = routeRequeueId(url.pathname);
@@ -358,16 +360,16 @@ async function handleRequest(request, env, ctx) {
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.analysisRequeue, requeueId);
     const body = await readJson(request);
     const expectedRevision = normalizeExpectedRevision(body?.expectedRevision);
-    const current = await getResponseMetadata(env.DB, requeueId);
+    const current = await getResponseAnalysis(env.DB, requeueId);
     if (!current) throw new RequestError(404, "NOT_FOUND", "response was not found");
-    if (Number(current.revision ?? 1) !== expectedRevision) {
-      throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before retrying");
-    }
-    if (current.analysisStatus !== "pending") {
-      throw new RequestError(409, "ANALYSIS_NOT_PENDING", "only a pending analysis can be requeued");
-    }
-    await enqueueAnalysisRevision(env, requeueId, expectedRevision);
-    return json({ id: requeueId, revision: expectedRevision, analysisStatus: "pending", queued: true }, 202);
+    if (Number(current.revision ?? 1) !== expectedRevision) throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before retrying");
+    if (!current.retryable) throw new RequestError(409, "ANALYSIS_NOT_RETRYABLE", "analysis can be retried only after failure or a detected stall");
+    const prepared = await prepareResponseAnalysisRetry(env.DB, requeueId, expectedRevision);
+    if (prepared.status === "stale") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before retrying");
+    if (prepared.status !== "ready") throw new RequestError(409, "ANALYSIS_NOT_RETRYABLE", "analysis is no longer retryable");
+    try { await enqueueAnalysisRevision(env, requeueId, expectedRevision); }
+    catch (error) { if (prepared.resetFromFailed) await restoreResponseAnalysisFailure(env.DB, requeueId, expectedRevision); throw error; }
+    return json({ id: requeueId, revision: expectedRevision, analysisStatus: "pending", stalled: false, retryable: false, queued: true }, 202);
   }
 
   const analysisId = routeAnalysisId(url.pathname);
