@@ -88,6 +88,8 @@ jobs:
           if old not in s:
               raise SystemExit('fillPassword diagnostic patch anchor missing')
           s = s.replace(old, new, 1)
+          s = s.replace('const root = h2.parentElement;', 'const root = h2.parentElement?.parentElement;', 1)
+          s = s.replace('const root = h2?.parentElement;', 'const root = h2?.parentElement?.parentElement;', 1)
           s = s.replace('  rmSync(chromeProfile, { recursive: true, force: true });\n', '', 1)
           p.write_text(s)
           PY
