@@ -54,10 +54,14 @@ jobs:
           if (firstAnalysis < 0) throw new Error('compact baseline analysis anchor not found');
           const expandedAnalysis = '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running"\n      ? "running"\n      : row.analysisStatus,';
           s = s.slice(0, firstAnalysis) + expandedAnalysis + s.slice(firstAnalysis + compactAnalysis.length);
-          const blockStart = s.indexOf('replaceOnce(".github/workflows/mobile-ui-staging.yml",');
-          const blockEnd = s.indexOf('\n\nconst migration = ', blockStart);
-          if (blockStart < 0 || blockEnd < 0) throw new Error('mobile workflow runner block not found');
-          s = s.slice(0, blockStart) + s.slice(blockEnd + 2);
+          const mobileStart = s.indexOf('replaceOnce(".github/workflows/mobile-ui-staging.yml",');
+          const mobileEnd = s.indexOf('\n\nconst migration = ', mobileStart);
+          if (mobileStart < 0 || mobileEnd < 0) throw new Error('mobile workflow runner block not found');
+          s = s.slice(0, mobileStart) + s.slice(mobileEnd + 2);
+          const routeExtraStart = s.indexOf('replaceOnce("tests/page-routing.test.mjs", `assert.equal((ui.match(/function viewFromPath');
+          const routeExtraEnd = s.indexOf('\nreplaceOnce("cloudflare/tests/response-phase4-backend.test.mjs"', routeExtraStart);
+          if (routeExtraStart < 0 || routeExtraEnd < 0) throw new Error('obsolete route assertion block not found');
+          s = s.slice(0, routeExtraStart) + s.slice(routeExtraEnd + 1);
           fs.writeFileSync(p, s);
           NODE
           git checkout --detach "$BASELINE_SHA"
