@@ -175,12 +175,19 @@ try {
   }
   record("pending-hidden-from-public", { total: pendingTotal });
 
-  const requeue = await request(`/api/responses/${responseId}/analysis/requeue`, {
+  const healthyPendingRetry = await request(`/api/responses/${responseId}/analysis/requeue`, {
     method: "POST",
-    expected: 202,
+    expected: 409,
     body: { expectedRevision: 2 }
   });
-  record("requeue", { status: requeue.status, revision: 2 });
+  if (healthyPendingRetry.payload?.error !== "ANALYSIS_NOT_RETRYABLE") {
+    throw new Error(`wrong healthy pending retry error: ${JSON.stringify(healthyPendingRetry.payload)}`);
+  }
+  record("healthy-pending-retry-rejected", {
+    status: healthyPendingRetry.status,
+    error: healthyPendingRetry.payload.error,
+    revision: 2
+  });
 
   await waitForAnalysis(responseId, 2);
   record("analysis-completed", { revision: 2 });
