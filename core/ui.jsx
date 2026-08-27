@@ -1913,7 +1913,10 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   if (currentResponse && phase === "consent") {
     const id = currentResponse.remoteId || currentResponse.id;
     const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
-    const nonFreeQuestions = questions.filter(q => q.type !== "free");
+    const responseQuestions = Array.isArray(currentResponse.questions) && currentResponse.questions.length
+      ? currentResponse.questions
+      : questions;
+    const nonFreeQuestions = responseQuestions.filter(q => q.type !== "free");
     if (editMode === "append" || editMode === "free") {
       const append = editMode === "append";
       return (

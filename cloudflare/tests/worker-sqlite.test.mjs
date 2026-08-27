@@ -295,6 +295,27 @@ test("account registration, login, update, response linking, and logout", async 
   assert.deepEqual(minePayload.responses.map(item => item.id), [responseId]);
   assert.equal(minePayload.responses[0].free, submission().freeText);
   assert.equal(minePayload.responses[0].answers.q_priority, "子育て・教育");
+  assert.deepEqual(minePayload.responses[0].questions, [
+    {
+      id: "q_support", qid: "q_support", position: 0, type: "single",
+      text: "現在の政権を支持しますか？",
+      options: ["支持する", "どちらかといえば支持する", "どちらかといえば支持しない", "支持しない", "わからない"],
+      left: "", right: ""
+    },
+    {
+      id: "q_priority", qid: "q_priority", position: 1, type: "single",
+      text: "いま最も重視する政策分野はどれですか？",
+      options: ["経済・雇用", "社会保障・医療", "子育て・教育", "外交・安全保障", "環境・エネルギー", "行政改革・政治とカネ", "その他"],
+      left: "", right: ""
+    },
+    {
+      id: "q_econ", qid: "q_econ", position: 2, type: "scale",
+      text: "経済政策の方向性について、あなたの考えに近いのはどちらですか？",
+      options: ["1", "2", "3", "4", "5"],
+      left: "財政支出を拡大し再分配を強化すべき",
+      right: "財政健全化と市場活力を優先すべき"
+    }
+  ]);
   assert.equal("freeText" in minePayload.responses[0], false);
   assert.equal(minePayload.responses.some(item => item.id === anonymousResponseId), false);
   assert.equal(database.prepare("SELECT count(*) AS count FROM account_responses WHERE response_id = ?")

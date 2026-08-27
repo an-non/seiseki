@@ -24,6 +24,11 @@ test("an existing account response replaces the initial survey with separate edi
   assert.doesNotMatch(ui, /setAddendum|setLimit/);
 });
 
+test("answer editing prefers the saved question snapshot", () => {
+  assert.match(ui, /Array\.isArray\(currentResponse\.questions\) && currentResponse\.questions\.length/);
+  assert.match(ui, /const nonFreeQuestions = responseQuestions\.filter/);
+});
+
 test("current revision analysis is polled and stale revisions are ignored", () => {
   assert.match(ui, /const fresh = await cloudLoadOwnResponse\(id, session\.token\)/);
   assert.match(ui, /if \(freshRevision < revision\) return/);

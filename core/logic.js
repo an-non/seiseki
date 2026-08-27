@@ -979,6 +979,27 @@ function sanitizeResponse(r) {
   if (Array.isArray(r.freeQids)) {
     out.freeQids = r.freeQids.map(x => cleanStr(x, 64)).filter(Boolean).slice(0, 12);
   }
+  if (Array.isArray(r.questions)) {
+    const snapshot = [];
+    const seen = new Set();
+    const ordered = r.questions.slice(0, 64).map((raw, index) => ({ raw: raw, index: index }))
+      .sort((a, b) => {
+        const ap = Number(a.raw && a.raw.position);
+        const bp = Number(b.raw && b.raw.position);
+        return (isFinite(ap) ? ap : a.index) - (isFinite(bp) ? bp : b.index);
+      });
+    for (const item of ordered) {
+      const raw = item.raw;
+      if (!raw || typeof raw !== "object") continue;
+      const id = sanitizeId(raw.id || raw.qid);
+      if (!id || seen.has(id)) continue;
+      const cleaned = sanitizeQuestions([{ ...raw, id: id }]);
+      if (!cleaned || !cleaned[0]) continue;
+      seen.add(id);
+      snapshot.push({ ...cleaned[0], position: snapshot.length });
+    }
+    if (snapshot.length) out.questions = snapshot;
+  }
   return out;
 }
 

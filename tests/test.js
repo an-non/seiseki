@@ -581,6 +581,21 @@ t("sanitizeResponse: 不正レコードを弾き、値を正規化する", () =>
   assert.ok(r.ver.length <= 20);
 });
 
+t("sanitizeResponse: 保存時点の設問スナップショットを検証して保持", () => {
+  const r = sanitizeResponse({
+    id: "snapshot-response-0001", ts: 1, answers: {}, free: "本文",
+    questions: [
+      { qid: "q_second", position: 2, type: "single", text: "二問目", options: ["はい", "いいえ"] },
+      { id: "q_first", position: 1, type: "scale", text: "一問目", left: "反対", right: "賛成" },
+      { id: "bad id", position: 3, type: "single", text: "不正", options: ["a", "b"] }
+    ]
+  });
+  assert.deepStrictEqual(r.questions.map(q => q.id), ["q_first", "q_second"]);
+  assert.deepStrictEqual(r.questions.map(q => q.position), [0, 1]);
+  assert.strictEqual(r.questions[0].left, "反対");
+  assert.deepStrictEqual(r.questions[1].options, ["はい", "いいえ"]);
+});
+
 t("parseImport: 回答のみ抽出し、壊れたレコードと旧設問への回答を数える", () => {
   const json = JSON.stringify({
     app: "声析", config: { questions: [{ id: "q_x" }] }, agg: { total: 999 },

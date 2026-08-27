@@ -361,11 +361,37 @@ export async function listAccountResponses(db, accountId) {
     WHERE ar.account_id = ?
     ORDER BY a.response_id, a.qid
   `).bind(accountId).all();
+  const questionRows = await db.prepare(`
+    SELECT rq.response_id AS responseId, rq.qid, rq.position, rq.type, rq.text,
+           rq.options_json AS optionsJson, rq.left_label AS leftLabel,
+           rq.right_label AS rightLabel
+    FROM response_questions rq
+    JOIN account_responses ar ON ar.response_id = rq.response_id
+    WHERE ar.account_id = ?
+    ORDER BY rq.response_id, rq.position
+  `).bind(accountId).all();
   const answersById = new Map();
   for (const row of answerRows.results ?? []) {
     const answers = answersById.get(row.responseId) ?? {};
     answers[row.qid] = row.value;
     answersById.set(row.responseId, answers);
+  }
+  const questionsById = new Map();
+  for (const row of questionRows.results ?? []) {
+    let options = [];
+    try { options = JSON.parse(row.optionsJson); } catch { options = []; }
+    const questions = questionsById.get(row.responseId) ?? [];
+    questions.push({
+      id: row.qid,
+      qid: row.qid,
+      position: row.position,
+      type: row.type,
+      text: row.text,
+      options,
+      left: row.leftLabel || "",
+      right: row.rightLabel || ""
+    });
+    questionsById.set(row.responseId, questions);
   }
   return responses.map(row => {
     let analysis = null;
@@ -383,6 +409,7 @@ export async function listAccountResponses(db, accountId) {
         occupation: row.occupation ?? "", party: row.party ?? ""
       },
       answers: answersById.get(row.id) ?? {},
+      questions: questionsById.get(row.id) ?? [],
       free: String(row.freeText ?? ""),
       freeQids: ["q_free"],
       analysis,
