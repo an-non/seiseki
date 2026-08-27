@@ -1,0 +1,84 @@
+name: Phase 5 recovery local implementation 20260827
+
+on:
+  push:
+    branches:
+      - codex/phase5-recovery-20260827
+    paths:
+      - scripts/SEISEKI_PHASE5_APPLY_20260827.mjs
+      - .github/workflows/phase5-recovery-local-implementation-20260827.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-phase5-recovery-local-implementation
+  cancel-in-progress: false
+
+env:
+  BASELINE_SHA: 7d761f6a7ecbc130f8cb66fef5004fdaf3b66c51
+  TARGET_BRANCH: codex/phase5-implementation-20260827
+
+jobs:
+  implement-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout recovery branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve recovery runner and return to exact baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp scripts/SEISEKI_PHASE5_APPLY_20260827.mjs /tmp/SEISEKI_PHASE5_APPLY_20260827.mjs
+          git checkout --detach "$BASELINE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          test -z "$(git status --porcelain)"
+          node --check /tmp/SEISEKI_PHASE5_APPLY_20260827.mjs
+
+      - name: Install local test dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+          test -z "$(git status --porcelain)"
+
+      - name: Apply Phase 5 and run full local regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node /tmp/SEISEKI_PHASE5_APPLY_20260827.mjs --repo="$GITHUB_WORKSPACE"
+          node tests/local-bridge.test.js
+          node tests/phase4-ui-contract.test.mjs
+          git diff --check
+          cmp app/seiseki.jsx local/src/App.jsx
+
+      - name: Verify no remote mutation commands are introduced
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number -E 'wrangler (deploy|d1 .*--remote)|workflow_dispatch|git push .*deploy/staging|feature/quantum-app-integration' \
+            cloudflare/src core tests cloudflare/tests tests/phase5-ui-contract.test.mjs || false
+          test -f cloudflare/migrations/0007_response_updated_at.sql
+          grep -q 'tree: "/app/tree"' core/ui.jsx
+          grep -q 'ANALYSIS_NOT_RETRYABLE' cloudflare/src/index.mjs
+          grep -q 'ANALYSIS_STALL_AFTER_MS = 60000' cloudflare/src/db.mjs
+
+      - name: Commit tested implementation to isolated Phase 5 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add core app/seiseki.jsx local/src/App.jsx scripts/apply-mobile-ui-fix.mjs \
+            .github/workflows/mobile-ui-staging.yml cloudflare tests
+          git status --short
+          git commit -m 'Implement Phase 5 route auth analysis UX recovery'
+          git push origin HEAD:"$TARGET_BRANCH"
+          printf 'Phase 5 tested commit: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Target branch: `%s`\n' "$TARGET_BRANCH" >> "$GITHUB_STEP_SUMMARY"
+          printf 'No staging deploy, remote D1 migration, workflow dispatch, or production action was performed.\n' >> "$GITHUB_STEP_SUMMARY"
