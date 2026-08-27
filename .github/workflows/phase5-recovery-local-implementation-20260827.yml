@@ -40,7 +40,7 @@ jobs:
           let s = fs.readFileSync(p, 'utf8');
           function one(a, b) {
             const first = s.indexOf(a);
-            if (first < 0 || s.indexOf(a, first + a.length) >= 0) throw new Error('runner quote hotfix anchor mismatch: ' + a.slice(0, 80));
+            if (first < 0 || s.indexOf(a, first + a.length) >= 0) throw new Error('runner hotfix anchor mismatch: ' + a.slice(0, 100));
             s = s.slice(0, first) + b + s.slice(first + a.length);
           }
           one(String.raw`  'const FONT_MONO = \'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace\';'`, String.raw`  'const FONT_MONO = \\'ui-monospace,"SFMono-Regular","SF Mono",Menlo,Consolas,monospace\\';'`);
@@ -49,6 +49,10 @@ jobs:
           one(String.raw`src.includes('const FONT_BODY = \'"Zen Kaku Gothic New"')`, String.raw`src.includes('const FONT_BODY = \\'"Zen Kaku Gothic New"')`);
           one(String.raw`src.includes('const FONT_DISP = \'"Shippori Mincho"')`, String.raw`src.includes('const FONT_DISP = \\'"Shippori Mincho"')`);
           one(String.raw`src.includes('const FONT_MONO = \'"IBM Plex Mono"')`, String.raw`src.includes('const FONT_MONO = \\'"IBM Plex Mono"')`);
+          one(
+            '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,',
+            '    analysisStatus: row.analysisStatus === "pending" && run?.status === "running"\n      ? "running"\n      : row.analysisStatus,'
+          );
           const blockStart = s.indexOf('replaceOnce(".github/workflows/mobile-ui-staging.yml",');
           const blockEnd = s.indexOf('\n\nconst migration = ', blockStart);
           if (blockStart < 0 || blockEnd < 0) throw new Error('mobile workflow runner block not found');
