@@ -15,7 +15,7 @@ on:
       - .github/workflows/phase5-browser-e2e-20260827.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: seiseki-phase5-real-browser-e2e
@@ -54,44 +54,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('tests/phase5-browser-e2e.mjs')
-          s = p.read_text()
-          old = '''async function fillPassword(value) {
-            const result = await evaluate(`(() => {
-              const el = [...document.querySelectorAll('input[type="password"]')].find(node => node.offsetWidth || node.offsetHeight || node.getClientRects().length);
-              if (!el) return false;
-              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
-            })()`);
-            assert.equal(result, true, "visible password input was not found");
-          }
-          '''
-          new = '''async function fillPassword(value) {
-            const count = await evaluate(`(() => {
-              const visible = [...document.querySelectorAll('input[type="password"]')].filter(node => node.offsetWidth || node.offsetHeight || node.getClientRects().length);
-              for (const el of visible) {
-                Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)});
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-              return visible.length;
-            })()`);
-            assert.ok(count >= 1, "visible password input was not found");
-          }
-          '''
-          if old not in s:
-              raise SystemExit('fillPassword promotion anchor missing')
-          s = s.replace(old, new, 1)
-          s = s.replace('const CDP_PORT = 9223;', 'const CDP_PORT = 9000 + (process.pid % 1000);', 1)
-          s = s.replace('const root = h2.parentElement;', 'const root = h2.parentElement?.parentElement;', 1)
-          s = s.replace('const root = h2?.parentElement;', 'const root = h2?.parentElement?.parentElement;', 1)
-          s = s.replace('  rmSync(chromeProfile, { recursive: true, force: true });\n', '  // Hosted Chrome can still be flushing its profile after SIGTERM; the runner is ephemeral.\n', 1)
-          p.write_text(s)
-          PY
           node --check tests/phase5-browser-e2e.mjs
           passed=0
           for attempt in 1 2; do
@@ -117,17 +79,6 @@ jobs:
           test -s phase5-browser-e2e-artifacts/mobile-survey.png
           grep -q '"revision": 4' phase5-browser-e2e-artifacts/report.json
           grep -q '"analysisStatus": "completed"' phase5-browser-e2e-artifacts/report.json
-
-      - name: Save proven E2E fixture corrections
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check -- tests/phase5-browser-e2e.mjs
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add tests/phase5-browser-e2e.mjs
-          git commit -m 'Stabilize Phase 5 browser E2E fixtures'
-          git push origin HEAD:codex/phase5-implementation-20260827
 
       - name: Upload browser evidence
         if: always()
