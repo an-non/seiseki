@@ -1,11 +1,12 @@
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const quantumEntry = resolve(rootDir, "chunk-network-entanglement-preview.html");
-const quantumOutput = "quantum/chunk-network-entanglement-preview.html";
+const quantumOutput = resolve(rootDir, "dist/quantum/chunk-network-entanglement-preview.html");
 const input = {
   main: resolve(rootDir, "index.html"),
   quantum: quantumEntry
@@ -15,13 +16,12 @@ function placeQuantumPreview() {
   return {
     name: "seiseki-place-quantum-preview",
     apply: "build",
-    generateBundle(_options, bundle) {
-      const sourceKey = Object.keys(bundle).find(key => bundle[key]?.fileName === "chunk-network-entanglement-preview.html");
-      if (!sourceKey) throw new Error("bundled quantum preview HTML was not emitted");
-      const entry = bundle[sourceKey];
-      delete bundle[sourceKey];
-      entry.fileName = quantumOutput;
-      bundle[quantumOutput] = entry;
+    enforce: "post",
+    closeBundle() {
+      const emitted = resolve(rootDir, "dist/chunk-network-entanglement-preview.html");
+      if (!existsSync(emitted)) throw new Error("bundled quantum preview HTML was not emitted");
+      mkdirSync(dirname(quantumOutput), { recursive: true });
+      renameSync(emitted, quantumOutput);
     }
   };
 }
@@ -33,8 +33,9 @@ export default defineConfig({
     // Keep syntax output below that ceiling and make the quantum page a real
     // Vite HTML entry so its bare `three` imports are bundled instead of
     // depending on import maps (unsupported in Safari <=16.3).  The source
-    // stays at local/chunk-network-entanglement-preview.html; the build plugin
-    // moves only the emitted HTML to the same-origin /quantum/ path used by UI.
+    // stays at local/chunk-network-entanglement-preview.html; after Vite has
+    // written the build, only the emitted HTML moves to the same-origin
+    // /quantum/ path used by the app UI.
     target: ["safari14", "ios14", "chrome87", "edge88", "firefox78"],
     cssTarget: "safari14",
     modulePreload: { polyfill: true },
