@@ -1,0 +1,55 @@
+name: Phase 5.9 restore accepted quantum density 20260828
+
+on:
+  push:
+    branches:
+      - codex/phase5-implementation-20260827
+    paths:
+      - scripts/phase5-restore-accepted-quantum-density-20260828.mjs
+      - .github/workflows/phase5-restore-accepted-quantum-density-20260828.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-phase5-restore-accepted-quantum-density
+  cancel-in-progress: false
+
+jobs:
+  restore-density:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Phase 5 branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore accepted web trace and mobile density
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/phase5-restore-accepted-quantum-density-20260828.mjs
+          node tests/phase5-quantum-compact-contract.mjs local/chunk-network-entanglement-preview.html
+          git diff --check
+          git diff --exit-code -- . ':!local/chunk-network-entanglement-preview.html' ':!tests/phase5-quantum-compact-contract.mjs' || {
+            echo 'Unexpected files changed by density restorer' >&2
+            exit 1
+          }
+          grep -q 'const maxPersistentRelations = 1400;' local/chunk-network-entanglement-preview.html
+          grep -q 'font-family:"Zen Kaku Gothic New"' local/chunk-network-entanglement-preview.html
+          grep -q 'font-family:"Shippori Mincho"' local/chunk-network-entanglement-preview.html
+
+      - name: Commit restored source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add local/chunk-network-entanglement-preview.html tests/phase5-quantum-compact-contract.mjs
+          if git diff --cached --quiet; then
+            echo 'Accepted density already present; nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'Restore accepted web trace and mobile quantum density'
+          git push origin HEAD:codex/phase5-implementation-20260827
