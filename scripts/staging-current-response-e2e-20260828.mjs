@@ -125,7 +125,7 @@ try {
   const created = await request("/api/responses", {
     method: "POST", expected: 201,
     body: {
-      appVersion: "0.16.0-current-response-e2e",
+      appVersion: "0.16.0-e2e",
       consent: { accepted: true, version: "1.4", at: Date.now() },
       demo: { age: "30代", gender: "回答しない", region: "関東", occupation: "会社員(正社員)", party: "支持政党なし" },
       answers: initialAnswers,
