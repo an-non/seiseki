@@ -1,6 +1,6 @@
 name: Deploy survey recovery to staging 20260828
 
-# Trigger: refined response labels approved for staging.
+# Trigger: response entry state fix approved for staging.
 on:
   push:
     branches:
@@ -63,6 +63,7 @@ jobs:
           set -euo pipefail
           npm --prefix local run build:staging
           test -s local/dist/index.html
+          grep -R -Fq '最初の回答' local/dist/assets
           grep -R -Fq '二度目の自由記述、修正' local/dist/assets
           grep -R -Fq '自分の回答、設定の確認' local/dist/assets
           grep -R -Fq 'マイレスポンス確認・修正' local/dist/assets
