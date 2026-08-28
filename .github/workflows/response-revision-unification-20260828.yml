@@ -6,8 +6,7 @@ on:
       - codex/response-revision-unification-20260828
     paths:
       - .github/workflows/response-revision-unification-20260828.yml
-      - scripts/apply-response-revision-unification-20260828.mjs
-      - scripts/fix-response-revision-helper-20260828.mjs
+      - scripts/apply-response-revision-unification-v2-20260828.mjs
 
 permissions:
   contents: write
@@ -36,10 +35,7 @@ jobs:
           npm --prefix local ci --no-audit --no-fund
 
       - name: Apply revision unification
-        run: |
-          set -euo pipefail
-          node scripts/fix-response-revision-helper-20260828.mjs
-          node scripts/apply-response-revision-unification-20260828.mjs
+        run: node scripts/apply-response-revision-unification-v2-20260828.mjs
 
       - name: Regenerate app
         run: node scripts/build-app.mjs
@@ -68,6 +64,10 @@ jobs:
             echo "Provisional local analysis must not enter formal D1 path" >&2
             exit 1
           fi
+          grep -Fq 'ANSWERS_ONLY_UPDATE_REMOVED' cloudflare/src/index.mjs
+          grep -Fq 'cloudPatchInitial' core/ui.jsx
+          grep -Fq '現在の回答全体で再解析' core/ui.jsx
+          ! grep -Fq 'AI解析は再実行しません' core/ui.jsx
 
       - name: Commit tested implementation
         run: |
