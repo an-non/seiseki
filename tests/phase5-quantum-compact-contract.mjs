@@ -34,3 +34,4 @@ for (const regression of forbidden) {
 }
 
 console.log(`Phase 5.9 compact quantum build contract PASS: ${target}`);
+// CI trigger after Git-data fast-forward; no runtime effect.
