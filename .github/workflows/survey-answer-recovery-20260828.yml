@@ -6,7 +6,7 @@ on:
       - codex/survey-answer-recovery-20260828
     paths:
       - .github/workflows/survey-answer-recovery-20260828.yml
-      - scripts/apply-copy-refine-20260828.mjs
+      - scripts/apply-response-entry-state-fix-20260828.mjs
 
 permissions:
   contents: write
@@ -31,8 +31,8 @@ jobs:
           set -euo pipefail
           npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
           npm --prefix local ci --no-audit --no-fund
-      - name: Apply copy refinements
-        run: node scripts/apply-copy-refine-20260828.mjs
+      - name: Apply response entry state fix
+        run: node scripts/apply-response-entry-state-fix-20260828.mjs
       - name: Regenerate app
         run: node scripts/build-app.mjs
       - name: Verify implementation
@@ -54,5 +54,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/ui.jsx app/seiseki.jsx local/src/App.jsx tests/follow-up-ui-contract.test.mjs
           git diff --cached --quiet && exit 0
-          git commit -m "Refine survey response navigation labels"
+          git commit -m "Fix response entry state after logout and withdrawal"
           git push origin HEAD:codex/survey-answer-recovery-20260828
