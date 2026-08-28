@@ -1,0 +1,76 @@
+name: Response revision unification 20260828
+
+on:
+  push:
+    branches:
+      - codex/response-revision-unification-20260828
+    paths:
+      - .github/workflows/response-revision-unification-20260828.yml
+      - scripts/apply-response-revision-unification-20260828.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/response-revision-unification-20260828
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Apply revision unification
+        run: node scripts/apply-response-revision-unification-20260828.mjs
+
+      - name: Regenerate app
+        run: node scripts/build-app.mjs
+
+      - name: Verify revision model
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          npm --prefix local run build:staging
+
+      - name: Guard unrelated surfaces
+        run: |
+          set -euo pipefail
+          git diff --exit-code fbaf274a9b08f749ca9c95439b5efadbd53e25fb -- cloudflare/src/analysis.mjs core/logic.js || {
+            echo "Unexpected analysis or quantum/core logic change" >&2
+            exit 1
+          }
+          if grep -R -Fq 'storeLocalProvisionalAnalysis' cloudflare/src; then
+            echo "Provisional local analysis must not enter formal D1 path" >&2
+            exit 1
+          fi
+
+      - name: Commit tested implementation
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/db.mjs cloudflare/src/index.mjs cloudflare/src/validation.mjs cloudflare/tests/response-phase4-backend.test.mjs tests/follow-up-ui-contract.test.mjs
+          git diff --cached --quiet && exit 0
+          git commit -m "Unify initial response edits with revisioned reanalysis"
+          git push origin HEAD:codex/response-revision-unification-20260828
