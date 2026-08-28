@@ -1,0 +1,92 @@
+name: Selective Base-Yuki integration 20260828
+
+on:
+  push:
+    branches:
+      - codex/response-revision-unification-20260828
+    paths:
+      - .github/workflows/selective-yuki-integration-20260828.yml
+      - scripts/apply-selective-yuki-integration-20260828.mjs
+      - scripts/adapt-selective-yuki-files-20260828.mjs
+      - cloudflare/tests/questionnaire-seven-integration.test.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/response-revision-unification-20260828
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Select audited Base-Yuki files only
+        run: |
+          set -euo pipefail
+          BASE_YUKI=b07f5d24b6ac58179df26086a4b4c9a9196afab4
+          git cat-file -e "$BASE_YUKI^{commit}"
+          git show "$BASE_YUKI:cloudflare/src/staging-admin.mjs" > cloudflare/src/staging-admin.mjs
+          git show "$BASE_YUKI:cloudflare/tests/staging-admin.test.mjs" > cloudflare/tests/staging-admin.test.mjs
+          git show "$BASE_YUKI:cloudflare/migrations/0008_questionnaire_seven_structured.sql" > cloudflare/migrations/0008_questionnaire_seven_structured.sql
+          git show "$BASE_YUKI:cloudflare/src/config.mjs" > cloudflare/src/config.mjs
+          node scripts/adapt-selective-yuki-files-20260828.mjs
+          node scripts/apply-selective-yuki-integration-20260828.mjs
+
+      - name: Verify selective integration
+        run: |
+          set -euo pipefail
+          node --check cloudflare/src/staging-admin.mjs
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          npm --prefix local run build:staging
+
+      - name: Guard integration boundaries
+        run: |
+          set -euo pipefail
+          BASE_YUKI=b07f5d24b6ac58179df26086a4b4c9a9196afab4
+          REVISION_BASE=da4e25fa7d9446eadbc5c476da83afdf17399d36
+          git diff --exit-code "$BASE_YUKI" -- cloudflare/src/staging-admin.mjs cloudflare/src/config.mjs cloudflare/migrations/0008_questionnaire_seven_structured.sql
+          git diff --exit-code "$REVISION_BASE" -- cloudflare/src/analysis.mjs cloudflare/src/db.mjs core/logic.js core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          test -f cloudflare/migrations/0008_response_follow_up_text.sql
+          test -f cloudflare/migrations/0008_questionnaire_seven_structured.sql
+          if grep -R -Fq 'storeLocalProvisionalAnalysis' cloudflare/src; then
+            echo "Provisional local analysis must not enter formal D1 path" >&2
+            exit 1
+          fi
+          grep -Fq 'handleStagingAdminRequest' cloudflare/src/index.mjs
+          grep -Fq 'SEISEKI_ENV' cloudflare/wrangler.jsonc
+          grep -Fq 'STAGING_ADMIN_ENABLED' cloudflare/wrangler.jsonc
+          ! grep -A25 '"vars": {' cloudflare/wrangler.jsonc | head -n 25 | grep -Fq 'STAGING_ADMIN_ENABLED'
+
+      - name: Commit tested selective integration
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudflare/src/staging-admin.mjs cloudflare/tests/staging-admin.test.mjs cloudflare/migrations/0008_questionnaire_seven_structured.sql cloudflare/src/config.mjs cloudflare/src/index.mjs cloudflare/wrangler.jsonc cloudflare/tests/questionnaire-seven-integration.test.mjs
+          git diff --cached --quiet && exit 0
+          git commit -m "Selectively integrate staging admin and seven-question config"
+          git push origin HEAD:codex/response-revision-unification-20260828
