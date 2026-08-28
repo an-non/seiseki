@@ -6,6 +6,7 @@ on:
       - codex/phase5-implementation-20260827
     paths:
       - tests/phase5-browser-e2e.mjs
+      - tests/phase5-quantum-compact-contract.mjs
       - core/**
       - app/seiseki.jsx
       - local/**
@@ -49,6 +50,7 @@ jobs:
           npm --prefix local run build
           test -s local/dist/index.html
           test -s local/dist/quantum/chunk-network-entanglement-preview.html
+          node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
 
       - name: Run Phase 5 real-browser E2E
         shell: bash

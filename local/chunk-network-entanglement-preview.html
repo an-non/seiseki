@@ -107,22 +107,22 @@
       z-index:8;
       right:20px;
       bottom:20px;
-      width:min(350px,calc(100% - 40px));
-      min-height:112px;
-      max-height:min(260px,calc(100vh - 190px));
+      width:min(260px,calc(100% - 40px));
+      min-height:82px;
+      max-height:min(180px,calc(100vh - 190px));
       overflow:auto;
-      padding:14px 15px;
+      padding:8px 10px;
       border:1px solid var(--rule);
       border-radius:6px;
       background:var(--panel);
       box-shadow:var(--panel-shadow);
       backdrop-filter:blur(10px);
     }
-    .details h2 { margin:0 0 7px; color:var(--ink); font-size:13px; }
-    .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
-    .details .generated { color:var(--ink); font-size:12px; }
-    .details .result { margin-top:8px; color:var(--cyan); font:10px/1.55 "IBM Plex Mono",Consolas,monospace; }
-    .details dl { display:grid; grid-template-columns:76px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
+    .details h2 { margin:0 0 4px; color:var(--ink); font-size:10px; line-height:1.35; }
+    .details p { margin:0; color:var(--sub); font-size:8.5px; line-height:1.45; }
+    .details .generated { color:var(--ink); font-size:9px; line-height:1.45; }
+    .details .result { margin-top:5px; color:var(--cyan); font:8px/1.38 "IBM Plex Mono",Consolas,monospace; }
+    .details dl { display:grid; grid-template-columns:56px 1fr; gap:2px 6px; margin:6px 0 0; font-size:8.5px; line-height:1.4; }
     .details dt { color:var(--sub); }
     .details dd { margin:0; overflow-wrap:anywhere; }
     .trace {
@@ -130,9 +130,9 @@
       z-index:7;
       left:20px;
       bottom:20px;
-      width:min(470px,calc(100% - 410px));
-      height:min(56vh,540px);
-      max-height:calc(100vh - 210px);
+      width:min(320px,calc(100% - 300px));
+      height:min(31vh,280px);
+      max-height:calc(100vh - 300px);
       overflow:auto;
       scrollbar-width:none;
       padding:2px 0;
@@ -140,11 +140,11 @@
       background:transparent;
       box-shadow:none;
       color:var(--trace);
-      font:10px/1.55 "IBM Plex Mono",Consolas,monospace;
+      font:8px/1.38 "IBM Plex Mono",Consolas,monospace;
       text-shadow:none;
     }
-    .trace header { position:static; display:flex; justify-content:space-between; margin:0 0 7px; color:var(--cyan); }
-    .trace header span:last-child { color:var(--sub); }
+    .trace header { position:static; display:flex; justify-content:flex-start; margin:0 0 4px; color:var(--cyan); font-size:8px; line-height:1.35; }
+    .trace header span:last-child { display:none; }
     .trace pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
     .trace::-webkit-scrollbar { display:none; }
     .loading {
@@ -167,8 +167,8 @@
       .controls button { min-width:43px; padding:0 7px; }
       .status { top:auto; right:13px; bottom:148px; font-size:9px; line-height:1.45; }
       .status .optional { display:none; }
-      .details { right:11px; bottom:11px; width:calc(100% - 22px); min-height:108px; max-height:130px; padding:12px 13px; }
-      .trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:10px 12px; }
+      .details { right:11px; bottom:11px; width:calc(100% - 22px); min-height:82px; max-height:106px; padding:8px 10px; }
+      .trace { left:11px; bottom:151px; width:calc(100% - 22px); height:min(38vh,300px); max-height:min(38vh,300px); padding:8px 10px; }
     }
   </style>
   <script type="importmap">
