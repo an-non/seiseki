@@ -1,5 +1,6 @@
 import {
   createResponseFollowUpText,
+  deleteResponseFollowUpText,
   deleteResponse,
   getBasicStats,
   getResponseMetadata,
@@ -30,6 +31,7 @@ import {
   normalizeAnswersUpdate,
   normalizeExpectedRevision,
   normalizeFollowUpTextCreate,
+  normalizeFollowUpTextDelete,
   normalizeFollowUpTextUpdate,
   normalizeFreeTextUpdate,
   normalizeSubmission,
@@ -346,14 +348,19 @@ async function handleRequest(request, env, ctx) {
   }
 
   const followUpId = routeFollowUpId(url.pathname);
-  if (followUpId && (request.method === "POST" || request.method === "PATCH")) {
+  if (followUpId && (request.method === "POST" || request.method === "PATCH" || request.method === "DELETE")) {
     await authorizeResponseAccess(env.DB, request, followUpId);
+    const rawInput = await readJson(request);
     const input = request.method === "POST"
-      ? normalizeFollowUpTextCreate(await readJson(request))
-      : normalizeFollowUpTextUpdate(await readJson(request));
+      ? normalizeFollowUpTextCreate(rawInput)
+      : request.method === "PATCH"
+        ? normalizeFollowUpTextUpdate(rawInput)
+        : normalizeFollowUpTextDelete(rawInput);
     const outcome = request.method === "POST"
       ? await createResponseFollowUpText(env.DB, followUpId, input.expectedRevision, input.followUpText)
-      : await updateResponseFollowUpText(env.DB, followUpId, input.expectedRevision, input.followUpText);
+      : request.method === "PATCH"
+        ? await updateResponseFollowUpText(env.DB, followUpId, input.expectedRevision, input.followUpText)
+        : await deleteResponseFollowUpText(env.DB, followUpId, input.expectedRevision);
     if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
     if (outcome.status === "stale") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     if (outcome.status === "exists") throw new RequestError(409, "FOLLOW_UP_ALREADY_EXISTS", "second free-text response has already been submitted");
@@ -364,6 +371,7 @@ async function handleRequest(request, env, ctx) {
       id: followUpId,
       revision: outcome.revision,
       analysisStatus: "pending",
+      followUpSubmitted: request.method === "DELETE" ? false : true,
       updatedAt: outcome.updatedAt
     }, request.method === "POST" ? 201 : 200);
   }

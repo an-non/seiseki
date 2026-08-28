@@ -128,6 +128,15 @@ export function normalizeFollowUpTextUpdate(input) {
   return normalizeFollowUpTextBody(input);
 }
 
+export function normalizeFollowUpTextDelete(input) {
+  const body = requireObject(input, "body");
+  const allowed = new Set(["expectedRevision"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) throw new RequestError(400, "INVALID_FIELD", "unsupported field: " + key);
+  }
+  return Object.freeze({ expectedRevision: normalizeExpectedRevision(body.expectedRevision) });
+}
+
 export function normalizeAnswersUpdate(input) {
   const body = requireObject(input, "body");
   const allowed = new Set(["expectedRevision", "answers"]);

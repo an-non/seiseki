@@ -478,6 +478,34 @@ export function updateResponseFollowUpText(db, id, expectedRevision, followUpTex
   return mutateResponseFollowUpText(db, id, expectedRevision, followUpText, "update");
 }
 
+export async function deleteResponseFollowUpText(db, id, expectedRevision) {
+  const now = Date.now();
+  const guard = "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ? AND follow_up_text IS NOT NULL)";
+  const statements = [
+    db.prepare("DELETE FROM opinion_chunks WHERE response_id = ? AND " + guard)
+      .bind(id, id, expectedRevision),
+    db.prepare(
+      "UPDATE analysis_runs SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL " +
+      "WHERE response_id = ? AND response_revision = ? AND status = 'running' AND " + guard
+    ).bind(now, id, expectedRevision, id, expectedRevision),
+    db.prepare(
+      "UPDATE responses SET follow_up_text = NULL, updated_at = ?, revision = revision + 1, " +
+      "analysis_status = 'pending', analysis_json = NULL WHERE id = ? AND revision = ? AND follow_up_text IS NOT NULL"
+    ).bind(now, id, expectedRevision)
+  ];
+  const results = await db.batch(statements);
+  if (Number(results?.[2]?.meta?.changes ?? 0) === 1) {
+    return { status: "updated", revision: Number(expectedRevision) + 1, updatedAt: now };
+  }
+  const current = await db.prepare(
+    "SELECT revision, follow_up_text AS followUpText FROM responses WHERE id = ?"
+  ).bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+  if (current.followUpText == null) return { status: "missing" };
+  return { status: "conflict" };
+}
+
 export async function updateResponseFreeText(db, id, expectedRevision, freeText) {
   const now = Date.now();
   const guard = expectedRevisionGuard();

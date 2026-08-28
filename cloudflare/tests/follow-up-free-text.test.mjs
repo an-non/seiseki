@@ -102,3 +102,39 @@ test("account response keeps first and second free texts as separate fields", as
   assert.equal(payload.responses[0].revision, 2);
   database.close();
 });
+
+
+test("second free text can be withdrawn without deleting the first response", async () => {
+  const database = db(); const queued = []; const waits = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", AI_ANALYSIS_ENABLED: "true", ANALYSIS_QUEUE: { send: async item => queued.push(item) } };
+  const owner = await register(env, "二回目撤回者"); const created = await create(env, owner.token);
+  let response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/follow-up", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token }, body: JSON.stringify({ expectedRevision: 1, followUpText: "撤回対象の第二本文" }) }), env, { waitUntil: p => waits.push(p) });
+  assert.equal(response.status, 201); await Promise.all(waits); waits.length = 0; queued.length = 0;
+  database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
+  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'第二込み','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
+  response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/follow-up", { method: "DELETE", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token }, body: JSON.stringify({ expectedRevision: 2 }) }), env, { waitUntil: p => waits.push(p) });
+  assert.equal(response.status, 200); const body = await response.json();
+  assert.equal(body.revision, 3); assert.equal(body.followUpSubmitted, false); assert.equal(body.analysisStatus, "pending");
+  await Promise.all(waits);
+  const row = database.prepare("SELECT free_text AS firstText, follow_up_text AS secondText, revision, analysis_status AS status, analysis_json AS analysisJson FROM responses WHERE id=?").get(created.id);
+  assert.deepEqual([row.firstText, row.secondText, row.revision, row.status, row.analysisJson], ["初回本文", null, 3, "pending", null]);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 0);
+  assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 3 }]);
+  const mine = await worker.fetch(new Request("http://local/api/accounts/me/responses", { headers: { authorization: "Bearer " + owner.token } }), env);
+  const payload = await mine.json();
+  assert.equal(payload.responses[0].followUpText, null);
+  assert.equal(payload.responses[0].followUpSubmitted, false);
+  database.close();
+});
+
+test("stale second free text withdrawal is rejected without mutation", async () => {
+  const database = db(); const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
+  const owner = await register(env, "二回目撤回競合"); const created = await create(env, owner.token);
+  await worker.fetch(new Request("http://local/api/responses/" + created.id + "/follow-up", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token }, body: JSON.stringify({ expectedRevision: 1, followUpText: "残る第二本文" }) }), env);
+  database.prepare("UPDATE responses SET revision=3 WHERE id=?").run(created.id);
+  const response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/follow-up", { method: "DELETE", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token }, body: JSON.stringify({ expectedRevision: 2 }) }), env);
+  assert.equal(response.status, 409); assert.equal((await response.json()).error, "REVISION_CONFLICT");
+  const row = database.prepare("SELECT follow_up_text AS secondText, revision FROM responses WHERE id=?").get(created.id);
+  assert.deepEqual([row.secondText, row.revision], ["残る第二本文", 3]);
+  database.close();
+});

@@ -110,6 +110,14 @@ async function cloudPatchFollowUp(id, expectedRevision, followUpText) {
   });
 }
 
+async function cloudDeleteFollowUp(id, expectedRevision) {
+  return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/follow-up", {
+    method: "DELETE",
+    headers: { "content-type": "application/json", ...(await cloudResponseAuthHeaders(id)) },
+    body: JSON.stringify({ expectedRevision: expectedRevision })
+  });
+}
+
 async function cloudPatchFreeText(id, expectedRevision, freeText) {
   return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/free-text", {
     method: "PATCH",
@@ -3313,6 +3321,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
   const [found, setFound] = useState(null);
   const [prog, setProg] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmSecondDelete, setConfirmSecondDelete] = useState(false);
   const [editMode, setEditMode] = useState(null);
   const [editText, setEditText] = useState("");
   const [editAnswers, setEditAnswers] = useState({});
@@ -3418,6 +3427,54 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
       await sSet("resp:" + id, fresh);
     }
     return fresh;
+  }
+
+  async function deleteSecondResponse() {
+    if (editBusyRef.current || !found || !found.r || !found.r.remoteId) return;
+    const r = found.r;
+    const id = r.remoteId || found.id;
+    const revision = Number(r.remoteRevision || r.revision || 1);
+    editBusyRef.current = true;
+    setErr("");
+    try {
+      const updated = await cloudDeleteFollowUp(id, revision);
+      let fresh = null;
+      if (session && session.token) {
+        try { fresh = await cloudLoadOwnResponse(id, session.token); }
+        catch (loadError) { console.warn("follow-up withdrawal refresh failed", loadError); }
+      }
+      if (fresh) {
+        setFound({ id: found.id, r: fresh, r2: null });
+      } else {
+        setFound({
+          ...found,
+          r: {
+            ...r,
+            followUpText: "",
+            followUpSubmitted: false,
+            revision: Number(updated && updated.revision || revision + 1),
+            remoteRevision: Number(updated && updated.revision || revision + 1),
+            analysis: null,
+            analysisSource: "cloudflare",
+            cloudAnalysisStatus: "pending"
+          },
+          r2: null
+        });
+      }
+      setConfirmSecondDelete(false);
+      setEditMode(null);
+      notify("2回目の自由記述を撤回しました。1回目の回答のみで再解析を開始します");
+    } catch (error) {
+      if (error && error.code === "REVISION_CONFLICT") {
+        setErr("回答が更新されています。再読み込みしてからもう一度お試しください。");
+      } else if (error && error.code === "FOLLOW_UP_NOT_SUBMITTED") {
+        setErr("2回目の自由記述はすでに撤回されています。");
+      } else {
+        setErr("2回目の自由記述の撤回に失敗しました。時間をおいて再度お試しください。");
+      }
+    } finally {
+      editBusyRef.current = false;
+    }
   }
 
   async function saveResponseEdit() {
@@ -3600,6 +3657,18 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
             <div style={{ padding: "7px 0", borderTop: "1px solid " + C.rule }}>
               <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>自由記述(2回目・原文)</div>
               <div style={{ whiteSpace: "pre-wrap", fontSize: 13, background: C.soft, borderRadius: 5, padding: "9px 11px" }}>{r.followUpText || "（記載なし）"}</div>
+              {r.remoteId ? (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                  {confirmSecondDelete ? (
+                    <>
+                      <Btn small kind="danger" onClick={deleteSecondResponse}>2回目を本当に撤回する</Btn>
+                      <Btn small kind="ghost" onClick={() => setConfirmSecondDelete(false)}>やめる</Btn>
+                    </>
+                  ) : (
+                    <Btn small kind="ghost" onClick={() => setConfirmSecondDelete(true)}>2回目を撤回</Btn>
+                  )}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div style={{ fontSize: 11, color: C.sub, marginTop: 8, paddingTop: 8, borderTop: "1px solid " + C.rule }}>二度目の自由記述はまだ提出していません。</div>
@@ -3671,7 +3740,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
             </div>
           ) : (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn kind="danger" onClick={() => setConfirming(true)}>この回答を撤回する</Btn>
+              <Btn kind="danger" onClick={() => setConfirming(true)}>回答、解析結果を削除する</Btn>
               <Btn kind="ghost" onClick={() => { setFound(null); setStage("input"); }}>別のIDを照会する</Btn>
               <Btn kind="ghost" onClick={() => goto("dash")}>ダッシュボードへ</Btn>
             </div>

@@ -35,3 +35,11 @@ test("response entry follows actual account response state", () => {
   assert.ok(ui.includes('if (onResponseDeleted) onResponseDeleted(found.id);'));
   assert.ok(ui.includes('onResponseDeleted={() => { setMyId(""); setCompletion(null); }}'));
 });
+
+
+test("my response exposes second free-text withdrawal", () => {
+  assert.ok(ui.includes("2回目を撤回"));
+  assert.ok(ui.includes("2回目を本当に撤回する"));
+  assert.ok(ui.includes("cloudDeleteFollowUp"));
+  assert.ok(ui.includes("回答、解析結果を削除する"));
+});
