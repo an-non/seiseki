@@ -68,7 +68,9 @@ jobs:
           set -euo pipefail
           BASE_YUKI=b07f5d24b6ac58179df26086a4b4c9a9196afab4
           REVISION_BASE=da4e25fa7d9446eadbc5c476da83afdf17399d36
-          git diff --exit-code "$BASE_YUKI" -- cloudflare/src/staging-admin.mjs cloudflare/src/config.mjs cloudflare/migrations/0008_questionnaire_seven_structured.sql
+          git show "$BASE_YUKI:cloudflare/src/staging-admin.mjs" | cmp -s - cloudflare/src/staging-admin.mjs
+          git show "$BASE_YUKI:cloudflare/src/config.mjs" | cmp -s - cloudflare/src/config.mjs
+          git show "$BASE_YUKI:cloudflare/migrations/0008_questionnaire_seven_structured.sql" | cmp -s - cloudflare/migrations/0008_questionnaire_seven_structured.sql
           git diff --exit-code "$REVISION_BASE" -- cloudflare/src/analysis.mjs cloudflare/src/db.mjs core/logic.js core/ui.jsx app/seiseki.jsx local/src/App.jsx
           test -f cloudflare/migrations/0008_response_follow_up_text.sql
           test -f cloudflare/migrations/0008_questionnaire_seven_structured.sql
