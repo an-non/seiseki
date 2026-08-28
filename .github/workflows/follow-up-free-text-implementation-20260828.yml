@@ -41,6 +41,14 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/apply-follow-up-free-text-20260828.mjs
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'core/ui.jsx';
+          const source = fs.readFileSync(path, 'utf8');
+          const duplicated = '        {an ? (        {an ? (';
+          if (!source.includes(duplicated)) throw new Error('expected duplicated analysis JSX marker was not found');
+          fs.writeFileSync(path, source.replace(duplicated, '        {an ? ('), 'utf8');
+          NODE
           node scripts/build-app.mjs
 
       - name: Backend and UI tests
