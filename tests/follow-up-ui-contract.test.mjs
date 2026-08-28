@@ -19,3 +19,11 @@ test("survey owns questionnaire correction while account response keeps free-tex
   assert.ok(ui.includes("二度目の自由記述"));
   assert.ok(ui.includes("書きかけの回答があります。"));
 });
+
+test("overview and response labels match the revised navigation", () => {
+  assert.ok(ui.includes("書きかけの回答があります。"));
+  assert.ok(ui.includes('Btn small onClick={() => goto("survey")}>続きから回答する</Btn>'));
+  assert.ok(ui.includes("二度目の自由記述、修正"));
+  assert.ok(ui.includes("自分の回答、設定の確認"));
+  assert.ok(ui.includes("マイレスポンス確認・修正"));
+});

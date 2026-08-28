@@ -3158,7 +3158,7 @@ function Home({ agg, goto, hasDraft, myId, session }) {
       ) : null}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Btn onClick={() => goto("followup")} style={{ flex: "1 1 200px" }}>二度目の自由記述</Btn>
+        <Btn onClick={() => goto("followup")} style={{ flex: "1 1 200px" }}>二度目の自由記述、修正</Btn>
         <Btn kind="ghost" onClick={() => goto("dash")} style={{ flex: "1 1 200px" }}>統計ダッシュボードを見る</Btn>
       </div>
 
@@ -3785,7 +3785,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
             <Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正する</Btn>
           </Card>
         </div>
-        <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答を確認</Btn></div>
+        <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答、設定の確認</Btn></div>
       </div>
     );
   }
@@ -5136,7 +5136,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
   if (stage === "working") {
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
-        <H2 eyebrow="MY RESPONSE" sub="回答IDで自分の回答を確認・撤回できます">自分の回答</H2>
+        <H2 eyebrow="MY RESPONSE" sub="回答IDで自分の回答を確認・撤回できます">マイレスポンス確認・修正</H2>
         <Card>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: "26px 0" }}>
             <Spinner />
@@ -5152,7 +5152,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
   if (stage === "done") {
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
-        <H2 eyebrow="MY RESPONSE" sub="回答IDで自分の回答を確認・撤回できます">自分の回答</H2>
+        <H2 eyebrow="MY RESPONSE" sub="回答IDで自分の回答を確認・撤回できます">マイレスポンス確認・修正</H2>
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>回答を撤回しました</div>
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
@@ -5187,7 +5187,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
 
     return (
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
-        <H2 eyebrow="MY RESPONSE" sub="回答IDで照会した、あなたの回答です">自分の回答</H2>
+        <H2 eyebrow="MY RESPONSE" sub="回答IDで照会した、あなたの回答です">マイレスポンス確認・修正</H2>
         {session ? <AccountSettings session={session} onUpdated={onAccountUpdated} /> : null}
 
         <Card style={{ marginBottom: 12 }}>
@@ -5314,7 +5314,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
-      <H2 eyebrow="MY RESPONSE" sub={session ? "ログイン中: アカウントに紐付いた回答を表示します" : "回答ID(合鍵)でも、ログインなしで照会できます"}>自分の回答</H2>
+      <H2 eyebrow="MY RESPONSE" sub={session ? "ログイン中: アカウントに紐付いた回答を表示します" : "回答ID(合鍵)でも、ログインなしで照会できます"}>マイレスポンス確認・修正</H2>
       {session ? <AccountSettings session={session} onUpdated={onAccountUpdated} /> : null}
       {session && selfLookupError ? (
         <Card pad={13} style={{ marginBottom: 12, borderColor: C.bengara }}>
