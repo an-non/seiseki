@@ -1514,34 +1514,30 @@ function Home({ agg, goto, hasDraft, myId, session }) {
         <KPI label="平均切実度" value={ov.n ? Math.round(ov.crit) : "–"} unit="/100" />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, margin: "18px 0" }}>
-        <Card pad={13}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>アンケート・1回目の自由記述</div>
-          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
-            属性・選択式アンケートと、最初の自由記述を提出します。{hasDraft ? " 書きかけは自動保存されています。" : ""}
+      {hasDraft ? (
+        <Card pad={13} style={{ marginBottom: 10, borderColor: C.karashi }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>
+              <b>書きかけの回答があります。</b>入力は自動保存されています。続きから再開できます。
+            </div>
+            <Btn small onClick={() => goto("survey")}>続きから回答する</Btn>
           </div>
-          <Btn small onClick={() => goto("survey")}>{hasDraft ? "回答の続きから" : "回答をはじめる"}</Btn>
         </Card>
-        <Card pad={13}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>二度目の自由記述</div>
-          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
-            初回提出後に一度だけ、新しい自由記述を追加できます。初回本文とは別に保存します。
-          </div>
-          <Btn small kind="ghost" onClick={() => goto("followup")}>二度目の自由記述へ</Btn>
-        </Card>
-        <Card pad={13}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>回答内容の確認・修正</div>
-          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
-            提出済みのアンケート、1回目、2回目の内容を確認し、必要な箇所だけ修正します。
-          </div>
-          <Btn small kind="ghost" onClick={() => goto("mine")}>確認・修正する</Btn>
-        </Card>
-      </div>
-      <div style={{ marginBottom: 18 }}>
-        <Btn kind="ghost" onClick={() => goto("dash")}>統計ダッシュボードを見る</Btn>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <Btn onClick={() => goto("followup")} style={{ flex: "1 1 200px" }}>二度目の自由記述</Btn>
+        <Btn kind="ghost" onClick={() => goto("dash")} style={{ flex: "1 1 200px" }}>統計ダッシュボードを見る</Btn>
       </div>
 
-      {myId ? <div style={{ marginTop: -8, marginBottom: 12, fontSize: 12, color: C.sub }}>この端末から回答済みです。</div> : null}
+      {myId ? (
+        <div style={{ marginTop: 10, fontSize: 12, color: C.sub }}>
+          この端末から回答済みです。
+          <button onClick={() => goto("mine")} style={{ background: "none", border: "none", padding: 0, marginLeft: 4, fontSize: 12, color: C.slate, textDecoration: "underline", cursor: "pointer" }}>
+            自分の回答を確認・撤回する
+          </button>
+        </div>
+      ) : null}
 
       {chunkTotal > 0 ? (
         <div>
@@ -1739,6 +1735,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const [currentLoading, setCurrentLoading] = useState(false);
   const [currentLoadError, setCurrentLoadError] = useState("");
   const [currentLoadNonce, setCurrentLoadNonce] = useState(0);
+  const [editMode, setEditMode] = useState(null); // free | answers
+  const [editText, setEditText] = useState("");
   const busyRef = useRef(false);
   const loadedRef = useRef(false);
   const timerRef = useRef(null);
@@ -1753,6 +1751,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let alive = true;
     setCurrentResponse(null);
     setCurrentLoadError("");
+    setEditMode(null);
     (async () => {
       if (!session) return;
       setCurrentLoading(true);
@@ -1947,6 +1946,81 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     setPhase("done");
   }
 
+  async function refreshCurrentResponse() {
+    if (!currentResponse || !session || !session.token) return null;
+    const id = currentResponse.remoteId || currentResponse.id;
+    const fresh = await cloudLoadOwnResponse(id, session.token);
+    if (fresh) {
+      await sSet("resp:" + id, fresh);
+      setCurrentResponse(fresh);
+    }
+    return fresh;
+  }
+
+  async function handleRevisionConflict(message) {
+    await refreshCurrentResponse();
+    setErr(message || "別の更新が先に反映されました。最新状態を読み直しました。");
+  }
+
+  async function submitCurrentFreeText() {
+    if (busyRef.current || !currentResponse) return;
+    const id = currentResponse.remoteId || currentResponse.id;
+    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
+    const body = sanitizeFreeText(editText, 1500);
+    busyRef.current = true; setErr("");
+    try {
+      const updated = await cloudPatchFreeText(id, revision, body);
+      const next = {
+        ...currentResponse, id, remoteId: id,
+        free: body,
+        revision: Number(updated.revision), remoteRevision: Number(updated.revision),
+        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        updatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
+      };
+      await sSet("resp:" + id, next);
+      setCurrentResponse(next); setEditMode(null); setEditText("");
+      notify("自由記述を更新しました。再解析を開始します");
+    } catch (error) {
+      if (error && error.code === "REVISION_CONFLICT") {
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
+      } else {
+        setErr("自由記述の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
+      }
+    } finally { busyRef.current = false; }
+  }
+
+  async function submitCurrentAnswers() {
+    if (busyRef.current || !currentResponse) return;
+    const id = currentResponse.remoteId || currentResponse.id;
+    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
+    const responseQuestions = Array.isArray(currentResponse.questions) && currentResponse.questions.length ? currentResponse.questions : questions;
+    const editable = responseQuestions.filter(q => q.type !== "free");
+    const payload = Object.fromEntries(editable.map(q => [q.id, String(answers[q.id] || "")]).filter(([, value]) => value));
+    if (Object.keys(payload).length !== editable.length) {
+      setErr("すべての選択式設問に回答してください。"); return;
+    }
+    busyRef.current = true; setErr("");
+    try {
+      const updated = await cloudPatchAnswers(id, revision, payload);
+      const next = {
+        ...currentResponse,
+        answers: payload,
+        updatedAt: Number(updated.updatedAt || Date.now())
+      };
+      await sSet("resp:" + id, next);
+      setCurrentResponse(next); setEditMode(null);
+      notify("アンケート回答を更新しました。AI解析結果は変更していません");
+    } catch (error) {
+      if (error && error.code === "REVISION_CONFLICT") {
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
+      } else {
+        setErr("アンケート回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
+      }
+    } finally { busyRef.current = false; }
+  }
+
   async function resetAll() {
     await clearDraft();
     setPhase("consent"); setAgree(false); setDemo({}); setAnswers({}); setResult(null); setQi(0); setErr(""); setRestored(false);
@@ -1992,22 +2066,94 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     );
   }
 
-  /* 初回回答と提出後の修正は別機能。/survey は初回提出だけを担当する。 */
+  /* 回答済みの場合は新規回答を作らず、同じ回答の続き・修正画面を開く。 */
   if (currentResponse && phase === "consent") {
     const id = currentResponse.remoteId || currentResponse.id;
+    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
+    const responseQuestions = Array.isArray(currentResponse.questions) && currentResponse.questions.length ? currentResponse.questions : questions;
+    const nonFreeQuestions = responseQuestions.filter(q => q.type !== "free");
+
+    if (editMode === "free") {
+      return (
+        <div style={{ maxWidth: 680, margin: "0 auto" }}>
+          <H2 eyebrow="EDIT" sub={"回答ID " + id + " / revision " + revision}>自由記述を修正</H2>
+          <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={10} maxLength={1500}
+            style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.sub, marginTop: 4 }}>
+            <span>現在の1回目の自由記述全文を置き換えます。保存後は置き換え後の全文を再解析します。</span>
+            <span style={{ fontFamily: FONT_MONO }}>{editText.length}/1500</span>
+          </div>
+          {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn onClick={submitCurrentFreeText}>保存して再解析</Btn>
+            <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
+          </div>
+        </div>
+      );
+    }
+
+    if (editMode === "answers") {
+      const complete = nonFreeQuestions.every(q => answers[q.id]);
+      return (
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <H2 eyebrow="EDIT ANSWERS" sub={"回答ID " + id + " / revision " + revision}>アンケート回答を修正</H2>
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
+            初回回答時に保存された設問スナップショットに対して回答だけを更新します。自由記述と現在のAI解析結果は変更しません。
+          </div>
+          {nonFreeQuestions.map((q, index) => (
+            <Card key={q.id} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{index + 1}. {q.text}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(q.options || []).map(option => <Chip key={option} active={answers[q.id] === option} onClick={() => setAnswers({ ...answers, [q.id]: option })}>{option}</Chip>)}
+              </div>
+            </Card>
+          ))}
+          {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn disabled={!complete} onClick={submitCurrentAnswers}>変更を保存</Btn>
+            <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div style={{ maxWidth: 620, margin: "0 auto" }}>
-        <H2 eyebrow="FIRST RESPONSE" sub={"回答ID " + id}>最初の回答は提出済みです</H2>
-        <Card>
-          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.9, marginBottom: 12 }}>
-            /survey はアンケートと1回目の自由記述を新規提出する画面です。提出済み内容の変更は「回答内容の確認・修正」、二度目の新規記述は専用画面から行います。
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Btn onClick={() => goto("followup")}>二度目の自由記述</Btn>
-            <Btn kind="ghost" onClick={() => goto("mine")}>回答内容を確認・修正</Btn>
-            <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
-          </div>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+        <H2 eyebrow="CURRENT RESPONSE" sub={"回答ID " + id + " / revision " + revision}>現在の回答</H2>
+        <Card style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.8 }}>このアカウントには回答が1件あります。新しい初回回答は作らず、この回答を更新します。</div>
+          <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13 }}>{currentResponse.free || "（自由記述なし）"}</div>
+          {currentResponse.followUpSubmitted ? (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid " + C.rule }}>
+              <div style={{ fontSize: 11, color: C.sub, marginBottom: 4 }}>二度目の自由記述</div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{currentResponse.followUpText || "（記載なし）"}</div>
+            </div>
+          ) : null}
         </Card>
+        {err ? <div style={{ color: C.bengara, fontSize: 12, marginBottom: 10 }}>{err}</div> : null}
+        <H2 eyebrow="UPDATE RESPONSE" sub="新規の二度目自由記述と、提出済み回答の修正を分けています。">回答を更新する</H2>
+        <div style={{ display: "grid", gap: 10 }}>
+          <Card pad={13}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>二度目の自由記述</div>
+            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
+              {currentResponse.followUpSubmitted ? "二度目の自由記述は提出済みです。変更は自分の回答画面から行えます。" : "初回回答とは別の二度目自由記述を一度だけ提出できます。"}
+            </div>
+            {currentResponse.followUpSubmitted
+              ? <Btn small kind="ghost" onClick={() => goto("mine")}>2回目を確認・修正</Btn>
+              : <Btn small onClick={() => goto("followup")}>二度目の自由記述へ</Btn>}
+          </Card>
+          <Card pad={13}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を全文修正</div>
+            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の1回目自由記述全文を置き換え、置き換え後の全文を再解析します。</div>
+            <Btn small kind="ghost" onClick={() => { setEditText(String(currentResponse.free || "")); setEditMode("free"); setErr(""); }}>全文を修正する</Btn>
+          </Card>
+          <Card pad={13}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>アンケート回答を修正</div>
+            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>初回回答時に保存された選択式回答だけを変更します。AI解析は再実行しません。</div>
+            <Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正する</Btn>
+          </Card>
+        </div>
+        <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答を確認</Btn></div>
       </div>
     );
   }
@@ -3468,7 +3614,6 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
               {r.followUpSubmitted
                 ? <Btn small kind="ghost" onClick={() => { setEditText(String(r.followUpText || "")); setEditMode("followup"); setErr(""); }}>2回目を修正</Btn>
                 : <Btn small onClick={() => goto("followup")}>二度目の自由記述を書く</Btn>}
-              <Btn small kind="ghost" onClick={() => { setEditAnswers({ ...(r.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正</Btn>
             </div>
           </Card>
         ) : null}

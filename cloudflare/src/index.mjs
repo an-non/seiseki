@@ -377,13 +377,18 @@ async function handleRequest(request, env, ctx) {
         !validateAnswersAgainstQuestions(input.answers, snapshot, false)) {
       throw new RequestError(400, "INVALID_ANSWER", "answers do not match the saved question snapshot");
     }
-    const nextRevision = await updateResponseAnswers(env.DB, answersId, input.expectedRevision, input.answers);
-    if (nextRevision == null) {
+    const outcome = await updateResponseAnswers(env.DB, answersId, input.expectedRevision, input.answers);
+    if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (outcome.status !== "updated") {
       throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     }
-    dispatchUpdatedAnalysis(env, ctx, answersId, nextRevision);
-    const current = await getResponseMetadata(env.DB, answersId);
-    return json({ id: answersId, revision: nextRevision, analysisStatus: "pending", updatedAt: Number(current?.updatedAt || Date.now()) });
+    return json({
+      id: answersId,
+      revision: outcome.revision,
+      analysisStatus: "unchanged",
+      reanalysisQueued: false,
+      updatedAt: outcome.updatedAt
+    });
   }
 
   const requeueId = routeRequeueId(url.pathname);

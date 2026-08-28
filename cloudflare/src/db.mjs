@@ -502,35 +502,19 @@ export async function updateResponseFreeText(db, id, expectedRevision, freeText)
 
 export async function updateResponseAnswers(db, id, expectedRevision, answers) {
   const now = Date.now();
-  const guard = expectedRevisionGuard();
-  const statements = [
-    db.prepare(`DELETE FROM answers WHERE response_id = ? AND ${guard}`)
-      .bind(id, id, expectedRevision)
-  ];
+  const current = await db.prepare("SELECT revision FROM responses WHERE id = ?").bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+
+  const statements = [db.prepare("DELETE FROM answers WHERE response_id = ?").bind(id)];
   for (const answer of answers) {
-    statements.push(db.prepare(`
-      INSERT INTO answers (response_id, qid, value)
-      SELECT ?, ?, ? WHERE ${guard}
-    `).bind(id, answer.qid, answer.value, id, expectedRevision));
+    statements.push(db.prepare("INSERT INTO answers (response_id, qid, value) VALUES (?, ?, ?)").bind(id, answer.qid, answer.value));
   }
-  statements.push(
-    db.prepare(`DELETE FROM opinion_chunks WHERE response_id = ? AND ${guard}`)
-      .bind(id, id, expectedRevision),
-    db.prepare(`
-      UPDATE analysis_runs
-      SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL
-      WHERE response_id = ? AND response_revision = ? AND status = 'running' AND ${guard}
-    `).bind(now, id, expectedRevision, id, expectedRevision),
-    db.prepare(`
-      UPDATE responses
-      SET updated_at = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL
-      WHERE id = ? AND revision = ?
-    `).bind(now, id, expectedRevision)
-  );
+  statements.push(db.prepare("UPDATE responses SET updated_at = ? WHERE id = ? AND revision = ?").bind(now, id, expectedRevision));
   const results = await db.batch(statements);
   const final = results?.[results.length - 1];
-  if (Number(final?.meta?.changes ?? 0) !== 1) return null;
-  return expectedRevision + 1;
+  if (Number(final?.meta?.changes ?? 0) !== 1) return { status: "stale" };
+  return { status: "updated", revision: Number(expectedRevision), updatedAt: now };
 }
 
 export async function deleteResponse(db, id) {

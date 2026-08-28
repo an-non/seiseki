@@ -12,3 +12,10 @@ test("generic append UI is removed", () => {
   assert.ok(!ui.includes("自由記述を追記"));
   assert.ok(!ui.includes("追記する</Btn>"));
 });
+
+test("survey owns questionnaire correction while account response keeps free-text correction", () => {
+  assert.ok(ui.includes("AI解析は再実行しません"));
+  assert.ok(ui.includes("アンケートを修正する"));
+  assert.ok(ui.includes("二度目の自由記述"));
+  assert.ok(ui.includes("書きかけの回答があります。"));
+});
