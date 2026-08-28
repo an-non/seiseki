@@ -6,6 +6,7 @@ on:
       - codex/survey-answer-recovery-20260828
     paths:
       - .github/workflows/survey-answer-recovery-20260828.yml
+      - scripts/apply-survey-answer-recovery-20260828.mjs
 
 permissions:
   contents: write
