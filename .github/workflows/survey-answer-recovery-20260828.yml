@@ -1,0 +1,57 @@
+name: Survey answer recovery 20260828
+
+on:
+  push:
+    branches:
+      - codex/survey-answer-recovery-20260828
+    paths:
+      - .github/workflows/survey-answer-recovery-20260828.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/survey-answer-recovery-20260828
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+      - name: Apply recovery patch
+        run: node scripts/apply-survey-answer-recovery-20260828.mjs
+      - name: Regenerate app
+        run: node scripts/build-app.mjs
+      - name: Verify implementation
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          npm --prefix local run build:staging
+      - name: Commit tested implementation
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/db.mjs cloudflare/src/index.mjs cloudflare/tests/response-phase4-backend.test.mjs tests/follow-up-ui-contract.test.mjs
+          git diff --cached --quiet && exit 0
+          git commit -m "Restore survey corrections without answer reanalysis"
+          git push origin HEAD:codex/survey-answer-recovery-20260828
