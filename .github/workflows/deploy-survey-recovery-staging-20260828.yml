@@ -1,0 +1,98 @@
+name: Deploy survey recovery to staging 20260828
+
+on:
+  push:
+    branches:
+      - codex/survey-answer-recovery-20260828
+    paths:
+      - .github/workflows/deploy-survey-recovery-staging-20260828.yml
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_RUNTIME_MODE: staging
+    steps:
+      - name: Checkout survey recovery branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/survey-answer-recovery-20260828
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Verify source and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Build staging UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local run build:staging
+          test -s local/dist/index.html
+          grep -R -Fq '二度目の自由記述' local/dist/assets
+          grep -R -Fq 'AI解析は再実行しません' local/dist/assets
+
+      - name: Deploy to Cloudflare staging
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
+          grep -E 'Current Version ID|Uploaded' /tmp/deploy.log || true
+
+      - name: Verify live staging pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          cb="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/api/health?cb=$cb" > /tmp/health.json
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/app?cb=$cb" > /tmp/app.html
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/survey?cb=$cb" > /tmp/survey.html
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/survey/follow-up?cb=$cb" > /tmp/followup.html
+          test -s /tmp/health.json
+          test -s /tmp/app.html
+          test -s /tmp/survey.html
+          test -s /tmp/followup.html
+          grep -Fq '"status":"ok"' /tmp/health.json
+          printf '\n### Staging live check\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- /api/health: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- /app: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- /survey: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- /survey/follow-up: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
