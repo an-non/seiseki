@@ -90,3 +90,5 @@ jobs:
           path: phase5-browser-e2e-artifacts/
           if-no-files-found: warn
           retention-days: 14
+
+# Phase 5.9 accepted-density verification trigger; no runtime effect.
