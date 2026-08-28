@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/response-revision-unification-20260828.yml
       - scripts/apply-response-revision-unification-v2-20260828.mjs
+      - tests/follow-up-ui-contract.test.mjs
 
 permissions:
   contents: write
