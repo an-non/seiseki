@@ -43,11 +43,17 @@ jobs:
           node scripts/apply-follow-up-free-text-20260828.mjs
           node - <<'NODE'
           const fs = require('fs');
-          const path = 'core/ui.jsx';
-          const source = fs.readFileSync(path, 'utf8');
-          const duplicated = '        {an ? (        {an ? (';
-          if (!source.includes(duplicated)) throw new Error('expected duplicated analysis JSX marker was not found');
-          fs.writeFileSync(path, source.replace(duplicated, '        {an ? ('), 'utf8');
+          const fixes = [
+            ['core/ui.jsx', '        {an ? (        {an ? (', '        {an ? ('],
+            ['core/ui.jsx', '  if (phase === "consent") {  if (phase === "consent") {', '  if (phase === "consent") {'],
+            ['core/ui.jsx', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {async function cloudPatchFreeText(id, expectedRevision, freeText) {', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {'],
+            ['cloudflare/src/analysis.mjs', 'function countHits(text, words) {function countHits(text, words) {', 'function countHits(text, words) {']
+          ];
+          for (const [path, duplicated, fixed] of fixes) {
+            const source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(duplicated)) throw new Error('expected duplicated range marker was not found in ' + path + ': ' + duplicated);
+            fs.writeFileSync(path, source.replace(duplicated, fixed), 'utf8');
+          }
           NODE
           node scripts/build-app.mjs
 
@@ -71,10 +77,12 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          echo '--- app/seiseki.jsx 3500-3640 ---'
+          sed -n '3500,3640p' app/seiseki.jsx || true
           echo '--- app/seiseki.jsx 5000-5240 ---'
           sed -n '5000,5240p' app/seiseki.jsx || true
-          echo '--- core/ui.jsx around MyResponse edits ---'
-          grep -n -A220 -B20 'async function refreshEditedResponse' core/ui.jsx || true
+          echo '--- core/ui.jsx follow-up markers ---'
+          grep -n -A220 -B20 'function FollowUpSurvey' core/ui.jsx || true
 
       - name: Verify scope
         shell: bash
