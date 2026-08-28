@@ -1,5 +1,6 @@
 name: Deploy survey recovery to staging 20260828
 
+# Trigger: refined response labels approved for staging.
 on:
   push:
     branches:
@@ -62,7 +63,9 @@ jobs:
           set -euo pipefail
           npm --prefix local run build:staging
           test -s local/dist/index.html
-          grep -R -Fq '二度目の自由記述' local/dist/assets
+          grep -R -Fq '二度目の自由記述、修正' local/dist/assets
+          grep -R -Fq '自分の回答、設定の確認' local/dist/assets
+          grep -R -Fq 'マイレスポンス確認・修正' local/dist/assets
           grep -R -Fq 'AI解析は再実行しません' local/dist/assets
 
       - name: Deploy to Cloudflare staging
@@ -85,14 +88,17 @@ jobs:
           curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/app?cb=$cb" > /tmp/app.html
           curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/survey?cb=$cb" > /tmp/survey.html
           curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/survey/follow-up?cb=$cb" > /tmp/followup.html
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/account/response?cb=$cb" > /tmp/response.html
           test -s /tmp/health.json
           test -s /tmp/app.html
           test -s /tmp/survey.html
           test -s /tmp/followup.html
+          test -s /tmp/response.html
           grep -Fq '"status":"ok"' /tmp/health.json
           printf '\n### Staging live check\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- /api/health: PASS\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- /app: PASS\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- /survey: PASS\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- /survey/follow-up: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- /account/response: PASS\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
