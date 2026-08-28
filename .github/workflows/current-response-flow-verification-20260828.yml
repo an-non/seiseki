@@ -1,0 +1,52 @@
+name: Current response flow verification 20260828
+
+on:
+  push:
+    branches:
+      - codex/response-revision-unification-20260828
+    paths:
+      - .github/workflows/current-response-flow-verification-20260828.yml
+      - cloudflare/tests/current-response-revision-flow.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/response-revision-unification-20260828
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+      - name: Verify canonical response sequence
+        run: |
+          set -euo pipefail
+          node --test cloudflare/tests/current-response-revision-flow.test.mjs
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          npm --prefix local run build:staging
+      - name: Guard analysis and quantum surfaces
+        run: |
+          set -euo pipefail
+          git diff --exit-code dac372271d63005fb9f88bf58e5f5c115e21258e -- cloudflare/src/analysis.mjs cloudflare/src/db.mjs core/logic.js core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          if grep -R -Fq 'storeLocalProvisionalAnalysis' cloudflare/src; then
+            echo "Provisional local analysis must not enter formal D1 path" >&2
+            exit 1
+          fi
