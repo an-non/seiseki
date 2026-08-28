@@ -55,7 +55,7 @@ class D1DatabaseAdapter {
 
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_questionnaire_seven_structured.sql"]) {
     const migration = readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
     database.exec(migration);
   }
@@ -108,7 +108,7 @@ test("Worker API stores a pending response and cascades its deletion", async () 
   assert.equal(stored.analysis_status, "pending");
   assert.equal(stored.analysis_json, null);
   assert.equal(database.prepare("SELECT count(*) AS count FROM answers WHERE response_id = ?").get(created.id).count, 2);
-  assert.equal(database.prepare("SELECT count(*) AS count FROM response_questions WHERE response_id = ?").get(created.id).count, 3);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM response_questions WHERE response_id = ?").get(created.id).count, 7);
   assert.equal(database.prepare("SELECT count(*) AS count FROM opinion_chunks WHERE response_id = ?").get(created.id).count, 0);
 
   const metadata = await worker.fetch(new Request(`http://local/api/responses/${created.id}`, {
@@ -140,6 +140,72 @@ test("Worker API stores a pending response and cascades its deletion", async () 
   database.close();
 });
 
+test("trusted-shape local model output is stored provisionally without completing cloud analysis", async () => {
+  const database = createDatabase();
+  const env = { DB: new D1DatabaseAdapter(database), TURNSTILE_REQUIRED: "false" };
+  const body = submission();
+  body.analysis = {
+    engine: "seiseki-local-v1",
+    params: { emo: { pol: -0.4, label: "不安" }, valid: 72, crit: 56, motiv: 58 },
+    ideology: { econ: -31, soc: 0, confidence: 45 },
+    attrs: ["教育"],
+    chunks: [{
+      s: "教育制度の改善を求める。", cat: "提言", topic: "教育", tt: "政府全般", tn: "",
+      emo: -0.4, crit: 56, fact: "意見"
+    }]
+  };
+
+  const response = await worker.fetch(new Request("http://local/api/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  }), env);
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  assert.equal(created.analysisStatus, "pending");
+  assert.equal(created.provisionalAnalysisStored, true);
+
+  const stored = database.prepare(`
+    SELECT analysis_status AS status, analysis_json AS analysisJson
+    FROM responses WHERE id = ?
+  `).get(created.id);
+  assert.equal(stored.status, "pending");
+  assert.equal(JSON.parse(stored.analysisJson).engine, "seiseki-local-v1");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM opinion_chunks WHERE response_id = ?")
+    .get(created.id).count, 1);
+  const run = database.prepare(`
+    SELECT engine, status, response_revision AS revision
+    FROM analysis_runs WHERE response_id = ?
+  `).get(created.id);
+  assert.deepEqual({ ...run }, { engine: "seiseki-local-v1", status: "completed", revision: 1 });
+
+  let acked = 0;
+  await worker.queue({ messages: [{
+    id: "replace-local-provisional",
+    body: { type: "analyze-response", responseId: created.id, revision: 1 },
+    ack: () => { acked += 1; },
+    retry: () => assert.fail("authoritative analysis should not retry")
+  }] }, {
+    ...env,
+    AI: { run: async () => ({ response: JSON.stringify({
+      params: { emo: { pol: 0.2, label: "期待" }, valid: 81, crit: 42, motiv: 66 },
+      ideology: { econ: 12, soc: -8, confidence: 70 }, attrs: ["教育"],
+      chunks: [{
+        s: "AIが教育制度を再評価した。", cat: "評価", topic: "教育", tt: "政府全般", tn: "",
+        emo: 0.2, crit: 42, fact: "意見"
+      }]
+    }) }) }
+  });
+  assert.equal(acked, 1);
+  const authoritative = database.prepare("SELECT analysis_status AS status, analysis_json AS analysisJson FROM responses WHERE id = ?")
+    .get(created.id);
+  assert.equal(authoritative.status, "completed");
+  assert.notEqual(JSON.parse(authoritative.analysisJson).engine, "seiseki-local-v1");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM analysis_runs WHERE response_id = ?")
+    .get(created.id).count, 2);
+  database.close();
+});
+
 test("public config is loaded from D1 and invalid answers are rejected", async () => {
   const database = createDatabase();
   const env = { DB: new D1DatabaseAdapter(database), TURNSTILE_REQUIRED: "false" };
@@ -147,6 +213,10 @@ test("public config is loaded from D1 and invalid answers are rejected", async (
   const configResponse = await worker.fetch(new Request("http://local/api/config"), env);
   assert.equal(configResponse.status, 200);
   const config = await configResponse.json();
+  assert.equal(config.questions.length, 8);
+  assert.deepEqual(config.questions.filter(question => question.type !== "free").map(question => question.id), [
+    "q_support", "q_priority", "q_econ", "q_information", "q_social", "q_life", "q_participation"
+  ]);
   assert.equal(config.questions.find(question => question.id === "q_econ").left, "財政支出を拡大し再分配を強化すべき");
 
   const body = submission();
@@ -298,7 +368,8 @@ test("account registration, login, update, response linking, and logout", async 
   assert.deepEqual(minePayload.responses.map(item => item.id), [responseId]);
   assert.equal(minePayload.responses[0].free, submission().freeText);
   assert.equal(minePayload.responses[0].answers.q_priority, "子育て・教育");
-  assert.deepEqual(minePayload.responses[0].questions, [
+  assert.equal(minePayload.responses[0].questions.length, 7);
+  assert.deepEqual(minePayload.responses[0].questions.slice(0, 3), [
     {
       id: "q_support", qid: "q_support", position: 0, type: "single",
       text: "現在の政権を支持しますか？",

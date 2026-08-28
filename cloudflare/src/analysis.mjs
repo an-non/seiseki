@@ -2,6 +2,7 @@ import {
   completeResponseAnalysis,
   getResponseForAnalysis,
   renewAnalysisRunLease,
+  saveProvisionalResponseAnalysis,
   startAnalysisRun
 } from "./db.mjs";
 
@@ -258,6 +259,45 @@ export function sanitizeAiAnalysis(value, freeText) {
     });
   }
   return output;
+}
+
+const LOCAL_PROVISIONAL_ENGINE = "seiseki-local-v1";
+
+export async function storeLocalProvisionalAnalysis(env, responseId, revision, value, freeText) {
+  if (value?.engine !== LOCAL_PROVISIONAL_ENGINE) return { status: "ignored" };
+  const sanitized = sanitizeAiAnalysis(value, freeText);
+  if (!sanitized) return { status: "invalid" };
+  const analysis = {
+    ...sanitized,
+    engine: LOCAL_PROVISIONAL_ENGINE,
+    ai: false,
+    src: "local",
+    cap: {
+      learned: ["pol", "band", "valid", "crit", "motiv", "cat", "tt", "ideology.econ"],
+      rule: ["s", "topic", "tn", "fact", "label", "attrs"],
+      none: ["ideology.soc"]
+    }
+  };
+  const leaseMs = Number(env.ANALYSIS_LEASE_MS || 300000);
+  const claim = await startAnalysisRun(
+    env.DB,
+    responseId,
+    revision,
+    LOCAL_PROVISIONAL_ENGINE,
+    "modernbert-ja-30m+krr",
+    "local-v1",
+    leaseMs
+  );
+  if (!claim || claim.status !== "claimed") return claim || { status: "busy" };
+  const saved = await saveProvisionalResponseAnalysis(
+    env.DB,
+    responseId,
+    claim.runId,
+    revision,
+    analysis,
+    { engine: LOCAL_PROVISIONAL_ENGINE, model: "modernbert-ja-30m+krr", promptVersion: "local-v1" }
+  );
+  return { status: saved ? "stored" : "stale", runId: claim.runId, revision };
 }
 
 function emptyAnalysis(freeText) {

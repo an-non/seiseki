@@ -24,7 +24,7 @@ function createDatabase() {
   const database = new DatabaseSync(":memory:");
   for (const name of [
     "0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql",
-    "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql"
+    "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_questionnaire_seven_structured.sql"
   ]) database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   return database;
 }

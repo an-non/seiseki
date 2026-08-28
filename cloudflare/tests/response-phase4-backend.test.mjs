@@ -22,16 +22,28 @@ class D1 {
 }
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_questionnaire_seven_structured.sql"]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   return database;
+}
+function structuredAnswers(overrides = {}) {
+  return {
+    q_support: "わからない",
+    q_priority: "子育て・教育",
+    q_econ: "3",
+    q_information: "わからない",
+    q_social: "3",
+    q_life: "わからない",
+    q_participation: "わからない",
+    ...overrides
+  };
 }
 function submission(text = "最初の自由記述") {
   return {
     appVersion: "0.16.0", consent: { accepted: true, version: "1.3", at: Date.now() },
     demo: { age: "30代", gender: "回答しない", region: "関東", occupation: "会社員(正社員)", party: "支持政党なし" },
-    answers: { q_support: "わからない", q_priority: "子育て・教育", q_econ: "3" }, freeText: text
+    answers: structuredAnswers(), freeText: text
   };
 }
 async function register(env, name) {
@@ -102,14 +114,14 @@ test("answers PATCH validates saved question snapshot and replaces answers at on
   const owner = await register(env, "回答編集者"); const cr = await create(env, owner.token); const created = await cr.json();
   const good = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
     method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
-    body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" } })
+    body: JSON.stringify({ expectedRevision: 1, answers: structuredAnswers({ q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" }) })
   }), env);
   assert.equal(good.status, 200); assert.equal((await good.json()).revision, 2);
   const rows = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
-  assert.deepEqual(rows.map(x => [x.qid,x.value]), [["q_econ","5"],["q_priority","経済・雇用"],["q_support","支持しない"]]);
+  assert.deepEqual(Object.fromEntries(rows.map(x => [x.qid, x.value])), structuredAnswers({ q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" }));
   const bad = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
     method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
-    body: JSON.stringify({ expectedRevision: 2, answers: { q_support: "存在しない選択肢", q_priority: "経済・雇用", q_econ: "5" } })
+    body: JSON.stringify({ expectedRevision: 2, answers: structuredAnswers({ q_support: "存在しない選択肢", q_priority: "経済・雇用", q_econ: "5" }) })
   }), env);
   assert.equal(bad.status, 400);
   database.close();

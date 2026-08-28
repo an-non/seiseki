@@ -21,7 +21,7 @@ import {
   registerAccount,
   updateAccount
 } from "./auth.mjs";
-import { analyzeStoredResponse } from "./analysis.mjs";
+import { analyzeStoredResponse, storeLocalProvisionalAnalysis } from "./analysis.mjs";
 import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
 import {
   createResponseId,
@@ -194,6 +194,24 @@ async function handleCreateResponse(request, env, ctx) {
     throw error;
   }
 
+  let provisional = { status: "ignored" };
+  try {
+    provisional = await storeLocalProvisionalAnalysis(
+      env,
+      response.id,
+      1,
+      body.analysis,
+      normalized.freeText
+    );
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "local_provisional_store_failed",
+      responseId: response.id,
+      revision: 1,
+      error: String(error?.message ?? "unknown").slice(0, 160)
+    }));
+  }
+
   if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() === "true" && ctx) {
     const dispatch = async () => {
       if (env.ANALYSIS_QUEUE?.send) {
@@ -226,6 +244,7 @@ async function handleCreateResponse(request, env, ctx) {
     revision: 1,
     status: "stored",
     analysisStatus: "pending",
+    provisionalAnalysisStored: provisional.status === "stored",
     ...(manageAccess ? { manageToken: manageAccess.token } : {})
   }, 201);
 }

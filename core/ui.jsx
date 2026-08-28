@@ -57,7 +57,7 @@ async function cloudApiRequest(path, options) {
   }
 }
 
-async function cloudCreateInitialResponse(resp, token) {
+async function cloudCreateInitialResponse(resp, token, provisionalAnalysis) {
   if (!cloudApiEnabled()) return null;
   /* 追記(seq=2)は「自由記述の続き」。1200字に収まらなかった分や、2回目の記述にあたる。
      属性と選択回答は元の回答で既に数えているので、サーバーへは送らない
@@ -74,7 +74,10 @@ async function cloudCreateInitialResponse(resp, token) {
     demo: isAdd ? {} : (resp.demo || {}),
     answers: isAdd ? {} : answers,
     freeText: resp.free || "",
-    demoFlag: resp.demoFlag === true
+    demoFlag: resp.demoFlag === true,
+    analysis: provisionalAnalysis && provisionalAnalysis.engine === SEISEKI_LOCAL_ENGINE
+      ? provisionalAnalysis
+      : undefined
   };
   const created = await cloudApiRequest("/api/responses", {
     method: "POST",
@@ -1005,6 +1008,9 @@ function useModelData() {
       onProgress: (d, t) => { if (alive.current) setSt({ state: "downloading", have: d, total: t }); },
       onError: e => { if (alive.current) setMsg((e && e.message) || "受け取れませんでした"); }
     });
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(function () {});
+    }
     if (!alive.current) return;
     setBusy(false);
     await refresh();
@@ -1730,10 +1736,16 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let cloudAnalysisMode = null;
     let remoteId = null;
     let remoteRevision = null;
+    let preparedLocalAnalysis = null;
+    if (cloudApiEnabled() && typeof SeisekiLocalBridge !== "undefined" &&
+        SeisekiLocalBridge.available() && SeisekiLocalBridge.ready()) {
+      try { preparedLocalAnalysis = await SeisekiLocalBridge.analyze(base, questions, heuristicAnalysis); }
+      catch (error) { console.warn("local provisional analysis failed", error); }
+    }
     /* Cloudflare作成結果には認可情報とrevisionが含まれる。匿名manage tokenはprivate scopeへ保存する。 */
     if (cloudApiEnabled()) {
       try {
-        const createdRemote = await cloudCreateInitialResponse(base, session && session.token);
+        const createdRemote = await cloudCreateInitialResponse(base, session && session.token, preparedLocalAnalysis);
         remoteId = createdRemote && createdRemote.id;
         remoteRevision = createdRemote && createdRemote.revision;
         if (!remoteId) throw new Error("Cloudflare response id was not returned");
@@ -1767,7 +1779,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         setPhase("aifail");
         return;
       }
-      try { analysis = await callAI(base, questions); }
+      try { analysis = preparedLocalAnalysis || await callAI(base, questions); }
       catch (e) {
         busyRef.current = false;
         setErr("端末内の解析処理でエラーが発生しました。");

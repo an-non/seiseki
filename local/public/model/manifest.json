@@ -16,9 +16,9 @@
   },
   {
    "key": "head",
-   "url": "/model/head-krr-full.bin",
+   "url": "/model/head-krr-full-v2.bin",
    "bytes": 1101292,
-   "sha256": "201c093e3deb8778f92c635025a8ee67bb7d721c87e7c69c735c846fc204f26d"
+   "sha256": "791daa3fdd5984f1e12dd8c18bcf6efd68e36438b55f498847605aed9904ce04"
   },
   {
    "key": "wasm",
