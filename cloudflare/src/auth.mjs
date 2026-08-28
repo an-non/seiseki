@@ -343,7 +343,7 @@ export async function listAccountResponses(db, accountId) {
     SELECT r.id, r.created_at AS createdAt, r.updated_at AS updatedAt, r.app_version AS appVersion,
            r.consent_version AS consentVersion, r.consent_at AS consentAt,
            r.age, r.gender, r.region, r.occupation, r.party,
-           r.free_text AS freeText, r.analysis_status AS analysisStatus,
+           r.free_text AS freeText, r.follow_up_text AS followUpText, r.analysis_status AS analysisStatus,
            r.analysis_json AS analysisJson, r.demo_flag AS demoFlag,
            r.revision AS revision
     FROM account_responses ar
@@ -401,7 +401,7 @@ export async function listAccountResponses(db, accountId) {
       ts: Number(row.createdAt),
       updatedAt: Number(row.updatedAt || row.createdAt || 0),
       ver: String(row.appVersion ?? ""),
-      seq: Number(row.revision ?? 1),
+      seq: 1,
       revision: Number(row.revision ?? 1),
       demoFlag: Number(row.demoFlag) === 1,
       consent: { version: String(row.consentVersion ?? ""), ts: Number(row.consentAt) },
@@ -412,6 +412,8 @@ export async function listAccountResponses(db, accountId) {
       answers: answersById.get(row.id) ?? {},
       questions: questionsById.get(row.id) ?? [],
       free: String(row.freeText ?? ""),
+      followUpText: row.followUpText == null ? null : String(row.followUpText),
+      followUpSubmitted: row.followUpText != null,
       freeQids: ["q_free"],
       analysis,
       analysisStatus: row.analysisStatus

@@ -9,6 +9,7 @@ test("入口・回答・完了・本人・Adminは固有URLを持つ", () => {
     'entry: "/"',
     'home: "/app"',
     'survey: "/survey"',
+    'followup: "/survey/follow-up"',
     'complete: "/survey/complete"',
     'mine: "/account/response"',
     'admin: "/admin"'

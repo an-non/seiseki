@@ -93,7 +93,7 @@ export async function getResponseRevision(db, id) {
 
 export async function getResponseForAnalysis(db, id) {
   const response = await db.prepare(`
-    SELECT id, free_text AS freeText, analysis_status AS analysisStatus,
+    SELECT id, free_text AS freeText, follow_up_text AS followUpText, analysis_status AS analysisStatus,
            age, gender, region, occupation, party, revision
     FROM responses
     WHERE id = ?
@@ -436,6 +436,46 @@ export async function getResponseQuestionSnapshot(db, id) {
 
 function expectedRevisionGuard() {
   return "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)";
+}
+
+async function mutateResponseFollowUpText(db, id, expectedRevision, followUpText, mode) {
+  const now = Date.now();
+  const createOnly = mode === "create";
+  const condition = createOnly ? "follow_up_text IS NULL" : "follow_up_text IS NOT NULL";
+  const guard = "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ? AND " + condition + ")";
+  const statements = [
+    db.prepare(
+      "DELETE FROM opinion_chunks WHERE response_id = ? AND " + guard
+    ).bind(id, id, expectedRevision),
+    db.prepare(
+      "UPDATE analysis_runs SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL " +
+      "WHERE response_id = ? AND response_revision = ? AND status = 'running' AND " + guard
+    ).bind(now, id, expectedRevision, id, expectedRevision),
+    db.prepare(
+      "UPDATE responses SET follow_up_text = ?, updated_at = ?, revision = revision + 1, " +
+      "analysis_status = 'pending', analysis_json = NULL WHERE id = ? AND revision = ? AND " + condition
+    ).bind(followUpText, now, id, expectedRevision)
+  ];
+  const results = await db.batch(statements);
+  if (Number(results?.[2]?.meta?.changes ?? 0) === 1) {
+    return { status: "updated", revision: expectedRevision + 1, updatedAt: now };
+  }
+  const current = await db.prepare(
+    "SELECT revision, follow_up_text AS followUpText FROM responses WHERE id = ?"
+  ).bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+  if (createOnly && current.followUpText != null) return { status: "exists" };
+  if (!createOnly && current.followUpText == null) return { status: "missing" };
+  return { status: "conflict" };
+}
+
+export function createResponseFollowUpText(db, id, expectedRevision, followUpText) {
+  return mutateResponseFollowUpText(db, id, expectedRevision, followUpText, "create");
+}
+
+export function updateResponseFollowUpText(db, id, expectedRevision, followUpText) {
+  return mutateResponseFollowUpText(db, id, expectedRevision, followUpText, "update");
 }
 
 export async function updateResponseFreeText(db, id, expectedRevision, freeText) {

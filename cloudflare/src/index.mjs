@@ -1,4 +1,5 @@
 import {
+  createResponseFollowUpText,
   deleteResponse,
   getBasicStats,
   getResponseMetadata,
@@ -6,6 +7,7 @@ import {
   insertPendingResponse,
   listPublicDemoResponses,
   updateResponseAnswers,
+  updateResponseFollowUpText,
   updateResponseFreeText
 } from "./db.mjs";
 import { getResponseAnalysis, prepareResponseAnalysisRetry, restoreResponseAnalysisFailure } from "./db.mjs";
@@ -27,6 +29,8 @@ import {
   createResponseId,
   normalizeAnswersUpdate,
   normalizeExpectedRevision,
+  normalizeFollowUpTextCreate,
+  normalizeFollowUpTextUpdate,
   normalizeFreeTextUpdate,
   normalizeSubmission,
   RequestError
@@ -90,6 +94,11 @@ function routeAnalysisId(pathname) {
 
 function routeFreeTextId(pathname) {
   const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/free-text$/u);
+  return match ? match[1] : null;
+}
+
+function routeFollowUpId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/follow-up$/u);
   return match ? match[1] : null;
 }
 
@@ -334,6 +343,29 @@ async function handleRequest(request, env, ctx) {
     dispatchUpdatedAnalysis(env, ctx, freeTextId, nextRevision);
     const current = await getResponseMetadata(env.DB, freeTextId);
     return json({ id: freeTextId, revision: nextRevision, analysisStatus: "pending", updatedAt: Number(current?.updatedAt || Date.now()) });
+  }
+
+  const followUpId = routeFollowUpId(url.pathname);
+  if (followUpId && (request.method === "POST" || request.method === "PATCH")) {
+    await authorizeResponseAccess(env.DB, request, followUpId);
+    const input = request.method === "POST"
+      ? normalizeFollowUpTextCreate(await readJson(request))
+      : normalizeFollowUpTextUpdate(await readJson(request));
+    const outcome = request.method === "POST"
+      ? await createResponseFollowUpText(env.DB, followUpId, input.expectedRevision, input.followUpText)
+      : await updateResponseFollowUpText(env.DB, followUpId, input.expectedRevision, input.followUpText);
+    if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (outcome.status === "stale") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
+    if (outcome.status === "exists") throw new RequestError(409, "FOLLOW_UP_ALREADY_EXISTS", "second free-text response has already been submitted");
+    if (outcome.status === "missing") throw new RequestError(409, "FOLLOW_UP_NOT_SUBMITTED", "second free-text response has not been submitted yet");
+    if (outcome.status !== "updated") throw new RequestError(409, "FOLLOW_UP_CONFLICT", "second free-text response could not be updated");
+    dispatchUpdatedAnalysis(env, ctx, followUpId, outcome.revision);
+    return json({
+      id: followUpId,
+      revision: outcome.revision,
+      analysisStatus: "pending",
+      updatedAt: outcome.updatedAt
+    }, request.method === "POST" ? 201 : 200);
   }
 
   const answersId = routeAnswersId(url.pathname);

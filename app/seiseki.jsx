@@ -1691,11 +1691,6 @@ async function cloudApiRequest(path, options) {
 
 async function cloudCreateInitialResponse(resp, token) {
   if (!cloudApiEnabled()) return null;
-  /* 追記(seq=2)は「自由記述の続き」。1200字に収まらなかった分や、2回目の記述にあたる。
-     属性と選択回答は元の回答で既に数えているので、サーバーへは送らない
-     (送るとサーバー側の集計で同じ人を二度数えることになる)。
-     アカウントへの紐付けは authorization ヘッダで行われるので、追記も同じ口座に付く。 */
-  const isAdd = resp.seq === 2;
   const freeQids = new Set(Array.isArray(resp.freeQids) ? resp.freeQids : []);
   const answers = Object.fromEntries(
     Object.entries(resp.answers || {}).filter(([qid]) => !freeQids.has(qid))
@@ -1703,8 +1698,8 @@ async function cloudCreateInitialResponse(resp, token) {
   const payload = {
     appVersion: resp.ver,
     consent: { accepted: true, version: resp.consent.version, at: resp.consent.ts },
-    demo: isAdd ? {} : (resp.demo || {}),
-    answers: isAdd ? {} : answers,
+    demo: resp.demo || {},
+    answers: answers,
     freeText: resp.free || "",
     demoFlag: resp.demoFlag === true
   };
@@ -1729,6 +1724,22 @@ async function cloudCreateInitialResponse(resp, token) {
     });
   }
   return result;
+}
+
+async function cloudCreateFollowUp(id, expectedRevision, followUpText) {
+  return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/follow-up", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await cloudResponseAuthHeaders(id)) },
+    body: JSON.stringify({ expectedRevision: expectedRevision, followUpText: followUpText })
+  });
+}
+
+async function cloudPatchFollowUp(id, expectedRevision, followUpText) {
+  return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/follow-up", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await cloudResponseAuthHeaders(id)) },
+    body: JSON.stringify({ expectedRevision: expectedRevision, followUpText: followUpText })
+  });
 }
 
 async function cloudPatchFreeText(id, expectedRevision, freeText) {
@@ -1942,8 +1953,11 @@ async function cloudLoadOwnResponse(id, token) {
       if (currentState && Number(currentState.revision || 0) === rawRevision) state = currentState;
     } catch (error) { console.warn("current analysis metadata load failed", error); }
     response.remoteId = id;
+    response.seq = 1;
     response.remoteRevision = rawRevision;
     response.revision = response.remoteRevision;
+    response.followUpText = raw && raw.followUpText == null ? "" : String(raw && raw.followUpText || "");
+    response.followUpSubmitted = !!(raw && raw.followUpSubmitted === true);
     response.updatedAt = Number(raw && raw.updatedAt || response.updatedAt || response.ts || 0);
     response.analysis = state.analysis;
     response.analysisSource = "cloudflare";
@@ -2493,6 +2507,7 @@ const VIEW_PATHS = {
   entry: "/",
   home: "/app",
   survey: "/survey",
+  followup: "/survey/follow-up",
   complete: "/survey/complete",
   dash: "/app/dashboard",
   tree: "/app/tree",
@@ -3020,6 +3035,8 @@ export default function App() {
           <Entry session={session} onAuthed={onAuthed} goto={goView} />
         ) : view === "home" ? (
           <Home agg={agg} goto={goView} hasDraft={hasDraft} myId={myId} session={session} />
+        ) : view === "followup" ? (
+          <FollowUpSurvey goto={goView} session={session} onAuthed={onAuthed} notify={notify} />
         ) : view === "survey" ? (
           <Survey questions={questions} policy={policy} notify={notify} onFinished={(a, result) => { const shown = withCloudDemos(a, cloudDemos); setAgg(shown); setCompletion({ ...result, agg: shown }); goView("complete"); }} goto={goView}
             session={session} onAuthed={onAuthed}
@@ -3076,7 +3093,7 @@ function Entry({ session, onAuthed, goto }) {
           声析を利用する
         </h1>
         <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.9 }}>
-          登録・ログインすると回答の確認、追記、撤回ができます。閲覧だけなら登録は必要ありません。
+          登録・ログインすると回答の確認、二度目の自由記述、修正、撤回ができます。閲覧だけなら登録は必要ありません。
         </div>
       </div>
       <ModelDataOffer session={session} />
@@ -3129,32 +3146,34 @@ function Home({ agg, goto, hasDraft, myId, session }) {
         <KPI label="平均切実度" value={ov.n ? Math.round(ov.crit) : "–"} unit="/100" />
       </div>
 
-      {hasDraft ? (
-        <Card pad={13} style={{ marginBottom: 10, borderColor: C.karashi }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ fontSize: 13, flex: 1, minWidth: 200 }}>
-              <b>書きかけの回答があります。</b>入力は自動保存されています。続きから再開できます。
-            </div>
-            <Btn small onClick={() => goto("survey")}>続きから回答する</Btn>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, margin: "18px 0" }}>
+        <Card pad={13}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>アンケート・1回目の自由記述</div>
+          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
+            属性・選択式アンケートと、最初の自由記述を提出します。{hasDraft ? " 書きかけは自動保存されています。" : ""}
           </div>
+          <Btn small onClick={() => goto("survey")}>{hasDraft ? "回答の続きから" : "回答をはじめる"}</Btn>
         </Card>
-      ) : null}
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Btn onClick={() => goto("survey")} style={{ flex: "1 1 200px" }}>
-          {hasDraft ? "回答の続きから" : "回答をはじめる(約3分)"}
-        </Btn>
-        <Btn kind="ghost" onClick={() => goto("dash")} style={{ flex: "1 1 200px" }}>統計ダッシュボードを見る</Btn>
+        <Card pad={13}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>二度目の自由記述</div>
+          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
+            初回提出後に一度だけ、新しい自由記述を追加できます。初回本文とは別に保存します。
+          </div>
+          <Btn small kind="ghost" onClick={() => goto("followup")}>二度目の自由記述へ</Btn>
+        </Card>
+        <Card pad={13}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>回答内容の確認・修正</div>
+          <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>
+            提出済みのアンケート、1回目、2回目の内容を確認し、必要な箇所だけ修正します。
+          </div>
+          <Btn small kind="ghost" onClick={() => goto("mine")}>確認・修正する</Btn>
+        </Card>
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <Btn kind="ghost" onClick={() => goto("dash")}>統計ダッシュボードを見る</Btn>
       </div>
 
-      {myId ? (
-        <div style={{ marginTop: 10, fontSize: 12, color: C.sub }}>
-          この端末から回答済みです。
-          <button onClick={() => goto("mine")} style={{ background: "none", border: "none", padding: 0, marginLeft: 4, fontSize: 12, color: C.slate, textDecoration: "underline", cursor: "pointer" }}>
-            自分の回答を確認・撤回する
-          </button>
-        </div>
-      ) : null}
+      {myId ? <div style={{ marginTop: -8, marginBottom: 12, fontSize: 12, color: C.sub }}>この端末から回答済みです。</div> : null}
 
       {chunkTotal > 0 ? (
         <div>
@@ -3213,6 +3232,132 @@ function Progress({ idx, total }) {
   );
 }
 
+function FollowUpSurvey({ goto, session, onAuthed, notify }) {
+  const [current, setCurrent] = useState(null);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+  const busyRef = useRef(false);
+
+  async function load() {
+    if (!session) { setLoading(false); return; }
+    setLoading(true); setErr("");
+    try {
+      const rec = await acctGet(session.name, true);
+      if (!rec || !rec.respId) { setCurrent(null); return; }
+      const response = cloudApiEnabled() && session.token
+        ? await cloudLoadOwnResponse(rec.respId, session.token)
+        : await sGet("resp:" + rec.respId);
+      setCurrent(response || null);
+    } catch (error) {
+      setErr("現在の回答を確認できませんでした。通信状態を確認して、もう一度試してください。");
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { load(); }, [session && session.name, session && session.token]);
+
+  async function submitFollowUp() {
+    if (busyRef.current || !current) return;
+    const body = sanitizeFreeText(text, 1500).trim();
+    if (!body) { setErr("二度目の自由記述を入力してください。"); return; }
+    const id = current.remoteId || current.id;
+    const revision = Number(current.remoteRevision || current.revision || 1);
+    busyRef.current = true; setErr("");
+    try {
+      const updated = await cloudCreateFollowUp(id, revision, body);
+      const next = {
+        ...current,
+        id: id,
+        remoteId: id,
+        seq: 1,
+        followUpText: body,
+        followUpSubmitted: true,
+        revision: Number(updated.revision),
+        remoteRevision: Number(updated.revision),
+        analysis: null,
+        analysisSource: "cloudflare",
+        cloudAnalysisStatus: "pending",
+        updatedAt: Number(updated.updatedAt || Date.now())
+      };
+      await sSet("resp:" + id, next);
+      setCurrent(next); setDone(true); setText("");
+      notify("二度目の自由記述を保存しました。再解析を開始します");
+    } catch (error) {
+      if (error && error.code === "FOLLOW_UP_ALREADY_EXISTS") {
+        setErr("二度目の自由記述はすでに提出済みです。変更は「回答内容の確認・修正」から行ってください。");
+        await load();
+      } else if (error && error.code === "REVISION_CONFLICT") {
+        setErr("別の更新が先に反映されました。最新状態を読み直しました。内容を確認して再度お試しください。");
+        await load();
+      } else {
+        setErr("二度目の自由記述を保存できませんでした" + (error && error.code ? " (" + error.code + ")" : ""));
+      }
+    } finally { busyRef.current = false; }
+  }
+
+  if (!session) {
+    return (
+      <div style={{ maxWidth: 560, margin: "0 auto" }}>
+        <H2 eyebrow="SECOND FREE TEXT" sub="初回回答と同じアカウントに保存します">二度目の自由記述</H2>
+        <AuthGate onAuthed={onAuthed} goto={goto} />
+      </div>
+    );
+  }
+  if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: "56px 0" }}><Spinner /></div>;
+  if (!current) {
+    return (
+      <div style={{ maxWidth: 620, margin: "0 auto" }}>
+        <H2 eyebrow="SECOND FREE TEXT" sub="初回回答の後に一度だけ利用できます">二度目の自由記述</H2>
+        <Card>
+          <div style={{ fontSize: 13, color: C.sub, marginBottom: 12 }}>先にアンケートと1回目の自由記述を提出してください。</div>
+          {err ? <div style={{ color: C.bengara, fontSize: 12, marginBottom: 10 }}>{err}</div> : null}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn onClick={() => goto("survey")}>最初の回答へ</Btn>
+            <Btn kind="ghost" onClick={load}>もう一度確認する</Btn>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  if (done || current.followUpSubmitted) {
+    return (
+      <div style={{ maxWidth: 620, margin: "0 auto" }}>
+        <H2 eyebrow="SECOND FREE TEXT" sub="新規提出は一度だけです">二度目の自由記述は提出済みです</H2>
+        <Card>
+          {current.followUpText ? <div style={{ whiteSpace: "pre-wrap", fontSize: 13, background: C.soft, borderRadius: 5, padding: "9px 11px", marginBottom: 12 }}>{current.followUpText}</div> : null}
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>内容を変更したい場合は、新規提出ではなく修正機能を使います。</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn onClick={() => goto("mine")}>回答内容を確認・修正</Btn>
+            <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  return (
+    <div style={{ maxWidth: 680, margin: "0 auto" }}>
+      <H2 eyebrow="SECOND FREE TEXT" sub="初回本文とは別に保存し、回答全体を再解析します">二度目の自由記述</H2>
+      <Card style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: C.sub }}>1回目の自由記述</div>
+        <div style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 180, overflowY: "auto", marginTop: 5 }}>{current.free || "（記載なし）"}</div>
+      </Card>
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={9} maxLength={1500}
+        placeholder="二度目に伝えたい意見・提言・不満を自由にお書きください"
+        style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, color: C.sub, marginTop: 4 }}>
+        <span>この新規提出は一度だけです。提出後の変更は修正機能から行えます。</span>
+        <span style={{ fontFamily: FONT_MONO }}>{text.length}/1500</span>
+      </div>
+      {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+        <Btn disabled={!text.trim()} onClick={submitFollowUp}>二度目の自由記述を送信</Btn>
+        <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
+      </div>
+    </div>
+  );
+}
+
 function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, session, onAuthed }) {
   const [phase, setPhase] = useState("consent");
   const [qi, setQi] = useState(0);
@@ -3226,8 +3371,6 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const [currentLoading, setCurrentLoading] = useState(false);
   const [currentLoadError, setCurrentLoadError] = useState("");
   const [currentLoadNonce, setCurrentLoadNonce] = useState(0);
-  const [editMode, setEditMode] = useState(null); // append | free | answers
-  const [editText, setEditText] = useState("");
   const busyRef = useRef(false);
   const loadedRef = useRef(false);
   const timerRef = useRef(null);
@@ -3242,7 +3385,6 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let alive = true;
     setCurrentResponse(null);
     setCurrentLoadError("");
-    setEditMode(null);
     (async () => {
       if (!session) return;
       setCurrentLoading(true);
@@ -3437,114 +3579,6 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     setPhase("done");
   }
 
-  async function refreshCurrentResponse() {
-    if (!session || !currentResponse) return null;
-    const id = currentResponse.remoteId || currentResponse.id;
-    const fresh = cloudApiEnabled() && session.token ? await cloudLoadOwnResponse(id, session.token) : null;
-    if (fresh) {
-      setCurrentResponse(fresh);
-      await sSet("resp:" + id, fresh);
-      return fresh;
-    }
-    return currentResponse;
-  }
-
-  async function handleRevisionConflict(successMessage) {
-    try {
-      const fresh = await refreshCurrentResponse();
-      setErr(fresh
-        ? successMessage
-        : "別の更新が先に反映されましたが、最新の回答を読み込めませんでした。再読み込みしてから編集してください。");
-    } catch (error) {
-      setErr("別の更新が先に反映されましたが、最新の回答を読み込めませんでした。再読み込みしてから編集してください。");
-    }
-  }
-
-  async function submitCurrentFreeText(mode) {
-    if (busyRef.current || !currentResponse) return;
-    const id = currentResponse.remoteId || currentResponse.id;
-    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
-    const original = String(currentResponse.free || "");
-    const nextText = mode === "append"
-      ? sanitizeFreeText([original.trim(), String(editText || "").trim()].filter(Boolean).join("\n"), 1500)
-      : sanitizeFreeText(editText, 1500);
-    if (mode === "append" && String(editText || "").trim() && nextText.length <= original.trim().length) {
-      setErr("追記後の自由記述が1500字を超えています。内容を短くしてください。");
-      return;
-    }
-    busyRef.current = true; setErr("");
-    try {
-      const updated = await cloudPatchFreeText(id, revision, nextText);
-      const next = {
-        ...currentResponse, id: id, remoteId: id,
-        free: nextText, revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
-        updatedAt: Number(updated.updatedAt || Date.now()),
-        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
-        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
-      };
-      await sSet("resp:" + id, next);
-      setCurrentResponse(next); setEditMode(null); setEditText("");
-      notify(mode === "append" ? "自由記述を追記しました。再解析を開始します" : "自由記述を更新しました。再解析を開始します");
-    } catch (error) {
-      if (error && error.code === "REVISION_CONFLICT") {
-        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
-      } else {
-        setErr("回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
-      }
-    } finally { busyRef.current = false; }
-  }
-
-  async function submitCurrentAnswers() {
-    if (busyRef.current || !currentResponse) return;
-    const id = currentResponse.remoteId || currentResponse.id;
-    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
-    const editable = questions.filter(q => q.type !== "free");
-    const payload = Object.fromEntries(editable.map(q => [q.id, String(answers[q.id] || "")]).filter(([, value]) => value));
-    if (Object.keys(payload).length !== editable.length) {
-      setErr("すべての選択式設問に回答してください。"); return;
-    }
-    busyRef.current = true; setErr("");
-    try {
-      const updated = await cloudPatchAnswers(id, revision, payload);
-      const next = {
-        ...currentResponse, id: id, remoteId: id,
-        answers: payload, revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
-        updatedAt: Number(updated.updatedAt || Date.now()),
-        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
-        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
-      };
-      await sSet("resp:" + id, next);
-      setCurrentResponse(next); setEditMode(null);
-      notify("アンケート回答を更新しました。現在の自由記述全文を再解析します");
-    } catch (error) {
-      if (error && error.code === "REVISION_CONFLICT") {
-        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
-      } else {
-        setErr("アンケート回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
-      }
-    } finally { busyRef.current = false; }
-  }
-
-  async function retryCurrentAnalysis() {
-    if (busyRef.current || !currentResponse) return;
-    const id = currentResponse.remoteId || currentResponse.id;
-    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
-    busyRef.current = true; setErr("");
-    try {
-      await cloudRequeueAnalysis(id, revision);
-      setCurrentResponse({ ...currentResponse, cloudAnalysisStatus: "pending", cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: "" });
-      notify("現在の回答を解析キューへ再投入しました");
-    } catch (error) {
-      if (error && error.code === "REVISION_CONFLICT") {
-        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
-      } else {
-        setErr("解析の再試行を開始できませんでした" + (error && error.code ? " (" + error.code + ")" : ""));
-      }
-    } finally { busyRef.current = false; }
-  }
-
   async function resetAll() {
     await clearDraft();
     setPhase("consent"); setAgree(false); setDemo({}); setAnswers({}); setResult(null); setQi(0); setErr(""); setRestored(false);
@@ -3590,103 +3624,22 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     );
   }
 
-  /* 既存回答がある場合は初回アンケートを再表示せず、同じcurrent responseを編集する。 */
+  /* 初回回答と提出後の修正は別機能。/survey は初回提出だけを担当する。 */
   if (currentResponse && phase === "consent") {
     const id = currentResponse.remoteId || currentResponse.id;
-    const revision = Number(currentResponse.remoteRevision || currentResponse.revision || currentResponse.seq || 1);
-    const responseQuestions = Array.isArray(currentResponse.questions) && currentResponse.questions.length
-      ? currentResponse.questions
-      : questions;
-    const nonFreeQuestions = responseQuestions.filter(q => q.type !== "free");
-    if (editMode === "append" || editMode === "free") {
-      const append = editMode === "append";
-      return (
-        <div style={{ maxWidth: 680, margin: "0 auto" }}>
-          <H2 eyebrow={append ? "APPEND" : "EDIT"} sub={"回答ID " + id + " / revision " + revision}>
-            {append ? "自由記述を追記" : "自由記述を修正"}
-          </H2>
-          {append && currentResponse.free ? (
-            <Card style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: C.sub, marginBottom: 4 }}>現在の自由記述</div>
-              <div style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 180, overflowY: "auto" }}>{currentResponse.free}</div>
-            </Card>
-          ) : null}
-          <textarea
-            value={editText}
-            onChange={e => setEditText(e.target.value)}
-            rows={10}
-            maxLength={1500}
-            placeholder={append ? "追加したい内容を書いてください" : "現在の自由記述を編集してください"}
-            style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }}
-          />
-          <div style={{ fontSize: 11, color: C.sub, marginTop: 4, lineHeight: 1.8 }}>
-            {append ? "現在の全文は残したまま、この入力を新しい段落として末尾へ追加します。結合後の全文が1500字以内で保存され、その全文を再解析します。" : "現在の自由記述全文を、この入力内容で置き換えます。保存後は置き換え後の全文を再解析します。"}
-          </div>
-          {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn onClick={() => submitCurrentFreeText(editMode)}>保存して再解析</Btn>
-            <Btn kind="ghost" onClick={() => { setEditMode(null); setEditText(""); setErr(""); }}>戻る</Btn>
-          </div>
-        </div>
-      );
-    }
-
-    if (editMode === "answers") {
-      const complete = nonFreeQuestions.every(q => answers[q.id]);
-      return (
-        <div style={{ maxWidth: 720, margin: "0 auto" }}>
-          <H2 eyebrow="EDIT ANSWERS" sub={"回答ID " + id + " / revision " + revision}>アンケート回答を修正</H2>
-          <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
-            初回回答時に保存された設問スナップショットに対して更新します。自由記述は変更せず、更新後に現在の全文を再解析します。
-          </div>
-          {nonFreeQuestions.map((q, index) => (
-            <Card key={q.id} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{index + 1}. {q.text}</div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {(q.options || []).map(option => (
-                  <Chip key={option} active={answers[q.id] === option} onClick={() => setAnswers({ ...answers, [q.id]: option })}>{option}</Chip>
-                ))}
-              </div>
-            </Card>
-          ))}
-          {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn disabled={!complete} onClick={submitCurrentAnswers}>保存して再解析</Btn>
-            <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
-          </div>
-        </div>
-      );
-    }
-
-    const currentAnalysisState = analysisStateLabel(currentResponse);
-    const analysisUpdatedAt = Number(currentResponse.cloudAnalysisLastActivityAt || currentResponse.cloudAnalysisUpdatedAt || currentResponse.updatedAt || currentResponse.ts || 0);
-    const canRetryAnalysis = currentResponse.cloudAnalysisRetryable === true;
     return (
-      <div style={{ maxWidth: 680, margin: "0 auto" }}>
-        <H2 eyebrow="CURRENT RESPONSE" sub={"回答ID " + id + " / revision " + revision}>現在の回答</H2>
-        <Card style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.8 }}>このアカウントには回答が1件あります。新しい回答を作らず、この回答を更新します。</div>
-          <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13 }}>{currentResponse.free || "（自由記述なし）"}</div>
-        </Card>
-        <Card pad={13} style={{ marginBottom: 14, borderColor: currentAnalysisState && currentAnalysisState.tone === "error" ? C.bengara : C.rule }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 5 }}>解析状態</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, fontSize: 11, color: C.sub }}>
-            <div>revision <span style={{ fontFamily: FONT_MONO, color: C.ink }}>{revision}</span></div>
-            <div>状態 <span style={{ color: C.ink }}>{currentAnalysisState ? currentAnalysisState.title : (currentResponse.cloudAnalysisStatus || "pending")}</span></div>
-            <div>更新 <span style={{ color: C.ink }}>{analysisUpdatedAt ? fmtDT(analysisUpdatedAt) : "確認中"}</span></div>
+      <div style={{ maxWidth: 620, margin: "0 auto" }}>
+        <H2 eyebrow="FIRST RESPONSE" sub={"回答ID " + id}>最初の回答は提出済みです</H2>
+        <Card>
+          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.9, marginBottom: 12 }}>
+            /survey はアンケートと1回目の自由記述を新規提出する画面です。提出済み内容の変更は「回答内容の確認・修正」、二度目の新規記述は専用画面から行います。
           </div>
-          {currentAnalysisState ? <div style={{ fontSize: 11, color: C.sub, marginTop: 7 }}>{currentAnalysisState.detail}</div> : null}
-          {currentResponse.cloudAnalysisErrorCode ? <div style={{ fontSize: 11, color: C.bengara, marginTop: 5 }}>error: {currentResponse.cloudAnalysisErrorCode}</div> : null}
-          {canRetryAnalysis ? <div style={{ marginTop: 10 }}><Btn small kind="ghost" onClick={retryCurrentAnalysis}>現在revisionの解析を再試行</Btn></div> : null}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn onClick={() => goto("followup")}>二度目の自由記述</Btn>
+            <Btn kind="ghost" onClick={() => goto("mine")}>回答内容を確認・修正</Btn>
+            <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
+          </div>
         </Card>
-        {err ? <div style={{ color: C.bengara, fontSize: 12, marginBottom: 10 }}>{err}</div> : null}
-        <H2 eyebrow="UPDATE RESPONSE" sub="変更内容ごとに操作を分けています。どの更新でも保存後に現在revisionを再解析します。">回答を更新する</H2>
-        <div style={{ display: "grid", gap: 10 }}>
-          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を追記</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の全文を残し、新しい段落を末尾へ追加してから全文を再解析します。</div><Btn small onClick={() => { setEditText(""); setEditMode("append"); setErr(""); }}>追記する</Btn></Card>
-          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を全文修正</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の自由記述全文を置き換え、置き換え後の全文を再解析します。</div><Btn small kind="ghost" onClick={() => { setEditText(String(currentResponse.free || "")); setEditMode("free"); setErr(""); }}>全文を修正する</Btn></Card>
-          <Card pad={13}><div style={{ fontSize: 13, fontWeight: 700 }}>アンケート回答を修正</div><div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>初回回答時に保存された設問スナップショットだけを修正します。自由記述は変えず、現在の全文を再解析します。</div><Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正する</Btn></Card>
-        </div>
-        <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答を確認</Btn></div>
       </div>
     );
   }
@@ -3782,13 +3735,13 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
             <textarea
               value={val || ""}
               onChange={e => setAnswers({ ...answers, [q.id]: e.target.value })}
-              rows={7} maxLength={1200}
+              rows={7} maxLength={1500}
               placeholder={q.placeholder || "自由にお書きください"}
               style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }}
             />
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.sub, marginTop: 4, gap: 10 }}>
               <span>氏名・住所など個人を特定できる情報は書かないでください。</span>
-              <span style={{ fontFamily: FONT_MONO }}>{String(val || "").length}/1200</span>
+              <span style={{ fontFamily: FONT_MONO }}>{String(val || "").length}/1500</span>
             </div>
           </div>
         )}
@@ -4846,6 +4799,10 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
   const [found, setFound] = useState(null);
   const [prog, setProg] = useState(null);
   const [confirming, setConfirming] = useState(false);
+  const [editMode, setEditMode] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [editAnswers, setEditAnswers] = useState({});
+  const editBusyRef = useRef(false);
 
   const [noSelf, setNoSelf] = useState(false); // ログイン済みだが未回答
   const [selfLookupError, setSelfLookupError] = useState("");
@@ -4937,6 +4894,99 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     notify("回答を撤回しました");
   }
 
+  async function refreshEditedResponse() {
+    if (!found || !session || !session.token) return null;
+    const id = found.r.remoteId || found.id;
+    const fresh = await cloudLoadOwnResponse(id, session.token);
+    if (fresh) {
+      setFound({ id: found.id, r: fresh, r2: null });
+      await sSet("resp:" + id, fresh);
+    }
+    return fresh;
+  }
+
+  async function saveResponseEdit() {
+    if (editBusyRef.current || !found || !session) return;
+    const r = found.r;
+    const id = r.remoteId || found.id;
+    const revision = Number(r.remoteRevision || r.revision || 1);
+    editBusyRef.current = true; setErr("");
+    try {
+      if (editMode === "free") {
+        const body = sanitizeFreeText(editText, 1500);
+        await cloudPatchFreeText(id, revision, body);
+        notify("1回目の自由記述を修正しました。再解析を開始します");
+      } else if (editMode === "followup") {
+        const body = sanitizeFreeText(editText, 1500).trim();
+        if (!body) { setErr("二度目の自由記述を入力してください。"); return; }
+        await cloudPatchFollowUp(id, revision, body);
+        notify("2回目の自由記述を修正しました。再解析を開始します");
+      } else if (editMode === "answers") {
+        const responseQuestions = Array.isArray(r.questions) && r.questions.length ? r.questions : questions;
+        const editable = responseQuestions.filter(q => q.type !== "free");
+        const payload = Object.fromEntries(editable.map(q => [q.id, String(editAnswers[q.id] || "")]).filter(([, value]) => value));
+        if (Object.keys(payload).length !== editable.length) { setErr("すべての選択式設問に回答してください。"); return; }
+        await cloudPatchAnswers(id, revision, payload);
+        notify("アンケート回答を修正しました。再解析を開始します");
+      }
+      await refreshEditedResponse();
+      setEditMode(null); setEditText(""); setEditAnswers({});
+    } catch (error) {
+      if (error && error.code === "REVISION_CONFLICT") {
+        await refreshEditedResponse();
+        setErr("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認してください。");
+      } else {
+        setErr("回答の修正に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
+      }
+    } finally { editBusyRef.current = false; }
+  }
+
+  if (stage === "view" && found && editMode) {
+    const r = found.r;
+    const id = r.remoteId || found.id;
+    const revision = Number(r.remoteRevision || r.revision || 1);
+    const responseQuestions = Array.isArray(r.questions) && r.questions.length ? r.questions : questions;
+    const nonFreeQuestions = responseQuestions.filter(q => q.type !== "free");
+    if (editMode === "answers") {
+      const complete = nonFreeQuestions.every(q => editAnswers[q.id]);
+      return (
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <H2 eyebrow="CORRECTION" sub={"回答ID " + id + " / revision " + revision}>アンケート回答を修正</H2>
+          {nonFreeQuestions.map((q, index) => (
+            <Card key={q.id} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{index + 1}. {q.text}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(q.options || []).map(option => <Chip key={option} active={editAnswers[q.id] === option} onClick={() => setEditAnswers({ ...editAnswers, [q.id]: option })}>{option}</Chip>)}
+              </div>
+            </Card>
+          ))}
+          {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <Btn disabled={!complete} onClick={saveResponseEdit}>保存して再解析</Btn>
+            <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
+          </div>
+        </div>
+      );
+    }
+    const second = editMode === "followup";
+    return (
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+        <H2 eyebrow="CORRECTION" sub={"回答ID " + id + " / revision " + revision}>{second ? "2回目の自由記述を修正" : "1回目の自由記述を修正"}</H2>
+        <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={10} maxLength={1500}
+          style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }} />
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.sub, marginTop: 4 }}>
+          <span>提出済みの{second ? "2回目" : "1回目"}だけを書き換えます。新しい提出回数は増えません。</span>
+          <span style={{ fontFamily: FONT_MONO }}>{editText.length}/1500</span>
+        </div>
+        {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <Btn onClick={saveResponseEdit}>保存して再解析</Btn>
+          <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
+        </div>
+      </div>
+    );
+  }
+
   if (stage === "working") {
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -4978,9 +5028,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     const d = r.demo || {};
     const demoLine = Object.keys(DEMO_LABELS).map(k => (d[k] ? DEMO_LABELS[k] + ": " + d[k] : null)).filter(Boolean).join(" ／ ");
     const ov = agg && agg.total ? overallParams(agg) : null;
-    const pubChunks = []
-      .concat((an && an.chunks) || [])
-      .concat((found.r2 && found.r2.analysis && found.r2.analysis.chunks) || []);
+    const pubChunks = [].concat((an && an.chunks) || []);
     /* 全体平均は個人と同じ物差しに揃える。
        ov.emo は極性(-1〜+1)のままなので、emoToPos で 0〜100 に写してから並べる。
        これを忘れると「感情ポジ度 45 (全体 0)」のように、単位の違う数が並んでしまう。 */
@@ -5029,26 +5077,33 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
           ))}
           {r.free ? (
             <div style={{ padding: "7px 0", borderTop: "1px solid " + C.rule }}>
-              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>
-                自由記述{found.r2 ? "(1回目)" : ""}(原文。公開されるのは下の要約のみです)
-              </div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>自由記述(1回目・原文)</div>
               <div style={{ whiteSpace: "pre-wrap", fontSize: 13, background: C.soft, borderRadius: 5, padding: "9px 11px" }}>{r.free}</div>
             </div>
           ) : null}
-          {found.r2 && found.r2.free ? (
+          {r.followUpSubmitted ? (
             <div style={{ padding: "7px 0", borderTop: "1px solid " + C.rule }}>
-              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>
-                自由記述(2回目・追記 / {found.r2.ts ? fmtDT(found.r2.ts) : ""})
-              </div>
-              <div style={{ whiteSpace: "pre-wrap", fontSize: 13, background: C.soft, borderRadius: 5, padding: "9px 11px" }}>{found.r2.free}</div>
+              <div style={{ fontSize: 12, color: C.sub, marginBottom: 4 }}>自由記述(2回目・原文)</div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 13, background: C.soft, borderRadius: 5, padding: "9px 11px" }}>{r.followUpText || "（記載なし）"}</div>
             </div>
-          ) : null}
-          <div style={{ fontSize: 11, color: C.sub, marginTop: 8, paddingTop: 8, borderTop: "1px solid " + C.rule }}>
-            {found.r2
-              ? "この回答IDでの回答は2回とも完了しています(上限)。"
-              : "自由記述の続きを書きたい場合は、「回答する」タブから同じIDで1回だけ追記できます。"}
-          </div>
+          ) : (
+            <div style={{ fontSize: 11, color: C.sub, marginTop: 8, paddingTop: 8, borderTop: "1px solid " + C.rule }}>二度目の自由記述はまだ提出していません。</div>
+          )}
         </Card>
+
+        {session && r.remoteId ? (
+          <Card style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>回答内容を修正</div>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>新規提出とは別の操作です。修正した項目だけを書き換え、回答全体を新しいrevisionとして再解析します。</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Btn small kind="ghost" onClick={() => { setEditText(String(r.free || "")); setEditMode("free"); setErr(""); }}>1回目を修正</Btn>
+              {r.followUpSubmitted
+                ? <Btn small kind="ghost" onClick={() => { setEditText(String(r.followUpText || "")); setEditMode("followup"); setErr(""); }}>2回目を修正</Btn>
+                : <Btn small onClick={() => goto("followup")}>二度目の自由記述を書く</Btn>}
+              <Btn small kind="ghost" onClick={() => { setEditAnswers({ ...(r.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正</Btn>
+            </div>
+          </Card>
+        ) : null}
 
         {an ? (
           <Card style={{ marginBottom: 12 }}>

@@ -108,6 +108,26 @@ export function normalizeFreeTextUpdate(input) {
   });
 }
 
+function normalizeFollowUpTextBody(input) {
+  const body = requireObject(input, "body");
+  const allowed = new Set(["expectedRevision", "followUpText"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) throw new RequestError(400, "INVALID_FIELD", "unsupported field: " + key);
+  }
+  return Object.freeze({
+    expectedRevision: normalizeExpectedRevision(body.expectedRevision),
+    followUpText: cleanText(body.followUpText, 1500, "followUpText", true)
+  });
+}
+
+export function normalizeFollowUpTextCreate(input) {
+  return normalizeFollowUpTextBody(input);
+}
+
+export function normalizeFollowUpTextUpdate(input) {
+  return normalizeFollowUpTextBody(input);
+}
+
 export function normalizeAnswersUpdate(input) {
   const body = requireObject(input, "body");
   const allowed = new Set(["expectedRevision", "answers"]);
