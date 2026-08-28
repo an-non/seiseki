@@ -3059,7 +3059,7 @@ export default function App() {
         ) : view === "opinions" ? (
           <Opinions agg={agg} initial={opFilter} goto={goView} />
         ) : view === "mine" ? (
-          <MyResponse questions={questions} agg={agg} notify={notify} refreshAgg={refreshAgg} goto={goView} back={goBack} session={session} onAccountUpdated={onAccountUpdated} />
+          <MyResponse questions={questions} agg={agg} notify={notify} refreshAgg={refreshAgg} goto={goView} back={goBack} session={session} onAccountUpdated={onAccountUpdated} onResponseDeleted={() => { setMyId(""); setCompletion(null); }} />
         ) : view === "admin" ? (
           <Admin questions={questions} setQuestions={setQuestions} policy={policy} setPolicy={setPolicy} notify={notify} refreshAgg={refreshAgg} agg={agg} />
         ) : (
@@ -3158,7 +3158,7 @@ function Home({ agg, goto, hasDraft, myId, session }) {
       ) : null}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Btn onClick={() => goto("followup")} style={{ flex: "1 1 200px" }}>二度目の自由記述、修正</Btn>
+        <Btn onClick={() => goto("survey")} style={{ flex: "1 1 200px" }}>{session && myId ? "二度目の自由記述、修正" : "最初の回答"}</Btn>
         <Btn kind="ghost" onClick={() => goto("dash")} style={{ flex: "1 1 200px" }}>統計ダッシュボードを見る</Btn>
       </div>
 
@@ -4938,7 +4938,7 @@ function Admin({ questions, setQuestions, policy, setPolicy, notify, refreshAgg,
    アカウントを作らず、回答IDという合鍵だけで自分の回答を確認・撤回できる。
    IDは読み取り権限も兼ねるため、暗号強度の乱数で生成している(logic.js の uid)。
    ============================================================ */
-function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, onAccountUpdated }) {
+function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, onAccountUpdated, onResponseDeleted }) {
   const [stage, setStage] = useState("input"); // input | view | working | done
   const [idv, setIdv] = useState("");
   const [err, setErr] = useState("");
@@ -5035,6 +5035,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     await rebuildAgg((i, n) => setProg({ i: i, n: n }));
     await refreshAgg();
     await pDel("last:id");
+    if (onResponseDeleted) onResponseDeleted(found.id);
     setProg(null);
     setStage("done");
     notify("回答を撤回しました");

@@ -27,3 +27,11 @@ test("overview and response labels match the revised navigation", () => {
   assert.ok(ui.includes("自分の回答、設定の確認"));
   assert.ok(ui.includes("マイレスポンス確認・修正"));
 });
+
+
+test("response entry follows actual account response state", () => {
+  assert.ok(ui.includes('<Btn onClick={() => goto("survey")} style={{ flex: "1 1 200px" }}>{session && myId ? "二度目の自由記述、修正" : "最初の回答"}</Btn>'));
+  assert.ok(!ui.includes('<Btn onClick={() => goto("followup")} style={{ flex: "1 1 200px" }}>二度目の自由記述、修正</Btn>'));
+  assert.ok(ui.includes('if (onResponseDeleted) onResponseDeleted(found.id);'));
+  assert.ok(ui.includes('onResponseDeleted={() => { setMyId(""); setCompletion(null); }}'));
+});
