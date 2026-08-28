@@ -46,6 +46,8 @@ jobs:
           const fixes = [
             ['core/ui.jsx', '        {an ? (        {an ? (', '        {an ? ('],
             ['core/ui.jsx', '  if (phase === "consent") {  if (phase === "consent") {', '  if (phase === "consent") {'],
+            ['core/ui.jsx', '  async function resetAll() {  async function resetAll() {', '  async function resetAll() {'],
+            ['core/ui.jsx', '      {chunkTotal > 0 ? (      {chunkTotal > 0 ? (', '      {chunkTotal > 0 ? ('],
             ['core/ui.jsx', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {async function cloudPatchFreeText(id, expectedRevision, freeText) {', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {'],
             ['cloudflare/src/analysis.mjs', 'function countHits(text, words) {function countHits(text, words) {', 'function countHits(text, words) {']
           ];
@@ -77,12 +79,12 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          echo '--- app/seiseki.jsx 3500-3640 ---'
-          sed -n '3500,3640p' app/seiseki.jsx || true
+          echo '--- app/seiseki.jsx 3300-3660 ---'
+          sed -n '3300,3660p' app/seiseki.jsx || true
           echo '--- app/seiseki.jsx 5000-5240 ---'
           sed -n '5000,5240p' app/seiseki.jsx || true
-          echo '--- core/ui.jsx follow-up markers ---'
-          grep -n -A220 -B20 'function FollowUpSurvey' core/ui.jsx || true
+          echo '--- cloudflare test tail context ---'
+          grep -n -A30 -B10 'follow-up' cloudflare/tests/follow-up-free-text.test.mjs || true
 
       - name: Verify scope
         shell: bash
