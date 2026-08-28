@@ -1,0 +1,152 @@
+name: Current response staging deploy 20260828
+
+on:
+  push:
+    branches:
+      - codex/response-revision-unification-20260828
+    paths:
+      - .github/workflows/deploy-current-response-staging-20260828.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-current-response-staging-20260828
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      STAGING_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_RUNTIME_MODE: staging
+    steps:
+      - name: Checkout approved branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Read-only staging D1 preflight
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"name": "seiseki-api-staging"' wrangler.jsonc
+          grep -q '"database_name": "seiseki-db-staging"' wrangler.jsonc
+          grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' wrangler.jsonc
+          npx wrangler d1 execute DB --env staging --remote \
+            --command "SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); SELECT key FROM app_config WHERE key='questions'; PRAGMA foreign_key_check;" \
+            --json > /tmp/preflight.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const result = JSON.parse(fs.readFileSync('/tmp/preflight.json','utf8'));
+          const columns = (result?.[0]?.results || result?.[0]?.result || []).map(row => row.name);
+          const dup = result?.[1]?.results?.[0] || result?.[1]?.result?.[0] || {};
+          const cfg = result?.[2]?.results || result?.[2]?.result || [];
+          const fk = result?.[3]?.results || result?.[3]?.result || [];
+          for (const name of ['revision','updated_at','follow_up_text']) if (!columns.includes(name)) throw new Error(`missing staging column: ${name}`);
+          if (Number(dup.duplicate_groups) !== 0) throw new Error('duplicate account-response ownership exists');
+          if (!cfg.some(row => row.key === 'questions')) throw new Error('questions config missing');
+          if (fk.length) throw new Error(`foreign-key violations before deploy: ${fk.length}`);
+          console.log('staging D1 preflight PASS');
+          NODE
+
+      - name: Verify source and generated contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          npm --prefix local run build:staging
+
+      - name: Guard unrelated surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=fbaf274a9b08f749ca9c95439b5efadbd53e25fb
+          git diff --exit-code "$BASE" -- cloudflare/src/analysis.mjs core/logic.js local/chunk-network-entanglement-preview.html local/vite.config.js
+          grep -Fq 'STAGING_ADMIN_ENABLED' cloudflare/wrangler.jsonc
+          if grep -R -Fq 'storeLocalProvisionalAnalysis' cloudflare/src; then
+            echo 'provisional local analysis must not be deployed into formal D1 path' >&2
+            exit 1
+          fi
+
+      - name: Deploy Worker and UI to staging only
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging --strict 2>&1 | tee /tmp/deploy.log
+          grep -E 'Current Version ID|Uploaded' /tmp/deploy.log || true
+
+      - name: Live current response E2E with cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/staging-current-response-e2e-20260828.mjs
+
+      - name: Post-E2E staging integrity
+        if: always()
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --env staging --remote \
+            --command "SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check;" \
+            --json > /tmp/post.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const result = JSON.parse(fs.readFileSync('/tmp/post.json','utf8'));
+          const dup = result?.[0]?.results?.[0] || result?.[0]?.result?.[0] || {};
+          const fk = result?.[1]?.results || result?.[1]?.result || [];
+          if (Number(dup.duplicate_groups) !== 0) throw new Error('duplicate ownership after E2E');
+          if (fk.length) throw new Error(`foreign-key violations after E2E: ${fk.length}`);
+          NODE
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          printf '\n### Current response staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- branch: `%s`\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- commit: `%s`\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migration: not applied in this workflow\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- staging deploy: guarded by full regression and read-only D1 preflight\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- live E2E cleanup: required\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
