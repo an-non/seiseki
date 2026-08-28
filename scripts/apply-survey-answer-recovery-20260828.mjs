@@ -320,8 +320,8 @@ replaceRange(
   database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
   database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'保持','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
   const before = database.prepare("SELECT revision, analysis_status AS status, analysis_json AS json FROM responses WHERE id=?").get(created.id);
-  const good = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
-    method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+  const good = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/answers", {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
     body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" } })
   }), env, { waitUntil: p => waits.push(p) });
   assert.equal(good.status, 200); const body = await good.json();
@@ -333,8 +333,8 @@ replaceRange(
   assert.deepEqual([after.revision, after.status, after.json], [before.revision, before.status, before.json]);
   assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 1);
   assert.deepEqual(queued, []);
-  const bad = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
-    method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+  const bad = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/answers", {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
     body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "存在しない選択肢", q_priority: "経済・雇用", q_econ: "5" } })
   }), env);
   assert.equal(bad.status, 400);
