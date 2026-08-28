@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/survey-answer-recovery-20260828.yml
       - scripts/apply-survey-answer-recovery-20260828.mjs
+      - scripts/normalize-survey-answer-recovery-20260828.mjs
 
 permissions:
   contents: write
@@ -32,7 +33,10 @@ jobs:
           npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
           npm --prefix local ci --no-audit --no-fund
       - name: Apply recovery patch
-        run: node scripts/apply-survey-answer-recovery-20260828.mjs
+        run: |
+          set -euo pipefail
+          node scripts/apply-survey-answer-recovery-20260828.mjs
+          node scripts/normalize-survey-answer-recovery-20260828.mjs
       - name: Regenerate app
         run: node scripts/build-app.mjs
       - name: Verify implementation
