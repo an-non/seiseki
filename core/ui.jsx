@@ -126,6 +126,14 @@ async function cloudPatchFreeText(id, expectedRevision, freeText) {
   });
 }
 
+async function cloudPatchInitial(id, expectedRevision, answers, freeText) {
+  return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/initial", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...(await cloudResponseAuthHeaders(id)) },
+    body: JSON.stringify({ expectedRevision: expectedRevision, answers: answers, freeText: freeText })
+  });
+}
+
 async function cloudPatchAnswers(id, expectedRevision, answers) {
   return cloudApiRequest("/api/responses/" + encodeURIComponent(id) + "/answers", {
     method: "PATCH",
@@ -2009,22 +2017,26 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     if (Object.keys(payload).length !== editable.length) {
       setErr("すべての選択式設問に回答してください。"); return;
     }
+    const firstText = sanitizeFreeText(editText, 1500);
     busyRef.current = true; setErr("");
     try {
-      const updated = await cloudPatchAnswers(id, revision, payload);
+      const updated = await cloudPatchInitial(id, revision, payload, firstText);
       const next = {
-        ...currentResponse,
-        answers: payload,
-        updatedAt: Number(updated.updatedAt || Date.now())
+        ...currentResponse, id, remoteId: id, answers: payload, free: firstText,
+        revision: Number(updated.revision), remoteRevision: Number(updated.revision),
+        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        updatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
+        cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
       };
       await sSet("resp:" + id, next);
-      setCurrentResponse(next); setEditMode(null);
-      notify("アンケート回答を更新しました。AI解析結果は変更していません");
+      setCurrentResponse(next); setEditMode(null); setEditText("");
+      notify("初回回答を更新しました。現在の回答全体で再解析を開始します");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
-        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直しました。");
+        await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
       } else {
-        setErr("アンケート回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
+        setErr("初回回答の更新に失敗しました" + (error && error.code ? " (" + error.code + ")" : ""));
       }
     } finally { busyRef.current = false; }
   }
@@ -2104,9 +2116,9 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       const complete = nonFreeQuestions.every(q => answers[q.id]);
       return (
         <div style={{ maxWidth: 720, margin: "0 auto" }}>
-          <H2 eyebrow="EDIT ANSWERS" sub={"回答ID " + id + " / revision " + revision}>アンケート回答を修正</H2>
+          <H2 eyebrow="EDIT INITIAL RESPONSE" sub={"回答ID " + id + " / revision " + revision}>初回回答を修正</H2>
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
-            初回回答時に保存された設問スナップショットに対して回答だけを更新します。自由記述と現在のAI解析結果は変更しません。
+            初回回答時の設問スナップショットと1回目自由記述を一緒に更新します。2回目が提出済みなら、保存後の再解析には現在の2回目も自動的に含まれます。
           </div>
           {nonFreeQuestions.map((q, index) => (
             <Card key={q.id} style={{ marginBottom: 10 }}>
@@ -2116,9 +2128,15 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
               </div>
             </Card>
           ))}
+          <Card style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>1回目の自由記述</div>
+            <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={8} maxLength={1500}
+              style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }} />
+            <div style={{ textAlign: "right", fontSize: 11, color: C.sub, marginTop: 4, fontFamily: FONT_MONO }}>{editText.length}/1500</div>
+          </Card>
           {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <Btn disabled={!complete} onClick={submitCurrentAnswers}>変更を保存</Btn>
+            <Btn disabled={!complete} onClick={submitCurrentAnswers}>変更して再解析</Btn>
             <Btn kind="ghost" onClick={() => { setEditMode(null); setErr(""); }}>戻る</Btn>
           </div>
         </div>
@@ -2151,14 +2169,9 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
               : <Btn small onClick={() => goto("followup")}>二度目の自由記述へ</Btn>}
           </Card>
           <Card pad={13}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>自由記述を全文修正</div>
-            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>現在の1回目自由記述全文を置き換え、置き換え後の全文を再解析します。</div>
-            <Btn small kind="ghost" onClick={() => { setEditText(String(currentResponse.free || "")); setEditMode("free"); setErr(""); }}>全文を修正する</Btn>
-          </Card>
-          <Card pad={13}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>アンケート回答を修正</div>
-            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>初回回答時に保存された選択式回答だけを変更します。AI解析は再実行しません。</div>
-            <Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditMode("answers"); setErr(""); }}>アンケートを修正する</Btn>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>初回回答を修正</div>
+            <div style={{ fontSize: 11, color: C.sub, margin: "3px 0 9px" }}>アンケートと1回目自由記述を一緒に更新します。2回目がある場合は、その本文も含めた現在回答全体を再解析します。</div>
+            <Btn small kind="ghost" onClick={() => { setAnswers({ ...(currentResponse.answers || {}) }); setEditText(String(currentResponse.free || "")); setEditMode("answers"); setErr(""); }}>初回回答を修正する</Btn>
           </Card>
         </div>
         <div style={{ marginTop: 14 }}><Btn kind="ghost" onClick={() => goto("mine")}>自分の回答、設定の確認</Btn></div>
@@ -3678,9 +3691,9 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
         {session && r.remoteId ? (
           <Card style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>回答内容を修正</div>
-            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>新規提出とは別の操作です。修正した項目だけを書き換え、回答全体を新しいrevisionとして再解析します。</div>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>初回回答はアンケートと1回目自由記述を一緒に修正します。2回目は独立して修正・撤回できます。</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn small kind="ghost" onClick={() => { setEditText(String(r.free || "")); setEditMode("free"); setErr(""); }}>1回目を修正</Btn>
+              <Btn small kind="ghost" onClick={() => goto("survey")}>初回回答を修正</Btn>
               {r.followUpSubmitted
                 ? <Btn small kind="ghost" onClick={() => { setEditText(String(r.followUpText || "")); setEditMode("followup"); setErr(""); }}>2回目を修正</Btn>
                 : <Btn small onClick={() => goto("followup")}>二度目の自由記述を書く</Btn>}

@@ -528,6 +528,36 @@ export async function updateResponseFreeText(db, id, expectedRevision, freeText)
   return expectedRevision + 1;
 }
 
+export async function updateInitialResponse(db, id, expectedRevision, answers, freeText) {
+  const revision = Number(expectedRevision);
+  const now = Date.now();
+  const current = await db.prepare("SELECT revision FROM responses WHERE id = ?").bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== revision) return { status: "stale" };
+  const guard = "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)";
+  const statements = [
+    db.prepare("DELETE FROM opinion_chunks WHERE response_id = ? AND " + guard).bind(id, id, revision),
+    db.prepare(
+      "UPDATE analysis_runs SET status = 'failed', completed_at = ?, error_code = 'SUPERSEDED_REVISION', lease_until = NULL " +
+      "WHERE response_id = ? AND response_revision = ? AND status = 'running' AND " + guard
+    ).bind(now, id, revision, id, revision),
+    db.prepare("DELETE FROM answers WHERE response_id = ? AND " + guard).bind(id, id, revision)
+  ];
+  for (const answer of answers) {
+    statements.push(db.prepare(
+      "INSERT INTO answers (response_id, qid, value) SELECT ?, ?, ? WHERE " + guard
+    ).bind(id, answer.qid, answer.value, id, revision));
+  }
+  const responseIndex = statements.length;
+  statements.push(db.prepare(
+    "UPDATE responses SET free_text = ?, updated_at = ?, revision = revision + 1, analysis_status = 'pending', analysis_json = NULL " +
+    "WHERE id = ? AND revision = ?"
+  ).bind(freeText, now, id, revision));
+  const results = await db.batch(statements);
+  if (Number(results?.[responseIndex]?.meta?.changes ?? 0) !== 1) return { status: "stale" };
+  return { status: "updated", revision: revision + 1, updatedAt: now };
+}
+
 export async function updateResponseAnswers(db, id, expectedRevision, answers) {
   const now = Date.now();
   const current = await db.prepare("SELECT revision FROM responses WHERE id = ?").bind(id).first();

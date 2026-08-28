@@ -97,31 +97,18 @@ test("stale expectedRevision returns 409 without partial mutation", async () => 
   database.close();
 });
 
-test("answers PATCH updates questionnaire data without changing revision or analysis", async () => {
-  const database = createDatabase(); const queued = []; const waits = [];
-  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", AI_ANALYSIS_ENABLED: "true", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
-  const owner = await register(env, "回答編集者"); const cr = await create(env, owner.token); const created = await cr.json();
-  database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
-  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'保持','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
-  const before = database.prepare("SELECT revision, analysis_status AS status, analysis_json AS json FROM responses WHERE id=?").get(created.id);
-  const good = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/answers", {
+test("questionnaire-only PATCH is retired without mutation", async () => {
+  const database = createDatabase(); const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
+  const owner = await register(env, "単独修正廃止確認"); const cr = await create(env, owner.token); const created = await cr.json();
+  const beforeAnswers = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
+  const response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/answers", {
     method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
     body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" } })
-  }), env, { waitUntil: p => waits.push(p) });
-  assert.equal(good.status, 200); const body = await good.json();
-  assert.equal(body.revision, 1); assert.equal(body.analysisStatus, "unchanged"); assert.equal(body.reanalysisQueued, false);
-  await Promise.all(waits);
-  const rows = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
-  assert.deepEqual(rows.map(x => [x.qid,x.value]), [["q_econ","5"],["q_priority","経済・雇用"],["q_support","支持しない"]]);
-  const after = database.prepare("SELECT revision, analysis_status AS status, analysis_json AS json FROM responses WHERE id=?").get(created.id);
-  assert.deepEqual([after.revision, after.status, after.json], [before.revision, before.status, before.json]);
-  assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 1);
-  assert.deepEqual(queued, []);
-  const bad = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/answers", {
-    method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
-    body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "存在しない選択肢", q_priority: "経済・雇用", q_econ: "5" } })
   }), env);
-  assert.equal(bad.status, 400);
+  assert.equal(response.status, 410); assert.equal((await response.json()).error, "ANSWERS_ONLY_UPDATE_REMOVED");
+  const afterAnswers = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
+  assert.deepEqual(afterAnswers, beforeAnswers);
+  assert.equal(database.prepare("SELECT revision FROM responses WHERE id=?").get(created.id).revision, 1);
   database.close();
 });
 
@@ -238,12 +225,56 @@ test("stale loser leaves response, answers, chunks, and runs completely untouche
   assert.equal(staleText.status, 409);
   assert.deepEqual(snapshot(), before);
 
-  const staleAnswers = await worker.fetch(new Request(`http://local/api/responses/${created.id}/answers`, {
+  const staleInitial = await worker.fetch(new Request(`http://local/api/responses/${created.id}/initial`, {
     method: "PATCH",
     headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
-    body: JSON.stringify({ expectedRevision: 1, answers })
+    body: JSON.stringify({ expectedRevision: 1, answers, freeText: "stale combined update" })
   }), env);
-  assert.equal(staleAnswers.status, 409);
+  assert.equal(staleInitial.status, 409);
   assert.deepEqual(snapshot(), before);
+  database.close();
+});
+
+
+test("initial response PATCH advances one canonical revision", async () => {
+  const database = createDatabase(); const queued = []; const waits = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", AI_ANALYSIS_ENABLED: "true", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const owner = await register(env, "初回統合修正者"); const cr = await create(env, owner.token); const created = await cr.json();
+  database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
+  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'旧','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
+  const response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/initial", {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
+    body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" }, freeText: "修正された初回本文" })
+  }), env, { waitUntil: p => waits.push(p) });
+  assert.equal(response.status, 200); const body = await response.json();
+  assert.equal(body.revision, 2); assert.equal(body.analysisStatus, "pending");
+  await Promise.all(waits);
+  const row = database.prepare("SELECT free_text AS t, revision, analysis_status AS s, analysis_json AS a FROM responses WHERE id=?").get(created.id);
+  assert.deepEqual([row.t,row.revision,row.s,row.a], ["修正された初回本文",2,"pending",null]);
+  const rows = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
+  assert.deepEqual(rows.map(x => [x.qid,x.value]), [["q_econ","5"],["q_priority","経済・雇用"],["q_support","支持しない"]]);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 0);
+  assert.deepEqual(queued, [{ type: "analyze-response", responseId: created.id, revision: 2 }]);
+  database.close();
+});
+
+test("stale initial response PATCH leaves response answers chunks and run untouched", async () => {
+  const database = createDatabase(); const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false" };
+  const owner = await register(env, "初回統合競合"); const cr = await create(env, owner.token); const created = await cr.json();
+  database.prepare("UPDATE responses SET revision=2, analysis_status='pending' WHERE id=?").run(created.id);
+  database.prepare("INSERT INTO opinion_chunks (response_id,created_at,summary,category,topic,target_type,target_name,emotion,criticality,fact_status,provenance_json) VALUES (?,?,'保持','評価','その他','その他','',0,0,'意見','{}')").run(created.id, Date.now());
+  database.prepare("INSERT INTO analysis_runs (response_id,engine,model,prompt_version,status,started_at,response_revision,lease_until) VALUES (?,'t','t','v','running',?,2,?)").run(created.id, Date.now(), Date.now()+300000);
+  const beforeResponse = database.prepare("SELECT free_text AS t, revision, analysis_status AS s FROM responses WHERE id=?").get(created.id);
+  const beforeAnswers = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
+  const response = await worker.fetch(new Request("http://local/api/responses/" + created.id + "/initial", {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: "Bearer " + owner.token },
+    body: JSON.stringify({ expectedRevision: 1, answers: { q_support: "支持しない", q_priority: "経済・雇用", q_econ: "5" }, freeText: "上書きされない" })
+  }), env);
+  assert.equal(response.status, 409); assert.equal((await response.json()).error, "REVISION_CONFLICT");
+  const afterResponse = database.prepare("SELECT free_text AS t, revision, analysis_status AS s FROM responses WHERE id=?").get(created.id);
+  const afterAnswers = database.prepare("SELECT qid,value FROM answers WHERE response_id=? ORDER BY qid").all(created.id);
+  assert.deepEqual(afterResponse, beforeResponse); assert.deepEqual(afterAnswers, beforeAnswers);
+  assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 1);
+  assert.equal(database.prepare("SELECT status FROM analysis_runs WHERE response_id=? AND response_revision=2").get(created.id).status, "running");
   database.close();
 });

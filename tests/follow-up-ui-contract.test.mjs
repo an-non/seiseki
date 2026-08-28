@@ -46,3 +46,12 @@ test("my response exposes second free-text withdrawal", () => {
   assert.ok(ui.includes("cloudDeleteFollowUp"));
   assert.ok(ui.includes("回答、解析結果を削除する"));
 });
+
+
+test("initial correction uses one canonical response update", () => {
+  assert.ok(ui.includes("cloudPatchInitial"));
+  assert.ok(ui.includes("初回回答を修正"));
+  assert.ok(ui.includes("現在の回答全体で再解析"));
+  assert.ok(!ui.includes("AI解析は再実行しません"));
+  assert.ok(!ui.includes(">アンケートを修正する</Btn>"));
+});

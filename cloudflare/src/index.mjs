@@ -7,7 +7,7 @@ import {
   getResponseQuestionSnapshot,
   insertPendingResponse,
   listPublicDemoResponses,
-  updateResponseAnswers,
+  updateInitialResponse,
   updateResponseFollowUpText,
   updateResponseFreeText
 } from "./db.mjs";
@@ -28,12 +28,12 @@ import { analyzeStoredResponse } from "./analysis.mjs";
 import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } from "./config.mjs";
 import {
   createResponseId,
-  normalizeAnswersUpdate,
   normalizeExpectedRevision,
   normalizeFollowUpTextCreate,
   normalizeFollowUpTextDelete,
   normalizeFollowUpTextUpdate,
   normalizeFreeTextUpdate,
+  normalizeInitialResponseUpdate,
   normalizeSubmission,
   RequestError
 } from "./validation.mjs";
@@ -101,6 +101,11 @@ function routeFreeTextId(pathname) {
 
 function routeFollowUpId(pathname) {
   const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/follow-up$/u);
+  return match ? match[1] : null;
+}
+
+function routeInitialId(pathname) {
+  const match = pathname.match(/^\/api\/responses\/(r_[A-Za-z0-9_-]{12,62})\/initial$/u);
   return match ? match[1] : null;
 }
 
@@ -376,27 +381,25 @@ async function handleRequest(request, env, ctx) {
     }, request.method === "POST" ? 201 : 200);
   }
 
+  const initialId = routeInitialId(url.pathname);
+  if (initialId && request.method === "PATCH") {
+    await authorizeResponseAccess(env.DB, request, initialId);
+    const input = normalizeInitialResponseUpdate(await readJson(request));
+    const snapshot = await getResponseQuestionSnapshot(env.DB, initialId);
+    if (!snapshot.length || input.answers.length !== snapshot.length || !validateAnswersAgainstQuestions(input.answers, snapshot, false)) {
+      throw new RequestError(400, "INVALID_ANSWER", "answers do not match the saved question snapshot");
+    }
+    const outcome = await updateInitialResponse(env.DB, initialId, input.expectedRevision, input.answers, input.freeText);
+    if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (outcome.status !== "updated") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
+    dispatchUpdatedAnalysis(env, ctx, initialId, outcome.revision);
+    return json({ id: initialId, revision: outcome.revision, analysisStatus: "pending", updatedAt: outcome.updatedAt });
+  }
+
   const answersId = routeAnswersId(url.pathname);
   if (answersId && request.method === "PATCH") {
     await authorizeResponseAccess(env.DB, request, answersId);
-    const input = normalizeAnswersUpdate(await readJson(request));
-    const snapshot = await getResponseQuestionSnapshot(env.DB, answersId);
-    if (!snapshot.length || input.answers.length !== snapshot.length ||
-        !validateAnswersAgainstQuestions(input.answers, snapshot, false)) {
-      throw new RequestError(400, "INVALID_ANSWER", "answers do not match the saved question snapshot");
-    }
-    const outcome = await updateResponseAnswers(env.DB, answersId, input.expectedRevision, input.answers);
-    if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
-    if (outcome.status !== "updated") {
-      throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
-    }
-    return json({
-      id: answersId,
-      revision: outcome.revision,
-      analysisStatus: "unchanged",
-      reanalysisQueued: false,
-      updatedAt: outcome.updatedAt
-    });
+    throw new RequestError(410, "ANSWERS_ONLY_UPDATE_REMOVED", "questionnaire-only correction was removed; update the initial response as one revision");
   }
 
   const requeueId = routeRequeueId(url.pathname);
