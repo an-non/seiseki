@@ -56,6 +56,23 @@ jobs:
             if (!source.includes(duplicated)) throw new Error('expected duplicated range marker was not found in ' + path + ': ' + duplicated);
             fs.writeFileSync(path, source.replace(duplicated, fixed), 'utf8');
           }
+          const testPath = 'cloudflare/tests/follow-up-free-text.test.mjs';
+          let testSource = fs.readFileSync(testPath, 'utf8');
+          const assertions = [
+            [
+              'assert.deepEqual(row, { firstText: "初回本文", secondText: "第二本文", revision: 2 });',
+              'assert.deepEqual([row.firstText, row.secondText, row.revision], ["初回本文", "第二本文", 2]);'
+            ],
+            [
+              'assert.deepEqual(row, { firstText: "初回本文", secondText: "第二本文の修正版", revision: 3 });',
+              'assert.deepEqual([row.firstText, row.secondText, row.revision], ["初回本文", "第二本文の修正版", 3]);'
+            ]
+          ];
+          for (const [from, to] of assertions) {
+            if (!testSource.includes(from)) throw new Error('expected SQLite assertion was not found: ' + from);
+            testSource = testSource.replace(from, to);
+          }
+          fs.writeFileSync(testPath, testSource, 'utf8');
           NODE
           node scripts/build-app.mjs
 
