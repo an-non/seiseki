@@ -62,6 +62,9 @@ test("questionnaire config update does not rewrite an existing response question
   database.exec(migration("0008_questionnaire_seven_structured.sql"));
 
   const snapshot = database.prepare("SELECT qid,text,options_json AS optionsJson FROM response_questions WHERE response_id='r_snapshot_contract_1234'").get();
-  assert.deepEqual(snapshot, { qid: "q_support", text: "old snapshot", optionsJson: '["yes","no"]' });
+  assert.ok(snapshot);
+  assert.equal(snapshot.qid, "q_support");
+  assert.equal(snapshot.text, "old snapshot");
+  assert.equal(snapshot.optionsJson, '["yes","no"]');
   database.close();
 });
