@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/response-revision-unification-20260828.yml
       - scripts/apply-response-revision-unification-v2-20260828.mjs
+      - scripts/fix-stale-initial-contract-20260828.mjs
       - tests/follow-up-ui-contract.test.mjs
 
 permissions:
@@ -36,7 +37,10 @@ jobs:
           npm --prefix local ci --no-audit --no-fund
 
       - name: Apply revision unification
-        run: node scripts/apply-response-revision-unification-v2-20260828.mjs
+        run: |
+          set -euo pipefail
+          node scripts/apply-response-revision-unification-v2-20260828.mjs
+          node scripts/fix-stale-initial-contract-20260828.mjs
 
       - name: Regenerate app
         run: node scripts/build-app.mjs
