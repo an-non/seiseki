@@ -6,6 +6,7 @@ on:
       - codex/response-revision-unification-20260828
     paths:
       - .github/workflows/deploy-current-response-staging-20260828.yml
+      - scripts/staging-current-response-e2e-20260828.mjs
 
 permissions:
   contents: read
