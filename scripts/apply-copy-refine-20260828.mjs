@@ -5,7 +5,7 @@ let ui = readFileSync(path, "utf8");
 
 function replaceOnce(from, to) {
   const count = ui.split(from).length - 1;
-  if (count !== 1) throw new Error(`expected one match, found ${count}: ${from}`);
+  if (count !== 1) throw new Error(`${path}: expected one match, found ${count}: ${from}`);
   ui = ui.replace(from, to);
 }
 
@@ -21,7 +21,7 @@ replaceOnce(
 
 const myResponseTitle = '>自分の回答</H2>';
 const titleCount = ui.split(myResponseTitle).length - 1;
-if (titleCount !== 4) throw new Error(`expected four MY RESPONSE titles, found ${titleCount}`);
+if (titleCount !== 4) throw new Error(`${path}: expected four MY RESPONSE titles, found ${titleCount}`);
 ui = ui.replaceAll(myResponseTitle, '>マイレスポンス確認・修正</H2>');
 
 writeFileSync(path, ui, "utf8");
@@ -31,7 +31,7 @@ let tests = readFileSync(testPath, "utf8");
 const marker = 'test("survey owns questionnaire correction while account response keeps free-text correction", () => {';
 if (!tests.includes(marker)) throw new Error("UI contract marker missing");
 if (!tests.includes('test("overview and response labels match the revised navigation", () => {')) {
-  tests += '\n' + [
+  tests += "\n" + [
     'test("overview and response labels match the revised navigation", () => {',
     '  assert.ok(ui.includes("書きかけの回答があります。"));',
     '  assert.ok(ui.includes(\'Btn small onClick={() => goto("survey")}>続きから回答する</Btn>\'));',
@@ -40,7 +40,7 @@ if (!tests.includes('test("overview and response labels match the revised naviga
     '  assert.ok(ui.includes("マイレスポンス確認・修正"));',
     '});',
     ''
-  ].join("\\n");
+  ].join("\n");
 }
 writeFileSync(testPath, tests, "utf8");
 
