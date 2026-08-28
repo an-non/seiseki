@@ -8,6 +8,7 @@ on:
       - .github/workflows/survey-answer-recovery-20260828.yml
       - scripts/apply-survey-answer-recovery-20260828.mjs
       - scripts/normalize-survey-answer-recovery-20260828.mjs
+      - scripts/apply-copy-refine-20260828.mjs
 
 permissions:
   contents: write
@@ -37,6 +38,7 @@ jobs:
           set -euo pipefail
           node scripts/apply-survey-answer-recovery-20260828.mjs
           node scripts/normalize-survey-answer-recovery-20260828.mjs
+          node scripts/apply-copy-refine-20260828.mjs
       - name: Regenerate app
         run: node scripts/build-app.mjs
       - name: Verify implementation
@@ -58,5 +60,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add core/ui.jsx app/seiseki.jsx local/src/App.jsx cloudflare/src/db.mjs cloudflare/src/index.mjs cloudflare/tests/response-phase4-backend.test.mjs tests/follow-up-ui-contract.test.mjs
           git diff --cached --quiet && exit 0
-          git commit -m "Restore survey corrections without answer reanalysis"
+          git commit -m "Refine survey response navigation labels"
           git push origin HEAD:codex/survey-answer-recovery-20260828
