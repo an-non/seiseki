@@ -59,6 +59,15 @@ jobs:
           cmp app/seiseki.jsx local/src/App.jsx
           git diff --check
 
+      - name: Diagnose generated UI on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- app/seiseki.jsx 5000-5240 ---'
+          sed -n '5000,5240p' app/seiseki.jsx || true
+          echo '--- core/ui.jsx around MyResponse edits ---'
+          grep -n -A220 -B20 'async function refreshEditedResponse' core/ui.jsx || true
+
       - name: Verify scope
         shell: bash
         run: |
