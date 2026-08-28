@@ -39,6 +39,7 @@ import {
 } from "./validation.mjs";
 import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
 import { getPublicAggregate } from "./public-aggregate.mjs";
+import { handleStagingAdminRequest } from "./staging-admin.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -60,7 +61,7 @@ function corsHeaders(origin) {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "access-control-allow-headers": "Authorization, Content-Type, X-Response-Manage-Token",
+    "access-control-allow-headers": "Authorization, Content-Type, X-Response-Manage-Token, X-Seiseki-Admin-Token",
     "access-control-max-age": "86400",
     "vary": "Origin"
   };
@@ -286,6 +287,9 @@ function dispatchUpdatedAnalysis(env, ctx, responseId, revision) {
 async function handleRequest(request, env, ctx) {
   if (!env.DB) throw new RequestError(503, "DB_NOT_BOUND", "D1 binding DB is not configured");
   const url = new URL(request.url);
+
+  const stagingAdminResponse = await handleStagingAdminRequest(request, env, url);
+  if (stagingAdminResponse) return stagingAdminResponse;
 
   if (request.method === "GET" && url.pathname === "/api/health") {
     const row = await env.DB.prepare("SELECT 1 AS ok").first();
