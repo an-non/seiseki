@@ -1667,6 +1667,50 @@ const CLOUD_ANALYSIS_POLL_DELAYS = [500, 800, 1200, 1800, 2600, 3600, 5000, 5000
 
 function cloudApiEnabled() { return !!__apiConfig.baseUrl; }
 
+function analysisDiagnosticsVisible() {
+  return /seiseki-api-staging\./u.test(String(__apiConfig.baseUrl || ""));
+}
+
+function analysisValueSnapshot(value) {
+  const params = value && value.params || {};
+  const emotion = params && params.emo || {};
+  const ideology = value && value.ideology || {};
+  const finite = input => {
+    const number = Number(input);
+    return Number.isFinite(number) ? number : null;
+  };
+  return {
+    params: {
+      emo: { pol: finite(emotion.pol) },
+      valid: finite(params.valid),
+      crit: finite(params.crit),
+      motiv: finite(params.motiv)
+    },
+    ideology: {
+      econ: finite(ideology.econ),
+      soc: finite(ideology.soc),
+      confidence: finite(ideology.confidence)
+    }
+  };
+}
+
+function normalizeAnalysisValueTrace(payload, uiAnalysis, revision) {
+  const apiAnalysis = payload && payload.analysis;
+  const rawTrace = apiAnalysis && apiAnalysis.diagnostics && apiAnalysis.diagnostics.valueTrace;
+  if (!rawTrace || typeof rawTrace !== "object") return null;
+  const source = rawTrace.source === "workers-ai" || rawTrace.source === "rules-fallback"
+    ? rawTrace.source
+    : "unknown";
+  return {
+    responseRevision: Number(rawTrace.responseRevision || revision || 0),
+    source: source,
+    raw: analysisValueSnapshot(rawTrace.raw),
+    sanitized: analysisValueSnapshot(rawTrace.sanitized),
+    api: analysisValueSnapshot(apiAnalysis),
+    ui: analysisValueSnapshot(uiAnalysis)
+  };
+}
+
 async function cloudApiRequest(path, options) {
   if (!cloudApiEnabled()) return null;
   const controller = new AbortController();
@@ -1803,9 +1847,14 @@ function normalizeCloudAnalysisResult(payload) {
   const knownStatuses = new Set(["pending", "running", "failed", "completed"]);
   const rawStatus = String(payload && payload.analysisStatus || "pending");
   const analysis = sanitizeAnalysis(payload && payload.analysis);
+  const valueTrace = normalizeAnalysisValueTrace(payload, analysis, payload && payload.revision);
+  if (valueTrace && analysisDiagnosticsVisible() && typeof console !== "undefined" && console.info) {
+    console.info("[SEISEKI analysis value trace]", valueTrace);
+  }
   return {
     status: knownStatuses.has(rawStatus) ? rawStatus : "pending",
     analysis: analysis,
+    valueTrace: valueTrace,
     errorCode: String(payload && payload.errorCode || ""),
     revision: Number(payload && payload.revision || 0),
     updatedAt: Number(payload && payload.updatedAt || 0),
@@ -1881,7 +1930,8 @@ async function reconcileCloudAnalyses() {
           analysis: result.analysis,
           analysisSource: "cloudflare",
           cloudAnalysisStatus: "completed",
-          cloudAnalysisMode: result.mode
+          cloudAnalysisMode: result.mode,
+          analysisValueTrace: result.valueTrace || null
         });
         updated += 1;
       } else if (result.status === "failed" || result.status === "running" || result.status === "pending") {
@@ -1976,6 +2026,7 @@ async function cloudLoadOwnResponse(id, token) {
     response.followUpSubmitted = !!(raw && raw.followUpSubmitted === true);
     response.updatedAt = Number(raw && raw.updatedAt || response.updatedAt || response.ts || 0);
     response.analysis = state.analysis;
+    response.analysisValueTrace = state.valueTrace || null;
     response.analysisSource = "cloudflare";
     response.cloudAnalysisStatus = state.status;
     response.cloudAnalysisMode = state.mode;
@@ -2349,6 +2400,44 @@ function GlobalStyle() {
     `}</style>
   );
 }
+function IdeologyReading({ ideology, attrs }) {
+  if (!ideology) return null;
+  const econ = Number(ideology.econ || 0);
+  const soc = Number(ideology.soc || 0);
+  const econText = econ <= -15 ? "再分配・大きな政府寄り" : econ >= 15 ? "市場競争・小さな政府寄り" : "経済軸は中央付近";
+  const socText = soc <= -15 ? "市民的自由・権利拡張寄り" : soc >= 15 ? "伝統・治安・安全保障寄り" : "社会軸は中央付近";
+  const interests = Array.isArray(attrs) ? attrs.slice(0, 4).filter(Boolean) : [];
+  return (
+    <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.65, marginTop: 8 }}>
+      <div><b style={{ color: C.ink }}>座標の読み方:</b> {econText} / {socText}</div>
+      <div>推定は保存済みアンケート回答と自由記述全体を参照します。中央付近は中立だけでなく、根拠不足や複数方向の相殺も含みます。</div>
+      {interests.length ? <div>解析で抽出された主な関心領域: {interests.join("・")}</div> : null}
+    </div>
+  );
+}
+
+function AnalysisValueTrace({ trace }) {
+  if (!trace) return null;
+  const fmt = value => Number.isFinite(Number(value)) ? String(Number(value)) : "—";
+  const row = (label, snapshot) => {
+    const params = snapshot && snapshot.params || {};
+    const emotion = params.emo || {};
+    const ideology = snapshot && snapshot.ideology || {};
+    return <div style={{ padding: "3px 0" }}><b>{label}</b>: 感情 {fmt(emotion.pol)} / 妥当性 {fmt(params.valid)} / 切実度 {fmt(params.crit)} / 意欲 {fmt(params.motiv)} / 経済 {fmt(ideology.econ)} / 社会 {fmt(ideology.soc)} / 確信度 {fmt(ideology.confidence)}</div>;
+  };
+  const sourceLabel = trace.source === "workers-ai" ? "Workers AI" : trace.source === "rules-fallback" ? "規則fallback" : "不明";
+  return (
+    <details style={{ marginTop: 10, padding: "8px 10px", background: C.soft, borderRadius: 4, fontSize: 10.5, color: C.sub }}>
+      <summary style={{ cursor: "pointer", fontWeight: 700, color: C.ink }}>解析値の診断 — revision {trace.responseRevision} / {sourceLabel}</summary>
+      <div style={{ marginTop: 6 }}>本文やAIの生テキストは保存せず、数値だけを追跡します。</div>
+      {row(trace.source === "workers-ai" ? "AI生値" : "fallback生成値", trace.raw)}
+      {row("Worker正規化", trace.sanitized)}
+      {row("D1 / API取得値", trace.api)}
+      {row("UI表示値", trace.ui)}
+    </details>
+  );
+}
+
 function Eyebrow({ children }) {
   return <div style={{ fontFamily: FONT_MONO, fontSize: 11, letterSpacing: "0.14em", color: C.green, marginBottom: 4 }}>{children}</div>;
 }
@@ -2429,14 +2518,21 @@ function MeterBar({ label, value, color, note, small }) {
     </div>
   );
 }
-function IdeoMap({ points, me, avgPt, height }) {
+function IdeoMap({ points, me, avgPt, height, confidence }) {
   const h = height || 190;
   const px = v => ((clamp(v, -100, 100) + 100) / 200) * 100;
+  const confidenceValue = Number.isFinite(Number(confidence)) ? Math.round(clamp(confidence, 0, 100)) : null;
+  const confidenceLabel = confidenceValue == null ? "" : confidenceValue < 35 ? "低め" : confidenceValue < 70 ? "中程度" : "高め";
+  const axisLabel = { position: "absolute", zIndex: 2, fontSize: 9, lineHeight: 1.25, color: C.sub, background: C.card, padding: "2px 4px", borderRadius: 3, pointerEvents: "none" };
   return (
     <div>
       <div style={{ position: "relative", width: "100%", height: h, background: C.soft, border: "1px solid " + C.rule, borderRadius: 4, overflow: "hidden" }}>
         <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: C.rule }} />
         <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 1, background: C.rule }} />
+        <div style={{ ...axisLabel, left: 5, top: "50%", transform: "translateY(-50%)", maxWidth: "42%" }}>再分配・大きな政府</div>
+        <div style={{ ...axisLabel, right: 5, top: "50%", transform: "translateY(-50%)", maxWidth: "42%", textAlign: "right" }}>市場競争・小さな政府</div>
+        <div style={{ ...axisLabel, left: "50%", top: 5, transform: "translateX(-50%)", textAlign: "center", maxWidth: "72%" }}>伝統・治安・安全保障重視</div>
+        <div style={{ ...axisLabel, left: "50%", bottom: 5, transform: "translateX(-50%)", textAlign: "center", maxWidth: "72%" }}>市民的自由・権利拡張</div>
         {(points || []).map((p, i) => (
           <div key={i} title={p.g + " / 経済" + p.e + " 社会" + p.s} style={{
             position: "absolute",
@@ -2449,25 +2545,23 @@ function IdeoMap({ points, me, avgPt, height }) {
         {avgPt ? (
           <div title={"全体平均 / 経済" + Math.round(avgPt.e) + " 社会" + Math.round(avgPt.s)} style={{
             position: "absolute",
-            left: "calc(" + px(avgPt.e) + "% - 6px)",
-            top: "calc(" + (100 - px(avgPt.s)) + "% - 6px)",
-            width: 12, height: 12, borderRadius: 99, border: "2px solid " + C.ink, background: "transparent"
+            left: "calc(" + px(avgPt.e) + "% - 7px)",
+            top: "calc(" + (100 - px(avgPt.s)) + "% - 7px)",
+            width: 14, height: 14, borderRadius: 99, border: "2px solid " + C.ink, background: C.card
           }} />
         ) : null}
         {me ? (
-          <div style={{
+          <div title={"あなた / 経済" + Math.round(me.e) + " 社会" + Math.round(me.s)} style={{
             position: "absolute",
-            left: "calc(" + px(me.e) + "% - 6px)",
-            top: "calc(" + (100 - px(me.s)) + "% - 6px)",
-            width: 12, height: 12, borderRadius: 99, background: C.green, border: "2px solid #fff", boxShadow: "0 0 0 1px " + C.green
+            left: "calc(" + px(me.e) + "% - 7px)",
+            top: "calc(" + (100 - px(me.s)) + "% - 7px)",
+            width: 14, height: 14, borderRadius: 99, background: C.green, border: "2px solid #fff", boxShadow: "0 0 0 1px " + C.green
           }} />
         ) : null}
-        <span style={{ position: "absolute", left: 6, top: "50%", transform: "translateY(-130%)", fontSize: 10, color: C.sub }}>再分配 −</span>
-        <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-130%)", fontSize: 10, color: C.sub }}>＋ 市場</span>
-        <span style={{ position: "absolute", left: "50%", top: 4, transform: "translateX(6px)", fontSize: 10, color: C.sub }}>保守 ＋</span>
-        <span style={{ position: "absolute", left: "50%", bottom: 4, transform: "translateX(6px)", fontSize: 10, color: C.sub }}>− リベラル</span>
       </div>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.sub, marginTop: 4 }}>横軸: 経済(−100〜+100) / 縦軸: 社会(−100〜+100) — 回答内容からの推定値</div>
+      {confidenceValue == null ? null : (
+        <div style={{ fontSize: 11, color: C.sub, marginTop: 6 }}>推定確信度 {confidenceValue}%（{confidenceLabel}） — 根拠量と一貫性の目安で、正しさの確率ではありません。</div>
+      )}
     </div>
   );
 }
@@ -2523,7 +2617,9 @@ const VIEW_PATHS = {
   entry: "/",
   home: "/app",
   survey: "/survey",
+  surveyEdit: "/survey/edit-initial",
   followup: "/survey/follow-up",
+  followupEdit: "/survey/follow-up/edit",
   complete: "/survey/complete",
   dash: "/app/dashboard",
   tree: "/app/tree",
@@ -3051,10 +3147,11 @@ export default function App() {
           <Entry session={session} onAuthed={onAuthed} goto={goView} />
         ) : view === "home" ? (
           <Home agg={agg} goto={goView} hasDraft={hasDraft} myId={myId} session={session} />
-        ) : view === "followup" ? (
-          <FollowUpSurvey goto={goView} session={session} onAuthed={onAuthed} notify={notify} />
-        ) : view === "survey" ? (
+        ) : view === "followup" || view === "followupEdit" ? (
+          <FollowUpSurvey goto={goView} session={session} onAuthed={onAuthed} notify={notify} editExisting={view === "followupEdit"} />
+        ) : view === "survey" || view === "surveyEdit" ? (
           <Survey questions={questions} policy={policy} notify={notify} onFinished={(a, result) => { const shown = withCloudDemos(a, cloudDemos); setAgg(shown); setCompletion({ ...result, agg: shown }); goView("complete"); }} goto={goView}
+            startEditMode={view === "surveyEdit" ? "answers" : null}
             session={session} onAuthed={onAuthed}
             onDraftChange={d => {
               setHasDraft(d);
@@ -3244,7 +3341,7 @@ function Progress({ idx, total }) {
   );
 }
 
-function FollowUpSurvey({ goto, session, onAuthed, notify }) {
+function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting }) {
   const [current, setCurrent] = useState(null);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -3262,12 +3359,15 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
         ? await cloudLoadOwnResponse(rec.respId, session.token)
         : await sGet("resp:" + rec.respId);
       setCurrent(response || null);
+      if (editExisting && response && response.followUpSubmitted) {
+        setText(String(response.followUpText || ""));
+      }
     } catch (error) {
       setErr("現在の回答を確認できませんでした。通信状態を確認して、もう一度試してください。");
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { load(); }, [session && session.name, session && session.token]);
+  useEffect(() => { load(); }, [session && session.name, session && session.token, editExisting]);
 
   async function submitFollowUp() {
     if (busyRef.current || !current) return;
@@ -3277,7 +3377,9 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
     const revision = Number(current.remoteRevision || current.revision || 1);
     busyRef.current = true; setErr("");
     try {
-      const updated = await cloudCreateFollowUp(id, revision, body);
+      const updated = editExisting
+        ? await cloudPatchFollowUp(id, revision, body)
+        : await cloudCreateFollowUp(id, revision, body);
       const next = {
         ...current,
         id: id,
@@ -3294,7 +3396,9 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
       };
       await sSet("resp:" + id, next);
       setCurrent(next); setDone(true); setText("");
-      notify("二度目の自由記述を保存しました。再解析を開始します");
+      notify(editExisting
+        ? "2回目の自由記述を修正しました。再解析を開始します"
+        : "二度目の自由記述を保存しました。再解析を開始します");
     } catch (error) {
       if (error && error.code === "FOLLOW_UP_ALREADY_EXISTS") {
         setErr("二度目の自由記述はすでに提出済みです。変更は「回答内容の確認・修正」から行ってください。");
@@ -3332,7 +3436,7 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
       </div>
     );
   }
-  if (done || current.followUpSubmitted) {
+  if (done || (current.followUpSubmitted && !editExisting)) {
     return (
       <div style={{ maxWidth: 620, margin: "0 auto" }}>
         <H2 eyebrow="SECOND FREE TEXT" sub="新規提出は一度だけです">二度目の自由記述は提出済みです</H2>
@@ -3349,7 +3453,7 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
   }
   return (
     <div style={{ maxWidth: 680, margin: "0 auto" }}>
-      <H2 eyebrow="SECOND FREE TEXT" sub="初回本文とは別に保存し、回答全体を再解析します">二度目の自由記述</H2>
+      <H2 eyebrow="SECOND FREE TEXT" sub="初回本文とは別に保存し、回答全体を再解析します">{editExisting ? "二度目の自由記述を修正" : "二度目の自由記述"}</H2>
       <Card style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: C.sub }}>1回目の自由記述</div>
         <div style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 180, overflowY: "auto", marginTop: 5 }}>{current.free || "（記載なし）"}</div>
@@ -3358,19 +3462,19 @@ function FollowUpSurvey({ goto, session, onAuthed, notify }) {
         placeholder="二度目に伝えたい意見・提言・不満を自由にお書きください"
         style={{ width: "100%", padding: 12, borderRadius: 5, border: "1.5px solid " + C.rule, resize: "vertical", background: C.card, lineHeight: 1.8 }} />
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, color: C.sub, marginTop: 4 }}>
-        <span>この新規提出は一度だけです。提出後の変更は修正機能から行えます。</span>
+        <span>{editExisting ? "提出済みの2回目だけを書き換えます。保存すると現在回答全体を再解析します。" : "この新規提出は一度だけです。提出後の変更は修正機能から行えます。"}</span>
         <span style={{ fontFamily: FONT_MONO }}>{text.length}/1500</span>
       </div>
       {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
       <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-        <Btn disabled={!text.trim()} onClick={submitFollowUp}>二度目の自由記述を送信</Btn>
+        <Btn disabled={!text.trim()} onClick={submitFollowUp}>{editExisting ? "修正を保存して再解析" : "二度目の自由記述を送信"}</Btn>
         <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
       </div>
     </div>
   );
 }
 
-function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, session, onAuthed }) {
+function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, session, onAuthed, startEditMode }) {
   const [phase, setPhase] = useState("consent");
   const [qi, setQi] = useState(0);
   const [agree, setAgree] = useState(false);
@@ -3387,6 +3491,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const [editText, setEditText] = useState("");
   const busyRef = useRef(false);
   const loadedRef = useRef(false);
+  const autoEditRef = useRef(false);
   const timerRef = useRef(null);
 
   const freeQids = useMemo(() => questions.filter(q => q.type === "free").map(q => q.id), [questions]);
@@ -3400,6 +3505,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     setCurrentResponse(null);
     setCurrentLoadError("");
     setEditMode(null);
+    autoEditRef.current = false;
     (async () => {
       if (!session) return;
       setCurrentLoading(true);
@@ -3425,6 +3531,15 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     })();
     return () => { alive = false; };
   }, [session, currentLoadNonce]);
+
+  useEffect(() => {
+    if (startEditMode !== "answers" || !currentResponse || autoEditRef.current) return;
+    autoEditRef.current = true;
+    setAnswers({ ...(currentResponse.answers || {}) });
+    setEditText(String(currentResponse.free || ""));
+    setEditMode("answers");
+    setErr("");
+  }, [startEditMode, currentResponse]);
 
   /* PATCH/requeue後は現在revisionの解析だけを追跡する。
      古いrevisionの完了通知で、編集中の回答を巻き戻さない。 */
@@ -3517,6 +3632,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let analysisSource = "local";
     let cloudAnalysisStatus = null;
     let cloudAnalysisMode = null;
+    let analysisValueTrace = null;
     let remoteId = null;
     let remoteRevision = null;
     /* Cloudflare作成結果には認可情報とrevisionが含まれる。匿名manage tokenはprivate scopeへ保存する。 */
@@ -3529,6 +3645,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         const remote = await cloudWaitForResponseAnalysis(remoteId);
         cloudAnalysisStatus = remote.status;
         cloudAnalysisMode = remote.mode;
+        analysisValueTrace = remote.valueTrace || null;
         if (remote.status === "completed" && remote.analysis) {
           analysis = remote.analysis;
           analysisSource = "cloudflare";
@@ -3573,7 +3690,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
       remoteId: remoteId,
       ...(remoteRevision ? { remoteRevision: remoteRevision } : {}),
       ...(remoteId ? { cloudAnalysisStatus: cloudAnalysisStatus || "pending" } : {}),
-      ...(remoteId && cloudAnalysisMode ? { cloudAnalysisMode: cloudAnalysisMode } : {})
+      ...(remoteId && cloudAnalysisMode ? { cloudAnalysisMode: cloudAnalysisMode } : {}),
+      ...(remoteId && analysisValueTrace ? { analysisValueTrace: analysisValueTrace } : {})
     };
     const okR = await sSet("resp:" + resp.id, resp);
     const cur = (await sGet("agg:summary")) || newAgg();
@@ -3797,7 +3915,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
               {currentResponse.followUpSubmitted ? "二度目の自由記述は提出済みです。変更は自分の回答画面から行えます。" : "初回回答とは別の二度目自由記述を一度だけ提出できます。"}
             </div>
             {currentResponse.followUpSubmitted
-              ? <Btn small kind="ghost" onClick={() => goto("mine")}>2回目を確認・修正</Btn>
+              ? <Btn small kind="ghost" onClick={() => goto("followupEdit")}>2回目の回答を修正</Btn>
               : <Btn small onClick={() => goto("followup")}>二度目の自由記述へ</Btn>}
           </Card>
           <Card pad={13}>
@@ -4004,8 +4122,9 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         </Card>
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>イデオロギー座標(推定)</div>
-          <IdeoMap me={{ e: an.ideology.econ, s: an.ideology.soc }} avgPt={avgPt} points={[]} height={190} />
+          <IdeoMap me={{ e: an.ideology.econ, s: an.ideology.soc }} avgPt={avgPt} points={[]} height={190} confidence={an.ideology.confidence} />
           <div style={{ fontSize: 11, color: C.sub, marginTop: 6 }}>● あなた / ◯ 全体平均(解析済み {result.agg.ideology.n}件)</div>
+          <IdeologyReading ideology={an.ideology} attrs={an.attrs} />
         </Card>
       </div>
 
@@ -4074,8 +4193,9 @@ function Completion({ result, notify, goto, session }) {
         </Card>
         <Card>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>イデオロギー座標(推定)</div>
-          <IdeoMap me={{ e: an.ideology.econ, s: an.ideology.soc }} avgPt={avgPt} points={[]} height={190} />
+          <IdeoMap me={{ e: an.ideology.econ, s: an.ideology.soc }} avgPt={avgPt} points={[]} height={190} confidence={an.ideology.confidence} />
           <div style={{ fontSize: 11, color: C.sub, marginTop: 6 }}>● あなた / ◯ 全体平均(解析済み {result.agg.ideology.n}件)</div>
+          <IdeologyReading ideology={an.ideology} attrs={an.attrs} />
         </Card>
       </div>
 
@@ -4405,6 +4525,7 @@ function Dashboard({ agg, questions, goto }) {
       <H2 eyebrow="IDEOLOGY MAP" sub="各回答の推定座標。色は政権支持の回答に対応します。">イデオロギー分布</H2>
       <Card>
         <IdeoMap points={agg.ideology.points} avgPt={avgPt} height={250} />
+        <div style={{ fontSize: 11, color: C.sub, marginTop: 7 }}>横軸は経済政策、縦軸は社会・権利観です。◯は解析済み回答の全体平均。点の色は思想分類ではなく、政権支持の回答を表します。</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
           {Object.keys(SUP_COLORS).map(k => (
             <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: C.sub }}>
@@ -5323,9 +5444,9 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
         {session && r.remoteId ? (
           <Card style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>回答内容を修正</div>
-            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>初回回答はアンケートと1回目自由記述を一緒に修正します。2回目は独立して修正・撤回できます。</div>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>初回回答はアンケートと1回目自由記述を一緒に修正します。2回目は独立して修正・撤回できます。初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します。</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn small kind="ghost" onClick={() => goto("survey")}>初回回答を修正</Btn>
+              <Btn small kind="ghost" onClick={() => goto("surveyEdit")}>初回回答を修正</Btn>
               {r.followUpSubmitted
                 ? <Btn small kind="ghost" onClick={() => { setEditText(String(r.followUpText || "")); setEditMode("followup"); setErr(""); }}>2回目を修正</Btn>
                 : <Btn small onClick={() => goto("followup")}>二度目の自由記述を書く</Btn>}
@@ -5337,15 +5458,18 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
           <Card style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>意見量子化の結果</div>
             <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>
-              括弧内は全体平均です。数値は規則解析の推定であり、正確性を保証するものではありません。
+              括弧内は全体平均です。数値はAI解析または規則fallbackによる推定であり、正確性を保証するものではありません。
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
               <Badge>感情: {an.params.emo.label}</Badge>
               <Badge>イデオロギー: 経済 {an.ideology.econ} / 社会 {an.ideology.soc}</Badge>
+              {Number.isFinite(Number(an.ideology.confidence)) ? <Badge>推定確信度: {Math.round(an.ideology.confidence)}%</Badge> : null}
               {an.engine === SEISEKI_LOCAL_ENGINE ? <Badge>端末内モデル</Badge>
                 : an.engine === LOCAL_ANALYSIS_ENGINE ? <Badge>ローカル規則解析</Badge>
                 : an.ai === false ? <Badge>旧簡易推定</Badge> : null}
             </div>
+            <IdeologyReading ideology={an.ideology} attrs={an.attrs} />
+            {analysisDiagnosticsVisible() && r.analysisValueTrace ? <AnalysisValueTrace trace={r.analysisValueTrace} /> : null}
             {/* MeterBar が受け取るのは value。v では届かず、clamp(undefined) が
                 (0+100)/2 = 50 を返すため、どの項目も必ず 50 の半分バーになっていた。 */}
             {rows.map(row => (
@@ -5385,7 +5509,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
             </div>
           ) : (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn kind="danger" onClick={() => setConfirming(true)}>回答、解析結果を削除する</Btn>
+              <Btn kind="danger" onClick={() => setConfirming(true)}>回答全体を撤回する</Btn>
               <Btn kind="ghost" onClick={() => { setFound(null); setStage("input"); }}>別のIDを照会する</Btn>
               <Btn kind="ghost" onClick={() => goto("dash")}>ダッシュボードへ</Btn>
             </div>

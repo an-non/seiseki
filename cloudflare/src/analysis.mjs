@@ -209,6 +209,46 @@ function describeAiShape(result) {
   return `root=${typeof result};keys=${keys};response=${typeof result?.response};content=${typeof result?.choices?.[0]?.message?.content}`;
 }
 
+export function analysisValueSnapshot(value) {
+  const params = value && value.params || {};
+  const emotion = params && params.emo || {};
+  const ideology = value && value.ideology || {};
+  const finite = input => {
+    const number = Number(input);
+    return Number.isFinite(number) ? number : null;
+  };
+  return {
+    params: {
+      emo: { pol: finite(emotion.pol) },
+      valid: finite(params.valid),
+      crit: finite(params.crit),
+      motiv: finite(params.motiv)
+    },
+    ideology: {
+      econ: finite(ideology.econ),
+      soc: finite(ideology.soc),
+      confidence: finite(ideology.confidence)
+    }
+  };
+}
+
+export function withAnalysisValueTrace(analysis, rawValues, responseRevision, source) {
+  if (!analysis || typeof analysis !== "object") return analysis;
+  return {
+    ...analysis,
+    diagnostics: {
+      ...(analysis.diagnostics && typeof analysis.diagnostics === "object" ? analysis.diagnostics : {}),
+      valueTrace: {
+        version: 1,
+        responseRevision: Number(responseRevision || 0),
+        source: source === "rules-fallback" ? "rules-fallback" : "workers-ai",
+        raw: analysisValueSnapshot(rawValues),
+        sanitized: analysisValueSnapshot(analysis)
+      }
+    }
+  };
+}
+
 export function sanitizeAiAnalysis(value, freeText) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const params = value.params ?? {};
@@ -460,7 +500,7 @@ async function requestAiAnalysis(env, model, record, freeText) {
       const parsed = extractAiPayload(result);
       const analysis = sanitizeAiAnalysis(parsed, freeText);
       if (!analysis) throw new Error(`AI_OUTPUT_INVALID:${describeAiShape(result)}`);
-      return { analysis, attempts: attempt };
+      return { analysis, attempts: attempt, rawValues: analysisValueSnapshot(parsed) };
     } catch (error) {
       lastError = error;
       if (attempt >= attempts || !retryable(errorCode(error))) break;
@@ -498,7 +538,8 @@ export async function analyzeStoredResponse(env, responseId, expectedRevision = 
   }
   try {
     const result = await requestAiAnalysis(env, model, record, freeText);
-    return finish(result.analysis, {
+    const analysis = withAnalysisValueTrace(result.analysis, result.rawValues, revision, "workers-ai");
+    return finish(analysis, {
       engine: ENGINE,
       model,
       promptVersion: PROMPT_VERSION,
@@ -506,7 +547,8 @@ export async function analyzeStoredResponse(env, responseId, expectedRevision = 
     });
   } catch (error) {
     const code = errorCode(error);
-    const analysis = fallbackAnalysis(freeText);
+    const fallback = fallbackAnalysis(freeText);
+    const analysis = withAnalysisValueTrace(fallback, analysisValueSnapshot(fallback), revision, "rules-fallback");
     const outcome = await finish(analysis, {
       engine: analysis.engine,
       model: "none",
