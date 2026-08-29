@@ -1,0 +1,44 @@
+name: Restore full response delete wording 20260829
+
+on:
+  push:
+    branches:
+      - codex/response-ux-analysis-trace-20260829
+    paths:
+      - .github/workflows/revert-full-response-delete-copy-20260829.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply wording correction
+        run: |
+          set -euo pipefail
+          node scripts/revert-full-response-delete-copy-20260829.mjs
+          node scripts/build-app.mjs
+      - name: Verify UI contracts
+        run: |
+          set -euo pipefail
+          node --check tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/page-routing.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          cmp app/seiseki.jsx local/src/App.jsx
+      - name: Commit product correction
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx tests/response-ux-analysis-trace-contract.test.mjs
+          git commit -m "Restore response and analysis delete wording"
+          git push origin HEAD:codex/response-ux-analysis-trace-20260829
