@@ -106,7 +106,11 @@ jobs:
           grep -Fq '本文やAIの生テキストは保存せず' core/ui.jsx
           grep -Fq 'surveyEdit: "/survey/edit-initial"' core/ui.jsx
           grep -Fq 'followupEdit: "/survey/follow-up/edit"' core/ui.jsx
-          grep -Fq '回答全体を撤回する' core/ui.jsx
+          grep -Fq '回答、解析結果を削除する' core/ui.jsx
+          if grep -Fq '回答全体を撤回する' core/ui.jsx; then
+            echo 'obsolete full-response withdrawal wording remains' >&2
+            exit 1
+          fi
           grep -Fq '推定確信度' core/ui.jsx
 
       - name: Deploy Worker and UI to staging only
@@ -155,6 +159,7 @@ jobs:
           printf '\n### Response UX + analysis trace staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- branch: `%s`\n' "$GITHUB_REF_NAME" >> "$GITHUB_STEP_SUMMARY"
           printf -- '- commit: `%s`\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- full delete wording: restored to response + analysis deletion\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- D1 migration: not applied\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- live E2E: direct edit routes + revision flow + numeric trace + cleanup\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
