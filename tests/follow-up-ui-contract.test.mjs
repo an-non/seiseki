@@ -40,12 +40,13 @@ test("response entry follows actual account response state", () => {
   assert.ok(ui.includes('onResponseDeleted={() => { setMyId(""); setCompletion(null); }}'));
 });
 
-test("my response exposes second free-text withdrawal and labels full response withdrawal clearly", () => {
+test("my response exposes second free-text withdrawal and full response analysis deletion distinctly", () => {
   assert.ok(ui.includes("2回目を撤回"));
   assert.ok(ui.includes("2回目を本当に撤回する"));
   assert.ok(ui.includes("cloudDeleteFollowUp"));
-  assert.ok(ui.includes("回答全体を撤回する"));
-  assert.ok(ui.includes("初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します"));
+  assert.ok(ui.includes("回答、解析結果を削除する"));
+  assert.ok(!ui.includes("回答全体を撤回する"));
+  assert.ok(!ui.includes("初回を撤回する場合は回答全体を撤回します"));
 });
 
 

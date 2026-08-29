@@ -3812,7 +3812,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
         {session && r.remoteId ? (
           <Card style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>回答内容を修正</div>
-            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>初回回答はアンケートと1回目自由記述を一緒に修正します。2回目は独立して修正・撤回できます。初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します。</div>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>初回回答はアンケートと1回目自由記述を一緒に修正します。2回目は独立して修正・撤回できます。</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <Btn small kind="ghost" onClick={() => goto("surveyEdit")}>初回回答を修正</Btn>
               {r.followUpSubmitted
@@ -3877,7 +3877,7 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
             </div>
           ) : (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Btn kind="danger" onClick={() => setConfirming(true)}>回答全体を撤回する</Btn>
+              <Btn kind="danger" onClick={() => setConfirming(true)}>回答、解析結果を削除する</Btn>
               <Btn kind="ghost" onClick={() => { setFound(null); setStage("input"); }}>別のIDを照会する</Btn>
               <Btn kind="ghost" onClick={() => goto("dash")}>ダッシュボードへ</Btn>
             </div>

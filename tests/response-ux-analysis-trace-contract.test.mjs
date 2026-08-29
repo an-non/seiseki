@@ -15,9 +15,11 @@ test("response correction routes enter dedicated editors directly", () => {
   assert.ok(ui.includes('editExisting={view === "followupEdit"'));
 });
 
-test("withdrawal copy distinguishes second-only withdrawal from full response withdrawal", () => {
-  assert.ok(ui.includes("初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します"));
-  assert.ok(ui.includes("回答全体を撤回する"));
+test("second-only withdrawal remains distinct from full response and analysis deletion", () => {
+  assert.ok(ui.includes("2回目を撤回"));
+  assert.ok(ui.includes("回答、解析結果を削除する"));
+  assert.ok(!ui.includes("回答全体を撤回する"));
+  assert.ok(!ui.includes("初回を撤回する場合は回答全体を撤回"));
 });
 
 test("analysis trace keeps numeric stages and never stores raw model text", () => {
