@@ -1,0 +1,101 @@
+name: Response UX and analysis trace 20260829
+
+on:
+  push:
+    branches:
+      - codex/response-ux-analysis-trace-20260829
+    paths:
+      - .github/workflows/response-ux-analysis-trace-20260829.yml
+      - scripts/apply-response-ux-analysis-trace-20260829.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/response-ux-analysis-trace-20260829
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Apply UX, trace and ideology changes
+        run: |
+          set -euo pipefail
+          node scripts/apply-response-ux-analysis-trace-20260829.mjs
+          node scripts/build-app.mjs
+
+      - name: Verify generated sources are synchronized
+        run: |
+          set -euo pipefail
+          cmp -s app/seiseki.jsx local/src/App.jsx
+          node --check cloudflare/src/analysis.mjs
+
+      - name: Verify UI contracts
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+
+      - name: Verify Cloudflare worker
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+
+      - name: Verify local bridge and staging build
+        run: |
+          set -euo pipefail
+          node tests/local-bridge.test.js
+          npm --prefix local run build:staging
+
+      - name: Guard scope and privacy
+        run: |
+          set -euo pipefail
+          BASE=37599c45a2944998ec62b0ae2d6d314a00788148
+          git diff --exit-code "$BASE" -- core/logic.js local/quantum-entanglement-engine.mjs local/vite.config.js || {
+            echo "Unexpected quantum/core logic change" >&2
+            exit 1
+          }
+          if grep -R -Fq 'storeLocalProvisionalAnalysis' cloudflare/src; then
+            echo "Provisional local analysis must not enter formal D1 path" >&2
+            exit 1
+          fi
+          grep -Fq 'analysisValueSnapshot' cloudflare/src/analysis.mjs
+          grep -Fq '本文やAIの生テキストは保存せず' core/ui.jsx
+          grep -Fq 'surveyEdit: "/survey/edit-initial"' core/ui.jsx
+          grep -Fq 'followupEdit: "/survey/follow-up/edit"' core/ui.jsx
+          grep -Fq '回答全体を撤回する' core/ui.jsx
+          grep -Fq '推定確信度' core/ui.jsx
+
+      - name: Commit tested implementation
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f scripts/apply-response-ux-analysis-trace-20260829.mjs
+          rm -f .github/workflows/response-ux-analysis-trace-20260829.yml
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Improve response edit UX and trace analysis values"
+          git push origin HEAD:codex/response-ux-analysis-trace-20260829
