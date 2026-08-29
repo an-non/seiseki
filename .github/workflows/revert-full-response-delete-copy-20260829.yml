@@ -39,6 +39,6 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx tests/response-ux-analysis-trace-contract.test.mjs
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx tests/response-ux-analysis-trace-contract.test.mjs tests/follow-up-ui-contract.test.mjs
           git commit -m "Restore response and analysis delete wording"
           git push origin HEAD:codex/response-ux-analysis-trace-20260829
