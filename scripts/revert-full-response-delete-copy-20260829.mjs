@@ -1,7 +1,8 @@
 import fs from "node:fs";
 
 const uiPath = "core/ui.jsx";
-const testPath = "tests/response-ux-analysis-trace-contract.test.mjs";
+const traceTestPath = "tests/response-ux-analysis-trace-contract.test.mjs";
+const followupTestPath = "tests/follow-up-ui-contract.test.mjs";
 
 let ui = fs.readFileSync(uiPath, "utf8");
 const replacements = [
@@ -18,11 +19,18 @@ for (const [from, to] of replacements) {
 }
 fs.writeFileSync(uiPath, ui, "utf8");
 
-let test = fs.readFileSync(testPath, "utf8");
-const oldBlock = `test("withdrawal copy distinguishes second-only withdrawal from full response withdrawal", () => {\n  assert.ok(ui.includes("初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します"));\n  assert.ok(ui.includes("回答全体を撤回する"));\n});`;
-const newBlock = `test("second-only withdrawal remains distinct from full response and analysis deletion", () => {\n  assert.ok(ui.includes("2回目を撤回"));\n  assert.ok(ui.includes("回答、解析結果を削除する"));\n  assert.ok(!ui.includes("回答全体を撤回する"));\n  assert.ok(!ui.includes("初回を撤回する場合は回答全体を撤回"));\n});`;
-if (!test.includes(oldBlock)) throw new Error("old delete-copy contract block not found");
-test = test.replace(oldBlock, newBlock);
-fs.writeFileSync(testPath, test, "utf8");
+let traceTest = fs.readFileSync(traceTestPath, "utf8");
+const oldTraceBlock = `test("withdrawal copy distinguishes second-only withdrawal from full response withdrawal", () => {\n  assert.ok(ui.includes("初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します"));\n  assert.ok(ui.includes("回答全体を撤回する"));\n});`;
+const newTraceBlock = `test("second-only withdrawal remains distinct from full response and analysis deletion", () => {\n  assert.ok(ui.includes("2回目を撤回"));\n  assert.ok(ui.includes("回答、解析結果を削除する"));\n  assert.ok(!ui.includes("回答全体を撤回する"));\n  assert.ok(!ui.includes("初回を撤回する場合は回答全体を撤回"));\n});`;
+if (!traceTest.includes(oldTraceBlock)) throw new Error("old trace delete-copy contract block not found");
+traceTest = traceTest.replace(oldTraceBlock, newTraceBlock);
+fs.writeFileSync(traceTestPath, traceTest, "utf8");
 
-console.log("Restored full response delete wording");
+let followupTest = fs.readFileSync(followupTestPath, "utf8");
+const oldFollowupBlock = `test("my response exposes second free-text withdrawal and labels full response withdrawal clearly", () => {\n  assert.ok(ui.includes("2回目を撤回"));\n  assert.ok(ui.includes("2回目を本当に撤回する"));\n  assert.ok(ui.includes("cloudDeleteFollowUp"));\n  assert.ok(ui.includes("回答全体を撤回する"));\n  assert.ok(ui.includes("初回だけの撤回は行わず、初回を撤回する場合は回答全体を撤回します"));\n});`;
+const newFollowupBlock = `test("my response exposes second free-text withdrawal and full response analysis deletion distinctly", () => {\n  assert.ok(ui.includes("2回目を撤回"));\n  assert.ok(ui.includes("2回目を本当に撤回する"));\n  assert.ok(ui.includes("cloudDeleteFollowUp"));\n  assert.ok(ui.includes("回答、解析結果を削除する"));\n  assert.ok(!ui.includes("回答全体を撤回する"));\n  assert.ok(!ui.includes("初回を撤回する場合は回答全体を撤回します"));\n});`;
+if (!followupTest.includes(oldFollowupBlock)) throw new Error("old follow-up delete-copy contract block not found");
+followupTest = followupTest.replace(oldFollowupBlock, newFollowupBlock);
+fs.writeFileSync(followupTestPath, followupTest, "utf8");
+
+console.log("Restored full response delete wording and tests");
