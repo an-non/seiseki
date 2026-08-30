@@ -433,8 +433,15 @@
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(initialPalette.background);
     scene.fog = new THREE.FogExp2(initialPalette.fog, .009 / displayScale);
-    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 600);
-    camera.position.set(0, 13 * displayScale, Math.max(92, displayRadiusBounds.max * 1.36));
+    // mobile-quantum-touch-zoom-20260830: keep the full 10k-node field observable on compact screens.
+    const isCompactViewport = matchMedia("(max-width:700px)").matches;
+    const cameraFar = Math.max(1400, displayRadiusBounds.max * 8);
+    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, cameraFar);
+    const initialCameraDistance = Math.max(
+      isCompactViewport ? 150 : 92,
+      displayRadiusBounds.max * (isCompactViewport ? 1.9 : 1.36)
+    );
+    camera.position.set(0, 13 * displayScale, initialCameraDistance);
     const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:"high-performance" });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     renderer.setSize(innerWidth, innerHeight);
@@ -459,7 +466,10 @@
     controls.enableDamping = true;
     controls.dampingFactor = .065;
     controls.minDistance = 13;
-    controls.maxDistance = Math.max(170, displayRadiusBounds.max * 2.5);
+    controls.maxDistance = Math.max(
+      isCompactViewport ? 480 : 220,
+      displayRadiusBounds.max * (isCompactViewport ? 5.2 : 3.1)
+    );
 
     scene.add(new THREE.HemisphereLight("#ffffff", "#dce4f0", 2.1));
     const keyLight = new THREE.DirectionalLight("#ffffff", 2.2);
@@ -847,6 +857,42 @@
       }
       return { type:"root" };
     }
+    const coarsePointer = matchMedia("(pointer: coarse)").matches;
+    const screenProbe = new THREE.Vector3();
+    function hitFromScreenProximity(event) {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+      const radius = coarsePointer || event.pointerType === "touch" ? 28 : 10;
+      let best = null;
+      let bestDistanceSq = radius * radius;
+      function consider(position, type, index, id) {
+        screenProbe.copy(position).project(camera);
+        if (screenProbe.z < -1 || screenProbe.z > 1) return;
+        const x = bounds.left + (screenProbe.x + 1) * .5 * bounds.width;
+        const y = bounds.top + (1 - screenProbe.y) * .5 * bounds.height;
+        const dx = x - event.clientX;
+        const dy = y - event.clientY;
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq > bestDistanceSq) return;
+        bestDistanceSq = distanceSq;
+        best = index == null ? { type } : { type, index, id };
+      }
+      for (let index = 0; index < renderPositions.length; index += 1) {
+        consider(renderPositions[index], "opinion", index, model.nodes[index].id);
+      }
+      for (let index = 0; index < groupRenderPositions.length; index += 1) {
+        consider(groupRenderPositions[index], "entanglement", index, projection.groups[index].id);
+      }
+      for (let index = 0; index < topicPositions.length; index += 1) {
+        consider(topicPositions[index], "topic", index, topics[index].id);
+      }
+      consider(root.position, "root", null, null);
+      return best;
+    }
+    function hitAtEvent(event) {
+      setPointer(event);
+      return hitFromPointer() || hitFromScreenProximity(event);
+    }
     function selectionPosition(item) {
       if (!item || item.type === "root") return new THREE.Vector3();
       if (item.type === "opinion") return renderPositions[item.index];
@@ -1140,14 +1186,10 @@
       ));
     }
 
-    renderer.domElement.addEventListener("pointermove", setPointer);
-    renderer.domElement.addEventListener("pointerleave", () => {
-      pointer.set(2, 2);
-      pointerDirty = true;
-    });
-    renderer.domElement.addEventListener("click", () => {
-      if (!hovered) return;
-      selected = { ...hovered };
+    function activateSelection(next) {
+      if (!next) return;
+      selected = { ...next };
+      hovered = { ...next };
       if (selected.type === "root") observeAll();
       else if (selected.type === "entanglement") observeGroup(selected.id);
       else {
@@ -1155,6 +1197,36 @@
         if (selected.type === "opinion") appendTrace(selected, "SELECT NODE");
       }
       triggerRelationGlow();
+    }
+    let selectionPointerDown = null;
+    renderer.domElement.addEventListener("pointerdown", event => {
+      setPointer(event);
+      if (!event.isPrimary) return;
+      selectionPointerDown = {
+        pointerId:event.pointerId,
+        x:event.clientX,
+        y:event.clientY,
+        at:performance.now(),
+        pointerType:event.pointerType
+      };
+    });
+    renderer.domElement.addEventListener("pointermove", setPointer);
+    renderer.domElement.addEventListener("pointerleave", () => {
+      pointer.set(2, 2);
+      pointerDirty = true;
+    });
+    renderer.domElement.addEventListener("pointercancel", event => {
+      if (selectionPointerDown?.pointerId === event.pointerId) selectionPointerDown = null;
+    });
+    renderer.domElement.addEventListener("pointerup", event => {
+      const down = selectionPointerDown;
+      if (!event.isPrimary || !down || down.pointerId !== event.pointerId) return;
+      selectionPointerDown = null;
+      const movement = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+      const elapsed = performance.now() - down.at;
+      const movementLimit = down.pointerType === "touch" ? 14 : 6;
+      if (movement > movementLimit || elapsed > 700) return;
+      activateSelection(hitAtEvent(event));
     });
     basisButtons.forEach(button => button.addEventListener("click", () => observeAll(button.dataset.basis, false)));
     modelButtons.forEach(button => button.addEventListener("click", () => changeObservationMode(button.dataset.model)));
