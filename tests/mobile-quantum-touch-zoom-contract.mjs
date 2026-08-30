@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
 
 const target = resolve(process.argv[2] || "local/chunk-network-entanglement-preview.html");
-const html = readFileSync(target, "utf8");
+const isBuilt = process.argv.includes("--built");
 
-const required = [
+function readTree(path) {
+  if (!statSync(path).isDirectory()) return readFileSync(path, "utf8");
+  const chunks = [];
+  for (const name of readdirSync(path)) {
+    const child = join(path, name);
+    if (statSync(child).isDirectory()) chunks.push(readTree(child));
+    else if ([".html", ".js", ".mjs", ".css"].includes(extname(child))) chunks.push(readFileSync(child, "utf8"));
+  }
+  return chunks.join("\n");
+}
+
+const text = readTree(target);
+
+const sourceRequired = [
   "mobile-quantum-touch-zoom-20260830",
   "const isCompactViewport = matchMedia(\"(max-width:700px)\").matches;",
   "isCompactViewport ? 150 : 92",
@@ -21,8 +34,18 @@ const required = [
   "activateSelection(hitAtEvent(event));"
 ];
 
-for (const contract of required) {
-  assert.ok(html.includes(contract), `missing mobile quantum interaction contract: ${contract}`);
+const builtRequired = [
+  "(max-width:700px)",
+  "(pointer: coarse)",
+  "pointerdown",
+  "pointerup",
+  "pointercancel",
+  "pointerType",
+  "touch"
+];
+
+for (const contract of (isBuilt ? builtRequired : sourceRequired)) {
+  assert.ok(text.includes(contract), `missing mobile quantum ${isBuilt ? "bundle" : "source"} contract: ${contract}`);
 }
 
 const forbidden = [
@@ -31,7 +54,7 @@ const forbidden = [
 ];
 
 for (const regression of forbidden) {
-  assert.ok(!html.includes(regression), `mobile quantum regression still present: ${regression}`);
+  assert.ok(!text.includes(regression), `mobile quantum regression still present: ${regression}`);
 }
 
-console.log(`Mobile quantum touch/zoom contract PASS: ${target}`);
+console.log(`Mobile quantum touch/zoom ${isBuilt ? "bundle" : "source"} contract PASS: ${target}`);
