@@ -85,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s local/dist/quantum/chunk-network-entanglement-preview.html
-          node tests/mobile-quantum-touch-zoom-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+          node tests/mobile-quantum-touch-zoom-contract.mjs local/dist --built
           node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
 
       - name: Commit tested source patch only
