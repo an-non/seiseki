@@ -1,0 +1,181 @@
+name: Production final read-only preflight 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-preflight-final-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RC_SHA: f2b9d0a6b3642f4c3b064f64c47c13726cc8127c
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_DB_ID: 8ad5e023-3588-490c-ba61-3f180f8b2887
+      QUEUE_NAME: seiseki-analysis
+      DLQ_NAME: seiseki-analysis-dlq
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      EXPECTED_CONSUMER_ID: f5c011d7c7d640709a044ace2edf664d
+    steps:
+      - name: Checkout exact application RC
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact RC and production config invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC_SHA"
+          node - <<'NODE'
+          const fs=require('fs');const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          const fail=m=>{throw new Error(m)};
+          if(c.name!=='seiseki-api')fail('worker mismatch');
+          if(c.d1_databases?.[0]?.database_name!=='seiseki-db'||c.d1_databases?.[0]?.database_id!==process.env.EXPECTED_DB_ID)fail('D1 config mismatch');
+          if(c.ai?.binding!=='AI')fail('AI binding missing');
+          if(c.queues?.producers?.[0]?.queue!==process.env.QUEUE_NAME)fail('queue producer mismatch');
+          const q=(c.queues?.consumers||[]).filter(x=>x.queue===process.env.QUEUE_NAME);
+          if(q.length!==1)fail(`consumer count ${q.length}`);
+          const x=q[0];
+          if(x.dead_letter_queue!==process.env.DLQ_NAME)fail('DLQ declaration mismatch');
+          if(Number(x.max_batch_size)!==3||Number(x.max_batch_timeout)!==2||Number(x.max_retries)!==3||Number(x.max_concurrency)!==1||Number(x.retry_delay)!==10)fail(`queue policy mismatch ${JSON.stringify(x)}`);
+          if(c.vars?.ALLOWED_ORIGINS!==process.env.PRODUCTION_URL||c.vars?.PASSWORD_ITERATIONS!=='120000'||c.vars?.AI_ANALYSIS_ENABLED!=='true')fail('production vars mismatch');
+          console.log('exact RC/config invariants PASS');
+          NODE
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Run application and Worker verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Build production assets
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          test -s dist/index.html
+          test -f dist/model/manifest.json
+          grep -lq 'seiseki-api.tokyo-odh-129.workers.dev' dist/assets/*.js
+
+      - name: Wrangler production dry run
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ../local/dist/index.html
+          npx wrangler deploy --env="" --dry-run --outdir /tmp/seiseki-prod-dry-run
+          test -d /tmp/seiseki-prod-dry-run
+
+      - name: Read-only D1 release gate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 list --json > /tmp/d1-list.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/d1-list.json','utf8'));
+          const hit=(Array.isArray(x)?x:[]).find(v=>v?.name==='seiseki-db');const id=hit?.uuid||hit?.id||'';
+          if(id!==process.env.EXPECTED_DB_ID)throw new Error(`D1 identity mismatch ${id}`);
+          NODE
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          grep -oE '000[0-9]_[A-Za-z0-9_.-]+\.sql' /tmp/migrations.txt | sort -u > /tmp/pending.txt || true
+          printf '%s\n' 0006_response_access_revision.sql 0007_response_updated_at.sql 0008_questionnaire_seven_structured.sql 0008_response_follow_up_text.sql > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/pending.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS n FROM accounts; SELECT COUNT(*) AS n FROM responses; SELECT COUNT(*) AS n FROM account_responses; SELECT COUNT(*) AS n FROM analysis_runs; SELECT COUNT(*) AS n FROM opinion_chunks; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='response_access'; SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name; SELECT length(value_json) AS question_bytes FROM app_config WHERE key='questions';" --json > /tmp/d1.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/d1.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];
+          const scalar=(i,k='n')=>Number(rows(i)?.[0]?.[k]??NaN);
+          const counts=[0,1,2,3,4].map(i=>scalar(i));if(counts.some(v=>!Number.isFinite(v)))throw new Error('row count query malformed');
+          if(scalar(5,'duplicate_groups')!==0)throw new Error('duplicate ownership exists');
+          if(rows(6).length)throw new Error(`FK violations ${rows(6).length}`);
+          if(scalar(7)!==0||rows(8).length!==0)throw new Error('partial migration state detected');
+          console.log(JSON.stringify({counts,questionBytes:Number(rows(9)?.[0]?.question_bytes||0)}));
+          NODE
+
+      - name: Read-only Queue DLQ and Worker deployment gate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler queues list | tee /tmp/queues-table.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues-table.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis-dlq([[:space:]|]|$)' /tmp/queues-table.txt
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const fs=require('fs');const r=JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));
+          if(!r.success)throw new Error(JSON.stringify(r.errors));const all=Array.isArray(r.result)?r.result:[];
+          if(all.length!==1)throw new Error(`consumer count ${all.length}`);const c=all[0],s=c.settings||{};
+          if(c.type!=='worker'||c.consumer_id!==process.env.EXPECTED_CONSUMER_ID)throw new Error(`consumer identity drift ${JSON.stringify(c)}`);
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`consumer settings drift ${JSON.stringify(s)}`);
+          if(c.dead_letter_queue&&c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error(`unexpected remote DLQ ${c.dead_letter_queue}`);
+          console.log(JSON.stringify({consumerId:c.consumer_id,remoteDlq:c.dead_letter_queue||'(not yet attached)',settings:s}));
+          NODE
+          npx wrangler deployments list --name seiseki-api --json > /tmp/deployments.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/deployments.json','utf8'));
+          const n=Array.isArray(x)?x.length:Array.isArray(x?.result)?x.result.length:0;if(n<1)throw new Error('no existing production Worker deployment');
+          console.log(`existing production deployments visible ${n}`);
+          NODE
+
+      - name: Final preflight summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### SEISEKI final production preflight'
+            echo "- exact application RC: \`$RC_SHA\`"
+            echo '- Cloudflare writes in this workflow: none'
+            echo '- production DLQ resource: required to exist'
+            echo '- remote consumer DLQ attachment may be pending until exact-RC Wrangler deploy; post-deploy verification will require it'
+            echo '- next gate on success: D1 migration only'
+          } >> "$GITHUB_STEP_SUMMARY"
