@@ -2999,7 +2999,7 @@ export default function App() {
       else if (q) setQuestions(q);
       setPolicy(effectivePolicy);
       setCloudDemos(demos);
-      const visibleAggregate = cloudAggregate || withCloudDemos(a || newAgg(), demos);
+      const visibleAggregate = withCloudDemos(cloudAggregate || a || newAgg(), demos);
       setAgg(visibleAggregate);
       /* 個人スコープ: セッション・下書き・自分の回答IDの有無を確認する */
       const dr = await pGet("draft:current");
@@ -3094,7 +3094,7 @@ export default function App() {
     if (cloudApiEnabled()) {
       try {
         const remote = await cloudLoadPublicAggregate();
-        if (remote) { setAgg(remote); return remote; }
+        if (remote) { const shown = withCloudDemos(remote, cloudDemos); setAgg(shown); return shown; }
       } catch (error) {
         console.warn("cloud aggregate refresh failed", error);
       }
