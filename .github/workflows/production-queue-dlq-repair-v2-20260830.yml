@@ -87,11 +87,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if node - <<'NODE'
-          const fs=require('fs');const q=JSON.parse(fs.readFileSync('/tmp/queues.json','utf8'));
-          process.exit((q.result||[]).some(x=>x.queue_name===process.env.DLQ_NAME)?0:1);
-          NODE
-          then
+          DLQ_EXISTS="$(node -e "const fs=require('fs');const q=JSON.parse(fs.readFileSync('/tmp/queues.json','utf8'));process.stdout.write((q.result||[]).some(x=>x.queue_name===process.env.DLQ_NAME)?'yes':'no')")"
+          if [ "$DLQ_EXISTS" = yes ]; then
             echo 'production DLQ already exists'
           else
             curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" \
@@ -99,11 +96,7 @@ jobs:
               -H 'Content-Type: application/json' \
               -H "Authorization: Bearer ${CF_TOKEN}" \
               --data "{\"queue_name\":\"${DLQ_NAME}\"}" > /tmp/create-dlq.json
-            node - <<'NODE'
-            const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/create-dlq.json','utf8'));
-            if(!x.success||x.result?.queue_name!==process.env.DLQ_NAME) throw new Error(`DLQ create failed: ${JSON.stringify(x.errors)}`);
-            console.log(`created ${x.result.queue_name}`);
-            NODE
+            node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/create-dlq.json','utf8'));if(!x.success||x.result?.queue_name!==process.env.DLQ_NAME)throw new Error('DLQ create failed: '+JSON.stringify(x.errors));console.log('created '+x.result.queue_name)"
           fi
 
       - name: Attach DLQ to the unique guarded consumer
@@ -113,9 +106,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/update.json <<EOF
-          {"script_name":"${SCRIPT_NAME}","type":"worker","dead_letter_queue":"${DLQ_NAME}","settings":{"batch_size":3,"max_concurrency":1,"max_retries":3,"max_wait_time_ms":2000,"retry_delay":10}}
-          EOF
+          printf '%s' "{\"script_name\":\"${SCRIPT_NAME}\",\"type\":\"worker\",\"dead_letter_queue\":\"${DLQ_NAME}\",\"settings\":{\"batch_size\":3,\"max_concurrency\":1,\"max_retries\":3,\"max_wait_time_ms\":2000,\"retry_delay\":10}}" > /tmp/update.json
           curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers/${EXPECTED_CONSUMER_ID}" \
             -X PUT \
             -H 'Content-Type: application/json' \
