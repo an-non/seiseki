@@ -1,0 +1,296 @@
+name: Production exact RC deploy 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-deploy-exact-rc-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RC_SHA: f2b9d0a6b3642f4c3b064f64c47c13726cc8127c
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_DB_ID: 8ad5e023-3588-490c-ba61-3f180f8b2887
+      QUEUE_NAME: seiseki-analysis
+      DLQ_NAME: seiseki-analysis-dlq
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+    steps:
+      - name: Checkout exact application RC
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact RC and production config
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC_SHA"
+          node - <<'NODE'
+          const fs=require('fs');const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          const fail=m=>{throw new Error(m)};
+          if(c.name!=='seiseki-api')fail('worker name mismatch');
+          if(c.d1_databases?.[0]?.database_name!=='seiseki-db'||c.d1_databases?.[0]?.database_id!==process.env.EXPECTED_DB_ID)fail('D1 mismatch');
+          if(c.ai?.binding!=='AI')fail('AI binding missing');
+          if(c.queues?.producers?.[0]?.queue!==process.env.QUEUE_NAME)fail('queue producer mismatch');
+          const q=(c.queues?.consumers||[]).filter(x=>x.queue===process.env.QUEUE_NAME);
+          if(q.length!==1)fail(`consumer count ${q.length}`);
+          const x=q[0];
+          if(x.dead_letter_queue!==process.env.DLQ_NAME)fail('DLQ declaration missing');
+          if(Number(x.max_batch_size)!==3||Number(x.max_batch_timeout)!==2||Number(x.max_retries)!==3||Number(x.max_concurrency)!==1||Number(x.retry_delay)!==10)fail(`queue policy mismatch ${JSON.stringify(x)}`);
+          if(c.vars?.ALLOWED_ORIGINS!==process.env.PRODUCTION_URL||c.vars?.PASSWORD_ITERATIONS!=='120000'||c.vars?.AI_ANALYSIS_ENABLED!=='true')fail('production vars mismatch');
+          console.log('exact production RC config PASS');
+          NODE
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Re-run release tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Gate migrated production D1 immediately before deploy
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          if grep -qE '0006_response_access_revision|0007_response_updated_at|0008_questionnaire_seven_structured|0008_response_follow_up_text' /tmp/migrations.txt; then
+            echo 'production migrations are not complete' >&2
+            exit 71
+          fi
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='response_access'; SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name; SELECT name FROM sqlite_master WHERE type='index' AND name IN ('account_responses_account_unique','analysis_runs_response_revision_running_unique') ORDER BY name; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT value_json FROM app_config WHERE key='questions'; SELECT COUNT(*) AS n FROM accounts; SELECT COUNT(*) AS n FROM responses; SELECT COUNT(*) AS n FROM account_responses; SELECT COUNT(*) AS n FROM analysis_runs; SELECT COUNT(*) AS n FROM opinion_chunks;" --json > /tmp/d1-before-deploy.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/d1-before-deploy.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];const scalar=(i,k='n')=>Number(rows(i)?.[0]?.[k]??NaN);
+          if(scalar(0)!==1)throw new Error('response_access missing');
+          const cols=rows(1).map(r=>r.name);for(const n of ['revision','updated_at','follow_up_text'])if(!cols.includes(n))throw new Error(`missing ${n}`);
+          const idx=rows(2).map(r=>r.name);for(const n of ['account_responses_account_unique','analysis_runs_response_revision_running_unique'])if(!idx.includes(n))throw new Error(`missing ${n}`);
+          if(scalar(3,'duplicate_groups')!==0||rows(4).length)throw new Error('D1 integrity gate failed');
+          const questions=JSON.parse(String(rows(5)?.[0]?.value_json||'[]'));if(!Array.isArray(questions)||questions.filter(q=>q?.type!=='free').length!==7)throw new Error('questionnaire is not seven structured questions');
+          const counts=[6,7,8,9,10].map(i=>scalar(i));if(counts.some(v=>v!==0))throw new Error(`unexpected pre-release rows ${JSON.stringify(counts)}`);
+          console.log('migrated production D1 gate PASS');
+          NODE
+
+      - name: Gate Queue and DLQ resources before deploy
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler queues list | tee /tmp/queues.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis-dlq([[:space:]|]|$)' /tmp/queues.txt
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > /tmp/consumer-before.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumer-before.json','utf8'));
+          if(!x.success)throw new Error(JSON.stringify(x.errors));const all=Array.isArray(x.result)?x.result:[];
+          if(all.length!==1)throw new Error(`consumer count ${all.length}`);const c=all[0],s=c.settings||{};
+          if(c.type!=='worker')throw new Error('consumer is not worker type');
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`consumer policy drift ${JSON.stringify(s)}`);
+          console.log(JSON.stringify({consumerId:c.consumer_id,dlqBefore:c.dead_letter_queue||'(not attached)',settings:s}));
+          NODE
+
+      - name: Record existing production deployment state
+        id: before
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deployments list --name seiseki-api --json > /tmp/deployments-before.json
+          npx wrangler versions list --name seiseki-api --json > /tmp/versions-before.json
+          node - <<'NODE'
+          const fs=require('fs');
+          for(const f of ['/tmp/deployments-before.json','/tmp/versions-before.json']){const x=JSON.parse(fs.readFileSync(f,'utf8'));const n=Array.isArray(x)?x.length:Array.isArray(x?.result)?x.result.length:0;if(n<1)throw new Error(`no existing production history in ${f}`);}
+          console.log('existing production deployment/version history captured');
+          NODE
+
+      - name: Build production assets
+        working-directory: local
+        env:
+          VITE_SEISEKI_API_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+          VITE_SEISEKI_API_REQUIRED: 'true'
+          VITE_SEISEKI_RUNTIME_MODE: production
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          test -s dist/index.html
+          test -f dist/model/manifest.json
+          grep -lq 'seiseki-api.tokyo-odh-129.workers.dev' dist/assets/*.js
+
+      - name: Final Wrangler dry run
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env="" --dry-run --outdir /tmp/final-dry-run
+          test -d /tmp/final-dry-run
+
+      - name: Deploy exact RC Worker and UI to production
+        id: deploy_prod
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Deploying exact application RC $RC_SHA"
+          npx wrangler deploy --env="" --strict 2>&1 | tee /tmp/production-deploy.log
+          grep -E 'Current Version ID|Uploaded|Deployed|https://' /tmp/production-deploy.log || true
+
+      - name: Verify Queue consumer DLQ after deploy
+        id: queue_post
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumer-after.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumer-after.json','utf8'));
+          if(!x.success)throw new Error(JSON.stringify(x.errors));const all=Array.isArray(x.result)?x.result:[];
+          if(all.length!==1)throw new Error(`consumer count after deploy ${all.length}`);const c=all[0],s=c.settings||{};
+          if(c.type!=='worker'||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error(`DLQ not attached by production deploy ${JSON.stringify(c)}`);
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`consumer policy drift after deploy ${JSON.stringify(s)}`);
+          console.log(JSON.stringify({consumerId:c.consumer_id,dlq:c.dead_letter_queue,settings:s}));
+          NODE
+
+      - name: Production smoke tests
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then break; fi
+            sleep 3
+          done
+          node - <<'NODE'
+          const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if(h.status!=='ok'||h.database!=='d1')throw new Error(`production health failed ${JSON.stringify(h)}`);
+          console.log(JSON.stringify(h));
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
+          node - <<'NODE'
+          const fs=require('fs');const c=JSON.parse(fs.readFileSync('/tmp/config.json','utf8'));const q=c.questions||[];
+          const structured=q.filter(x=>x?.type!=='free');if(structured.length!==7)throw new Error(`production config structured questions ${structured.length}`);
+          console.log(`production config seven structured questions PASS`);
+          NODE
+          curl -fsS "$PRODUCTION_URL/app" > /tmp/app.html
+          grep -qiE '<!doctype html>|<html' /tmp/app.html
+
+      - name: Prepare production live E2E from staging-proven flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          let s=fs.readFileSync('scripts/staging-response-ux-analysis-e2e-20260829.mjs','utf8');
+          const block=`  const adminPage = await fetch(base + "/api/staging-admin", { redirect: "follow" });\n  if (adminPage.status !== 200) throw new Error(\`staging admin page returned \${adminPage.status}\`);\n  log("staging-admin-page", { status: adminPage.status });\n\n`;
+          if(!s.includes(block))throw new Error('staging admin block changed; refusing E2E transformation');
+          s=s.replace(block,'');
+          fs.writeFileSync('/tmp/production-e2e.mjs',s);
+          console.log('production E2E derived from staging-proven flow');
+          NODE
+          node --check /tmp/production-e2e.mjs
+
+      - name: Production live response revision analysis E2E with cleanup
+        id: e2e
+        env:
+          STAGING_BASE: https://seiseki-api.tokyo-odh-129.workers.dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          node /tmp/production-e2e.mjs
+
+      - name: Post-release production D1 integrity
+        id: integrity
+        if: ${{ always() && steps.deploy_prod.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT COUNT(*) AS accounts FROM accounts; SELECT COUNT(*) AS responses FROM responses; SELECT COUNT(*) AS account_responses FROM account_responses;" --json > /tmp/post-integrity.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/post-integrity.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];
+          const dup=Number(rows(0)?.[0]?.duplicate_groups??NaN);if(dup!==0)throw new Error(`duplicate groups ${dup}`);
+          if(rows(1).length)throw new Error(`foreign key violations ${rows(1).length}`);
+          const counts=[Number(rows(2)?.[0]?.accounts??NaN),Number(rows(3)?.[0]?.responses??NaN),Number(rows(4)?.[0]?.account_responses??NaN)];
+          if(counts.some(v=>v!==0))throw new Error(`E2E cleanup incomplete ${JSON.stringify(counts)}`);
+          console.log(JSON.stringify({duplicates:0,foreignKeys:0,cleanupCounts:counts}));
+          NODE
+
+      - name: Roll back Worker on failed post-deploy verification
+        if: ${{ failure() && steps.deploy_prod.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler rollback --name seiseki-api --message "Automatic rollback after failed SEISEKI production verification 20260830"
+
+      - name: Release summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### SEISEKI exact RC production release'
+            echo "- application RC: \`$RC_SHA\`"
+            echo '- D1 migrations: required complete before deploy'
+            echo '- Worker/UI deploy: exact RC root production config only'
+            echo '- Queue/DLQ: required after deploy'
+            echo '- smoke: health/config/app'
+            echo '- live E2E: account + response + follow-up + revisions + AI analysis + cleanup'
+            echo '- integrity: FK/duplicate/cleanup checked'
+          } >> "$GITHUB_STEP_SUMMARY"
