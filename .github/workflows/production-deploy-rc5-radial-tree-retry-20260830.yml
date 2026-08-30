@@ -1,0 +1,136 @@
+name: Production RC5 radial tree retry 20260830
+on:
+  push:
+    branches: [release/production-20260830]
+    paths: [.github/workflows/production-deploy-rc5-radial-tree-retry-20260830.yml]
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RC4_SHA: 7f3f878f87dc5e67c274d1589abda38987ee05dc
+      RC5_SHA: 02441688c2cc55c8d2112499354da5c3e797bc7a
+      PREVIOUS_VERSION: 0b80be29-cce7-4b1d-9f11-60ddd2fddecc
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      DLQ_NAME: seiseki-analysis-dlq
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 02441688c2cc55c8d2112499354da5c3e797bc7a
+          fetch-depth: 0
+      - name: Prove exact RC5 and UI-only delta
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC5_SHA"
+          git diff --name-only "$RC4_SHA" "$RC5_SHA" | grep -v '^.github/workflows/' | sort > /tmp/a
+          printf '%s\n' app/seiseki.jsx core/ui.jsx local/src/App.jsx | sort > /tmp/b
+          diff -u /tmp/b /tmp/a
+          test "$(git rev-parse "$RC5_SHA":cloudflare/src/index.mjs)" = "$(git rev-parse "$RC4_SHA":cloudflare/src/index.mjs)"
+          test "$(git rev-parse "$RC5_SHA":cloudflare/wrangler.jsonc)" = "$(git rev-parse "$RC4_SHA":cloudflare/wrangler.jsonc)"
+          grep -Fq 'const branchLoad = Math.max(rt.ring2.length, rt.ring3.length)' core/ui.jsx
+          grep -Fq 'const treeScale = Math.max(1, Math.min(1.9' core/ui.jsx
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test and build exact RC5
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+          APP_ASSET=$(basename "$(find local/dist/assets -maxdepth 1 -type f -name 'App-*.js' | head -n1)")
+          test -n "$APP_ASSET"
+          echo "APP_ASSET=$APP_ASSET" >> "$GITHUB_ENV"
+          sha256sum "local/dist/assets/$APP_ASSET" | awk '{print $1}' > /tmp/app.sha
+      - name: Retry read-only production D1 gate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          ok=0
+          for i in 1 2 3 4 5; do
+            echo "D1 preflight attempt $i"
+            if npx wrangler d1 migrations list seiseki-db --remote > /tmp/migrations.txt 2>/tmp/d1err.txt; then
+              if grep -q 'No migrations to apply' /tmp/migrations.txt; then ok=1; break; fi
+            fi
+            cat /tmp/d1err.txt || true
+            sleep $((i * 4))
+          done
+          test "$ok" = 1
+          ok=0
+          for i in 1 2 3 4 5; do
+            if npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS demos FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='demo-explainer-100-v1' AND r.analysis_status='completed'; PRAGMA foreign_key_check;" --json > /tmp/d1.json 2>/tmp/d1err2.txt; then ok=1; break; fi
+            cat /tmp/d1err2.txt || true
+            sleep $((i * 4))
+          done
+          test "$ok" = 1
+          node -e "const x=require('/tmp/d1.json');if(Number(x[0]?.results?.[0]?.demos)!==100)throw new Error('demo gate');if((x[1]?.results||[]).length)throw new Error('fk gate')"
+          npx wrangler deploy --env="" --dry-run --outdir /tmp/rc5-retry-dry-run
+      - name: Queue gate
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/q.json
+          node -e "const x=require('/tmp/q.json'),all=Array.isArray(x.result)?x.result:[],c=all[0],s=c&&c.settings||{};if(!x.success||all.length!==1||!c||c.dead_letter_queue!==process.env.DLQ_NAME||Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_concurrency)!==1)throw new Error('queue gate')"
+      - name: Deploy exact RC5
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npx wrangler deploy --env="" --strict 2>&1 | tee /tmp/deploy.log
+          grep -E 'Current Version ID|Uploaded|Deployed|https://' /tmp/deploy.log || true
+      - name: Verify exact live RC5
+        id: verify
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8; do
+            curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json || true
+            if node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')process.exit(1)" 2>/dev/null; then break; fi
+            sleep 3
+          done
+          node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')throw new Error('health')"
+          curl -fsS "$PRODUCTION_URL/api/demo-responses" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100)throw new Error('demo count')"
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/assets/$APP_ASSET?rev=rc5-retry-$(date +%s)" > /tmp/live.js
+          sha256sum /tmp/live.js | awk '{print $1}' > /tmp/live.sha
+          diff -u /tmp/app.sha /tmp/live.sha
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app/opinions?rev=rc5-retry-$(date +%s)" > /tmp/opinions.html
+          grep -qi '<!doctype html>' /tmp/opinions.html
+          echo 'exact RC5 radial tree live asset PASS'
+      - name: Verify Queue and DLQ after deploy
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/q-after.json
+          node -e "const x=require('/tmp/q-after.json'),c=(Array.isArray(x.result)?x.result:[])[0];if(!x.success||!c||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('queue post gate')"
+      - name: Roll back Worker if post-deploy verification fails
+        if: ${{ failure() && steps.deploy.outcome == 'success' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd cloudflare
+          npx wrangler rollback "$PREVIOUS_VERSION" --env="" --message "Automatic rollback after RC5 verification failure" --yes
