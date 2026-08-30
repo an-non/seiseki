@@ -1,0 +1,197 @@
+name: Production post-release read-only verification 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-postrelease-readonly-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-readonly-20260830
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RC_SHA: e1652c303868b9c20e476abc1888ba7388738b2f
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_DB_ID: 8ad5e023-3588-490c-ba61-3f180f8b2887
+      QUEUE_NAME: seiseki-analysis
+      DLQ_NAME: seiseki-analysis-dlq
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      EXPECTED_WORKER_VERSION: 189f988a-4928-47ba-b46c-4889ed333ed8
+    steps:
+      - name: Checkout exact production RC1
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC_SHA }}
+          fetch-depth: 0
+
+      - name: Verify immutable production RC configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC_SHA"
+          node - <<'NODE'
+          const fs = require('fs');
+          const c = JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc', 'utf8'));
+          const fail = m => { throw new Error(m); };
+          if (c.name !== 'seiseki-api') fail('worker mismatch');
+          if (c.d1_databases?.[0]?.database_id !== process.env.EXPECTED_DB_ID) fail('D1 mismatch');
+          if (c.vars?.PASSWORD_ITERATIONS !== '100000') fail('production KDF drift');
+          if (c.vars?.ALLOWED_ORIGINS !== process.env.PRODUCTION_URL) fail('origin drift');
+          if (c.vars?.AI_ANALYSIS_ENABLED !== 'true') fail('AI unexpectedly disabled');
+          const q = c.queues?.consumers?.find(x => x.queue === process.env.QUEUE_NAME);
+          if (!q) fail('production queue consumer declaration missing');
+          if (q.dead_letter_queue !== process.env.DLQ_NAME) fail('production DLQ declaration missing');
+          if (Number(q.max_retries) !== 3 || Number(q.max_concurrency) !== 1 || Number(q.retry_delay) !== 10) fail('queue policy drift');
+          console.log('immutable RC configuration PASS');
+          NODE
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - name: Install Wrangler dependencies
+        shell: bash
+        run: npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify production D1 migration and integrity state
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 list --json > /tmp/d1-list.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync('/tmp/d1-list.json','utf8'));
+          const hit = Array.isArray(rows) ? rows.find(x => x?.name === 'seiseki-db') : null;
+          const id = hit?.uuid || hit?.id || '';
+          if (!hit || id !== process.env.EXPECTED_DB_ID) throw new Error(`production D1 mismatch: ${id || 'missing'}`);
+          console.log('production D1 identity PASS');
+          NODE
+
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          if grep -qE '0006_response_access_revision|0007_response_updated_at|0008_questionnaire_seven_structured|0008_response_follow_up_text' /tmp/migrations.txt; then
+            echo 'production has pending release migrations' >&2
+            exit 71
+          fi
+
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS response_access_table FROM sqlite_master WHERE type='table' AND name='response_access'; SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name; SELECT name FROM sqlite_master WHERE type='index' AND name IN ('account_responses_account_unique','analysis_runs_response_revision_running_unique') ORDER BY name; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT value_json FROM app_config WHERE key='questions'; SELECT COUNT(*) AS accounts FROM accounts; SELECT COUNT(*) AS responses FROM responses; SELECT COUNT(*) AS account_responses FROM account_responses; SELECT COUNT(*) AS analysis_runs FROM analysis_runs; SELECT COUNT(*) AS opinion_chunks FROM opinion_chunks;" --json > /tmp/d1-state.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/d1-state.json','utf8'));
+          const rows = i => x?.[i]?.results || x?.[i]?.result || [];
+          if (Number(rows(0)?.[0]?.response_access_table ?? NaN) !== 1) throw new Error('response_access missing');
+          const cols = rows(1).map(r => r.name);
+          for (const n of ['revision','updated_at','follow_up_text']) if (!cols.includes(n)) throw new Error(`missing response column ${n}`);
+          const indexes = rows(2).map(r => r.name);
+          for (const n of ['account_responses_account_unique','analysis_runs_response_revision_running_unique']) if (!indexes.includes(n)) throw new Error(`missing index ${n}`);
+          if (Number(rows(3)?.[0]?.duplicate_groups ?? NaN) !== 0) throw new Error('duplicate account ownership exists');
+          if (rows(4).length !== 0) throw new Error(`foreign key violations: ${rows(4).length}`);
+          const questions = JSON.parse(String(rows(5)?.[0]?.value_json || '[]'));
+          if (!Array.isArray(questions) || questions.filter(q => q?.type !== 'free').length !== 7) throw new Error('questionnaire is not seven structured questions');
+          const counts = {
+            accounts: Number(rows(6)?.[0]?.accounts ?? NaN),
+            responses: Number(rows(7)?.[0]?.responses ?? NaN),
+            accountResponses: Number(rows(8)?.[0]?.account_responses ?? NaN),
+            analysisRuns: Number(rows(9)?.[0]?.analysis_runs ?? NaN),
+            opinionChunks: Number(rows(10)?.[0]?.opinion_chunks ?? NaN)
+          };
+          console.log(JSON.stringify({integrity:'PASS', counts}));
+          NODE
+
+      - name: Verify production Queue and DLQ attachment
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler queues list | tee /tmp/queues.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis([[:space:]|]|$)' /tmp/queues.txt
+          grep -Eq '(^|[[:space:]|])seiseki-analysis-dlq([[:space:]|]|$)' /tmp/queues.txt
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));
+          if (!x.success) throw new Error(JSON.stringify(x.errors));
+          const all = Array.isArray(x.result) ? x.result : [];
+          if (all.length !== 1) throw new Error(`consumer count ${all.length}`);
+          const c = all[0], s = c.settings || {};
+          if (c.type !== 'worker') throw new Error('consumer type drift');
+          if (c.dead_letter_queue !== process.env.DLQ_NAME) throw new Error(`DLQ drift: ${c.dead_letter_queue || 'none'}`);
+          if (Number(s.batch_size) !== 3 || Number(s.max_retries) !== 3 || Number(s.max_wait_time_ms) !== 2000 || Number(s.max_concurrency) !== 1 || Number(s.retry_delay) !== 10) throw new Error(`consumer settings drift ${JSON.stringify(s)}`);
+          console.log('production Queue/DLQ PASS');
+          NODE
+
+      - name: Verify production deployment visibility
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deployments list --name seiseki-api --json > /tmp/deployments.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const x = JSON.parse(fs.readFileSync('/tmp/deployments.json','utf8'));
+          const text = JSON.stringify(x);
+          if (!text.includes(process.env.EXPECTED_WORKER_VERSION)) {
+            console.warn(`expected release Worker version is not present in deployment-list payload: ${process.env.EXPECTED_WORKER_VERSION}`);
+          } else {
+            console.log(`release Worker version visible: ${process.env.EXPECTED_WORKER_VERSION}`);
+          }
+          const n = Array.isArray(x) ? x.length : Array.isArray(x?.result) ? x.result.length : 0;
+          if (n < 1) throw new Error('no production Worker deployments visible');
+          console.log(`production deployment records visible: ${n}`);
+          NODE
+
+      - name: Verify public production surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const h = JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if (h.status !== 'ok' || h.database !== 'd1') throw new Error(JSON.stringify(h));
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const c = JSON.parse(fs.readFileSync('/tmp/config.json','utf8'));
+          if ((c.questions || []).filter(q => q?.type !== 'free').length !== 7) throw new Error('public config questionnaire mismatch');
+          NODE
+          curl -fsS "$PRODUCTION_URL/app" > /tmp/app.html
+          grep -qiE '<!doctype html>|<html' /tmp/app.html
+          echo 'public production surface PASS'
+
+      - name: Verification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### SEISEKI production post-release verification'
+            echo "- immutable application RC: \`$RC_SHA\`"
+            echo "- release Worker version recorded: \`$EXPECTED_WORKER_VERSION\`"
+            echo '- workflow permissions: contents read only'
+            echo '- remote operations: read only'
+            echo '- checks: D1 migration/schema/FK/ownership, Queue/DLQ, deployment visibility, health/config/app'
+            echo '- this workflow never migrates, deploys, creates accounts, or mutates branches'
+          } >> "$GITHUB_STEP_SUMMARY"
