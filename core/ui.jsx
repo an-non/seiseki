@@ -996,7 +996,7 @@ const VIEW_PATHS = {
   mine: "/account/response",
   admin: "/admin"
 };
-const VIEW_PATH_ALIASES = { "/app/network": "tree" };
+const VIEW_PATH_ALIASES = { "/app/network": "tree", "/app/stats": "dash" };
 
 function viewFromPath(pathname) {
   const path = String(pathname || "/").replace(/\/+$/, "") || "/";

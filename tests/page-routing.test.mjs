@@ -29,6 +29,7 @@ test("概要・集計・意見ツリー・意見一覧は固有URLを持つ", ()
     assert.ok(ui.includes(view), view);
   }
   assert.doesNotMatch(ui, /path === "\/app\/dashboard"[^\n]+return "home"/);
+  assert.match(ui, /"\/app\/stats": "dash"/);
 });
 
 test("画面遷移はブラウザ履歴と同期する", () => {
