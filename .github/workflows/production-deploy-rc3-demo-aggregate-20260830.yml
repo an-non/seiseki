@@ -1,0 +1,165 @@
+name: Production RC3 demo aggregate deploy 20260830
+
+on:
+  push:
+    branches: [release/production-20260830]
+    paths: [.github/workflows/production-deploy-rc3-demo-aggregate-20260830.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RC2_SHA: 99b5f88f8aa08df086e1f226b331d47ce6bf08ba
+      RC3_SHA: 198db981ddb6f87d65ad44662abba908b3002446
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      DLQ_NAME: seiseki-analysis-dlq
+    steps:
+      - name: Checkout exact production RC3
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC3_SHA }}
+          fetch-depth: 0
+
+      - name: Prove application delta is demo aggregation only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC3_SHA"
+          git diff --name-only "$RC2_SHA" "$RC3_SHA" | grep -v '^\.github/workflows/' | sort > /tmp/app-changed.txt
+          printf '%s\n' app/seiseki.jsx core/ui.jsx local/src/App.jsx | sort > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/app-changed.txt
+          test "$(git rev-parse "$RC3_SHA":cloudflare/wrangler.jsonc)" = "$(git rev-parse "$RC2_SHA":cloudflare/wrangler.jsonc)"
+          test "$(git rev-parse "$RC3_SHA":cloudflare/src/index.mjs)" = "$(git rev-parse "$RC2_SHA":cloudflare/src/index.mjs)"
+          grep -Fq 'const visibleAggregate = withCloudDemos(cloudAggregate || a || newAgg(), demos);' core/ui.jsx
+          grep -Fq 'if (remote) { const shown = withCloudDemos(remote, cloudDemos); setAgg(shown); return shown; }' core/ui.jsx
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Full regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Read-only production data gate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          grep -q 'No migrations to apply' /tmp/migrations.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS demos FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='demo-explainer-100-v1' AND r.analysis_status='completed'; PRAGMA foreign_key_check;" --json > /tmp/d1.json
+          node - <<'NODE'
+          const x=require('/tmp/d1.json');if(Number(x[0]?.results?.[0]?.demos)!==100)throw new Error('expected 100 completed demos');if((x[1]?.results||[]).length)throw new Error('FK violations');
+          NODE
+
+      - name: Queue and DLQ gate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const x=require('/tmp/consumers.json'),all=Array.isArray(x.result)?x.result:[];if(!x.success||all.length!==1)throw new Error('consumer gate');const c=all[0],s=c.settings||{};if(c.type!=='worker'||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('DLQ drift');if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error('consumer settings drift');
+          NODE
+
+      - name: Build and dry-run production
+        shell: bash
+        run: |
+          set -euo pipefail
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+          cd cloudflare
+          npx wrangler deploy --env="" --dry-run --outdir /tmp/rc3-dry-run
+          test -d /tmp/rc3-dry-run
+
+      - name: Deploy production RC3
+        id: deploy_prod
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env="" --strict 2>&1 | tee /tmp/deploy.log
+          grep -E 'Current Version ID|Uploaded|Deployed|https://' /tmp/deploy.log || true
+
+      - name: Verify live production and demo surface
+        id: live_verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8; do
+            curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json || true
+            if node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')process.exit(1)" 2>/dev/null; then break; fi
+            sleep 3
+          done
+          node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')throw new Error(JSON.stringify(h))"
+          curl -fsS "$PRODUCTION_URL/api/demo-responses" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100||x.responses.some(r=>r.demoFlag!==true||!r.analysis))throw new Error('demo endpoint mismatch')"
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app?rev=rc3-$(date +%s)" > /tmp/app.html
+          grep -qi '<!doctype html>' /tmp/app.html
+          echo 'live production RC3 demo surface PASS'
+
+      - name: Verify Queue DLQ remains attached
+        if: ${{ always() && steps.deploy_prod.outcome == 'success' }}
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumers-after.json
+          node - <<'NODE'
+          const x=require('/tmp/consumers-after.json'),c=(Array.isArray(x.result)?x.result:[])[0];if(!x.success||!c||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('Queue/DLQ post-deploy verification failed');
+          NODE
+
+      - name: Roll back Worker if verification fails
+        if: ${{ failure() && steps.deploy_prod.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler rollback --name seiseki-api --message "Automatic rollback after failed SEISEKI production RC3 demo aggregate verification"
