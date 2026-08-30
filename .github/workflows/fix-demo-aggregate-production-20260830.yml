@@ -1,0 +1,76 @@
+name: Fix demo aggregate production 20260830
+
+on:
+  push:
+    branches: [fix/demo-aggregate-production-20260830]
+    paths: [.github/workflows/fix-demo-aggregate-production-20260830.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/demo-aggregate-production-20260830
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+      - name: Patch demo aggregation at cloud load and refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ['app/seiseki.jsx','local/src/App.jsx']:
+              p=Path(name)
+              s=p.read_text()
+              old1='const visibleAggregate = cloudAggregate || withCloudDemos(a || newAgg(), demos);'
+              new1='const visibleAggregate = withCloudDemos(cloudAggregate || a || newAgg(), demos);'
+              old2='if (remote) { setAgg(remote); return remote; }'
+              new2='if (remote) { const shown = withCloudDemos(remote, cloudDemos); setAgg(shown); return shown; }'
+              if s.count(old1)!=1: raise SystemExit(f'{name}: initial aggregate target count={s.count(old1)}')
+              if s.count(old2)!=1: raise SystemExit(f'{name}: refresh aggregate target count={s.count(old2)}')
+              p.write_text(s.replace(old1,new1,1).replace(old2,new2,1))
+          PY
+          git diff --check
+          git diff --name-only
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "app/seiseki.jsx local/src/App.jsx "
+      - name: Install and run regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx || true
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE="https://seiseki-api.tokyo-odh-129.workers.dev" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+      - name: Commit source-only fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/node_modules local/dist cloudflare/node_modules
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/seiseki.jsx local/src/App.jsx
+          git commit -m 'Merge cloud demo responses into production aggregate views'
+          git push origin HEAD:fix/demo-aggregate-production-20260830
