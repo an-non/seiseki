@@ -24,9 +24,9 @@ jobs:
       RC2_SHA: 99b5f88f8aa08df086e1f226b331d47ce6bf08ba
       TESTED_FIX_SHA: ca8b9326a096883247b64358ece4a932f43985fd
       PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
-      EXPECTED_DB_ID: 8ad5e023-3588-490c-ba61-3f180f8b2887
       EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
       DLQ_NAME: seiseki-analysis-dlq
+      EXPECTED_QUANTUM_ASSET: /assets/quantum-H7yQfUU3.js
     steps:
       - name: Checkout exact production RC2
         uses: actions/checkout@v4
@@ -45,7 +45,6 @@ jobs:
           test "$(git rev-parse "$RC2_SHA":local/chunk-network-entanglement-preview.html)" = "$(git rev-parse "$TESTED_FIX_SHA":local/chunk-network-entanglement-preview.html)"
           test "$(git rev-parse "$RC2_SHA":cloudflare/wrangler.jsonc)" = "$(git rev-parse "$RC1_SHA":cloudflare/wrangler.jsonc)"
           test "$(git rev-parse "$RC2_SHA":cloudflare/src/index.mjs)" = "$(git rev-parse "$RC1_SHA":cloudflare/src/index.mjs)"
-          echo 'RC2 single-source-delta invariant PASS'
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -96,7 +95,6 @@ jobs:
           const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/d1.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];
           if(Number(rows(0)?.[0]?.duplicate_groups??NaN)!==0)throw new Error('duplicate ownership');
           if(rows(1).length)throw new Error('foreign key violations');
-          console.log('production D1 integrity PASS');
           NODE
 
       - name: Read-only Queue and DLQ gate
@@ -112,10 +110,9 @@ jobs:
           grep -Eq '(^|[[:space:]|])seiseki-analysis-dlq([[:space:]|]|$)' /tmp/queues.txt
           curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" > /tmp/consumers.json
           node - <<'NODE'
-          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));if(!x.success)throw new Error(JSON.stringify(x.errors));const all=Array.isArray(x.result)?x.result:[];if(all.length!==1)throw new Error('consumer count');const c=all[0],s=c.settings||{};
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));const all=Array.isArray(x.result)?x.result:[];if(!x.success||all.length!==1)throw new Error('consumer gate');const c=all[0],s=c.settings||{};
           if(c.type!=='worker'||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('DLQ drift');
           if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error('consumer settings drift');
-          console.log('production Queue/DLQ PASS');
           NODE
 
       - name: Build production assets and verify quantum bundle
@@ -125,6 +122,7 @@ jobs:
           VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
           node /tmp/mobile-quantum-contract.mjs local/dist --built
           node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+          grep -Fq "$EXPECTED_QUANTUM_ASSET" local/dist/quantum/chunk-network-entanglement-preview.html
           cd cloudflare
           npx wrangler deploy --env="" --dry-run --outdir /tmp/rc2-dry-run
           test -d /tmp/rc2-dry-run
@@ -141,41 +139,43 @@ jobs:
           npx wrangler deploy --env="" --strict 2>&1 | tee /tmp/deploy.log
           grep -E 'Current Version ID|Uploaded|Deployed|https://' /tmp/deploy.log || true
 
-      - name: Verify live production health and quantum interaction bundle
+      - name: Verify live production health and exact quantum asset
         id: live_verify
         shell: bash
         run: |
           set -euo pipefail
           for i in 1 2 3 4 5 6 7 8; do
-            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then break; fi
+            if curl -fsS "$PRODUCTION_URL/api/health" > /tmp/health.json; then
+              if node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')process.exit(1)"; then break; fi
+            fi
             sleep 3
           done
-          node - <<'NODE'
-          const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));if(h.status!=='ok'||h.database!=='d1')throw new Error(JSON.stringify(h));
-          NODE
+          node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')throw new Error(JSON.stringify(h))"
           curl -fsS "$PRODUCTION_URL/api/config" > /tmp/config.json
-          node - <<'NODE'
-          const fs=require('fs');const c=JSON.parse(fs.readFileSync('/tmp/config.json','utf8'));if((c.questions||[]).filter(q=>q?.type!=='free').length!==7)throw new Error('questionnaire mismatch');
-          NODE
-          curl -fsS -L "$PRODUCTION_URL/app/quantum" > /tmp/app.html
+          node -e "const c=require('/tmp/config.json');if((c.questions||[]).filter(q=>q?.type!=='free').length!==7)throw new Error('questionnaire mismatch')"
+
+          found=0
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            bust="rc2-${i}-$(date +%s)"
+            curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=$bust" > /tmp/quantum.html || true
+            if grep -Fq "$EXPECTED_QUANTUM_ASSET" /tmp/quantum.html; then
+              found=1
+              break
+            fi
+            sleep 3
+          done
+          test "$found" = 1
+          grep -qi '<!doctype html>' /tmp/quantum.html
+
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL$EXPECTED_QUANTUM_ASSET?rev=rc2-live-$(date +%s)" > /tmp/quantum.js
+          grep -Fq 'pointerdown' /tmp/quantum.js
+          grep -Fq 'pointerup' /tmp/quantum.js
+          grep -Fq 'pointercancel' /tmp/quantum.js
+          grep -Fq '(pointer: coarse)' /tmp/quantum.js
+          grep -Fq '(max-width:700px)' /tmp/quantum.js
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app/quantum?rev=rc2-live-$(date +%s)" > /tmp/app.html
           grep -qi '<!doctype html>' /tmp/app.html
-          curl -fsS -L "$PRODUCTION_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830" > /tmp/quantum.html
-          grep -qi 'quantum\|chunk-network\|量子' /tmp/quantum.html
-          node - <<'NODE'
-          const fs=require('fs');const html=fs.readFileSync('/tmp/quantum.html','utf8');const refs=[];for(const re of [/<script[^>]+src=["']([^"']+)["']/g,/<link[^>]+href=["']([^"']+)["']/g])for(const m of html.matchAll(re))if(/\.js(?:\?|$)/.test(m[1]))refs.push(m[1]);const u=[...new Set(refs)];if(!u.length)throw new Error('no JS refs');fs.writeFileSync('/tmp/jsrefs.txt',u.join('\n'));
-          NODE
-          : > /tmp/all-js.txt
-          while IFS= read -r src; do
-            case "$src" in http*) url="$src" ;; /*) url="$PRODUCTION_URL$src" ;; *) url="$PRODUCTION_URL/quantum/$src" ;; esac
-            curl -fsS -L "$url" >> /tmp/all-js.txt
-            printf '\n' >> /tmp/all-js.txt
-          done < /tmp/jsrefs.txt
-          grep -Fq 'pointerdown' /tmp/all-js.txt
-          grep -Fq 'pointerup' /tmp/all-js.txt
-          grep -Fq 'pointercancel' /tmp/all-js.txt
-          grep -Fq '(pointer: coarse)' /tmp/all-js.txt
-          grep -Fq '(max-width:700px)' /tmp/all-js.txt
-          echo 'live production mobile quantum interaction bundle PASS'
+          echo 'live production exact mobile quantum asset PASS'
 
       - name: Verify Queue DLQ remains attached after deploy
         if: ${{ always() && steps.deploy_prod.outcome == 'success' }}
@@ -187,7 +187,7 @@ jobs:
           set -euo pipefail
           curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumers-after.json
           node - <<'NODE'
-          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumers-after.json','utf8'));const c=(Array.isArray(x.result)?x.result:[])[0];if(!x.success||!c||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('Queue/DLQ post-deploy verification failed');console.log('post-deploy Queue/DLQ PASS');
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/consumers-after.json','utf8'));const c=(Array.isArray(x.result)?x.result:[])[0];if(!x.success||!c||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('Queue/DLQ post-deploy verification failed');
           NODE
 
       - name: Roll back Worker if post-deploy verification fails
