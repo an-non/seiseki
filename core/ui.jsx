@@ -2650,7 +2650,7 @@ function Dashboard({ agg, questions, goto }) {
   const barData = optOrder.map(o => ({ name: o, 回答数: qa.counts[o] || 0 }));
 
   const groupOpt = selOpt || optOrder.find(o => (qa.counts[o] || 0) > 0) || "";
-  const gp = groupOpt ? paramView(qa.params[groupOpt]) : null;
+  const gp = groupOpt ? paramView((qa.params || {})[groupOpt]) : null;
   const selColor = (q && q.id === ANCHOR_QID && SUP_COLORS[groupOpt]) || C.green;
   const radarData = gp ? [
     { k: "感情ポジ度", グループ: gp.emoPos, 全体: emoToPos(ov.emo) },
@@ -4174,14 +4174,14 @@ function RadialTree({ agg, questions, onPick }) {
   }
 
   return (
-    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>
+    <svg viewBox={"0 0 " + S + " " + S} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", maxWidth: 720, height: "auto", display: "block", margin: "0 auto" }}>
       {rt.ring1.map(arc => (
         <g key={arc.key} className="visual-action" role="button" tabIndex={0}
           onClick={() => onPick && onPick({ sup: arc.sup })}
           onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick && onPick({ sup: arc.sup }); } }}>
           <title>{arc.label + " の人からの意見 " + arc.n + "件"}</title>
           <path d={arcPath(cx, cy, R0, R1, arc.a0, arc.a1)} fill={SUP_COLORS[arc.sup] || C.gray} stroke={C.paper} strokeWidth={2} />
-          {label(arc, (R0 + R1) / 2, 0.30, 13, "#FFFFFF")}
+          {label(arc, (R0 + R1) / 2, 0.30, Math.round(13 * treeScale), "#FFFFFF")}
         </g>
       ))}
       {rt.ring2.map(arc => (
@@ -4190,7 +4190,7 @@ function RadialTree({ agg, questions, onPick }) {
           onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick && onPick({ sup: arc.sup, topic: arc.rest ? "" : arc.topic }); } }}>
           <title>{arc.topic + " / " + arc.label + " " + arc.n + "件 / 感情ポジ度 " + emoToPos(arc.emo)}</title>
           <path d={arcPath(cx, cy, R1, R2, arc.a0, arc.a1)} fill={arc.rest ? C.rule : colorForEmo(arc.emo)} stroke={C.paper} strokeWidth={1.5} />
-          {label(arc, (R1 + R2) / 2, 0.20, 12, arc.rest ? C.sub : "#FFFFFF")}
+          {label(arc, (R1 + R2) / 2, 0.20, Math.round(12 * treeScale), arc.rest ? C.sub : "#FFFFFF")}
         </g>
       ))}
       {rt.ring3.map(arc => (
@@ -4200,12 +4200,12 @@ function RadialTree({ agg, questions, onPick }) {
           <title>{arc.sup + " → " + arc.topic + " → " + arc.cat + " " + arc.n + "件"}</title>
           <path d={arcPath(cx, cy, R2, R3, arc.a0, arc.a1)}
             fill={(CAT_STYLE[arc.cat] || {}).bg || C.soft} stroke={C.paper} strokeWidth={1} />
-          {label(arc, (R2 + R3) / 2, 0.26, 10, (CAT_STYLE[arc.cat] || {}).fg || C.ink)}
+          {label(arc, (R2 + R3) / 2, 0.26, Math.round(10 * treeScale), (CAT_STYLE[arc.cat] || {}).fg || C.ink)}
         </g>
       ))}
       <circle cx={cx} cy={cy} r={R0 - 3} fill={C.card} stroke={C.rule} />
-      <text x={cx} y={cy - 10} textAnchor="middle" fontSize={12} fill={C.sub} fontFamily={FONT_BODY}>意見の総数</text>
-      <text x={cx} y={cy + 14} textAnchor="middle" fontSize={26} fontWeight="700" fill={C.ink} fontFamily={FONT_MONO}>{rt.total}</text>
+      <text x={cx} y={cy - 10} textAnchor="middle" fontSize={Math.round(12 * treeScale)} fill={C.sub} fontFamily={FONT_BODY}>意見の総数</text>
+      <text x={cx} y={cy + 14} textAnchor="middle" fontSize={Math.round(26 * treeScale)} fontWeight="700" fill={C.ink} fontFamily={FONT_MONO}>{rt.total}</text>
     </svg>
   );
 }

@@ -47,10 +47,11 @@ function OpinionNetwork({ agg, onPick }) {
   for (const link of data.links) if (link.n > maxL) maxL = link.n;
   const radiusOf = pn => 13 + Math.sqrt(pn.n / maxN) * 25;
   const textColor = pn => pn.hn > 0.58 ? "#FFFFFF" : C.ink;
+  const displayScale = Math.max(1, S / 680);
 
   return (
-    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>
-    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>
+    <div style={{ width: "100%", minWidth: 0, overflow: "hidden", paddingBottom: 4 }}>
+    <svg viewBox={"0 0 " + S + " " + S} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", maxWidth: 720, height: "auto", display: "block", margin: "0 auto" }}>
       {placed.map((pn, i) => {
         const p = points[i];
         return <line key={"c" + pn.name} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke={C.rule} strokeOpacity={0.48} strokeWidth={1} />;
@@ -68,14 +69,14 @@ function OpinionNetwork({ agg, onPick }) {
             onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onPick && onPick(pn); } }}>
             <title>{pn.name + " / " + pn.n + "件 / 熱量 " + Math.round(pn.hn * 100) + " / 感情 " + emoToPos(pn.emo)}</title>
             <circle cx={p.x} cy={p.y} r={r} fill={heatColor(pn.hn)} stroke={C.paper} strokeWidth={2.5} />
-            <text x={p.x} y={p.y + r + 13} textAnchor="middle" fontSize={12} fontWeight="700" fill={C.ink} fontFamily={FONT_BODY} style={{ pointerEvents: "none" }}>{pn.name}</text>
-            <text x={p.x} y={p.y + r + 26} textAnchor="middle" fontSize={10} fill={C.sub} fontFamily={FONT_MONO} style={{ pointerEvents: "none" }}>{pn.n + "件"}</text>
+            <text x={p.x} y={p.y + r + 13} textAnchor="middle" fontSize={Math.round(12 * displayScale)} fontWeight="700" fill={C.ink} fontFamily={FONT_BODY} style={{ pointerEvents: "none" }}>{pn.name}</text>
+            <text x={p.x} y={p.y + r + 26} textAnchor="middle" fontSize={Math.round(10 * displayScale)} fill={C.sub} fontFamily={FONT_MONO} style={{ pointerEvents: "none" }}>{pn.n + "件"}</text>
           </g>
         );
       })}
       <g>
         <rect x={cx - 38} y={cy - 22} width={76} height={44} rx={8} fill={C.bengara} stroke={C.paper} strokeWidth={2.5} />
-        <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="central" fontSize={17} fontWeight="700" fill="#FFFFFF" fontFamily={FONT_DISP}>全意見</text>
+        <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="central" fontSize={Math.round(17 * displayScale)} fontWeight="700" fill="#FFFFFF" fontFamily={FONT_DISP}>全意見</text>
       </g>
     </svg>
     </div>
