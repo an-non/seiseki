@@ -1,0 +1,80 @@
+name: Fix dashboard stats compatibility alias v2 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-tree-fit-dashboard-20260830
+    paths:
+      - .github/workflows/fix-dashboard-stats-alias-v2-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-tree-fit-dashboard-20260830
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+      - name: Apply alias and update route contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          let s=fs.readFileSync('core/ui.jsx','utf8');
+          const old='const VIEW_PATH_ALIASES = { "/app/network": "tree" };';
+          const neu='const VIEW_PATH_ALIASES = { "/app/network": "tree", "/app/stats": "dash" };';
+          if(!s.includes(old)) throw new Error('ui alias anchor mismatch');
+          fs.writeFileSync('core/ui.jsx',s.replace(old,neu));
+
+          let p=fs.readFileSync('tests/page-routing.test.mjs','utf8');
+          const pAnchor='  assert.doesNotMatch(ui, /path === "\\/app\\/dashboard"[^\\n]+return "home"/);';
+          if(!p.includes(pAnchor)) throw new Error('page route anchor mismatch');
+          p=p.replace(pAnchor,pAnchor+'\n  assert.match(ui, /"\\/app\\/stats": "dash"/);');
+          fs.writeFileSync('tests/page-routing.test.mjs',p);
+
+          let c=fs.readFileSync('tests/phase5-ui-contract.test.mjs','utf8');
+          const cOld='assert.ok(ui.includes(\'const VIEW_PATH_ALIASES = { "/app/network": "tree" };\'))';
+          const cNew='assert.ok(ui.includes(\'const VIEW_PATH_ALIASES = { "/app/network": "tree", "/app/stats": "dash" };\'))';
+          if(!c.includes(cOld)) throw new Error('phase5 alias contract anchor mismatch');
+          c=c.replace(cOld,cNew);
+          fs.writeFileSync('tests/phase5-ui-contract.test.mjs',c);
+          NODE
+          node scripts/build-app.mjs
+      - name: Full regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE="https://seiseki-api.tokyo-odh-129.workers.dev" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx tests/page-routing.test.mjs tests/phase5-ui-contract.test.mjs
+          git commit -m "Restore legacy stats route for dashboard"
+          git push origin HEAD:fix/mobile-tree-fit-dashboard-20260830
