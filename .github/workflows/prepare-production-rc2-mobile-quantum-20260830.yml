@@ -1,0 +1,104 @@
+name: Prepare production RC2 mobile quantum 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/prepare-production-rc2-mobile-quantum-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE_SHA: e1652c303868b9c20e476abc1888ba7388738b2f
+      TESTED_FIX_SHA: ca8b9326a096883247b64358ece4a932f43985fd
+      RC2_BRANCH: release/production-rc2-mobile-quantum-20260830
+    steps:
+      - name: Checkout RC2 branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/production-rc2-mobile-quantum-20260830
+          fetch-depth: 0
+
+      - name: Prove pristine RC1 base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git diff --exit-code
+
+      - name: Import only the staging-tested quantum source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin fix/mobile-quantum-touch-zoom-20260830
+          git checkout "$TESTED_FIX_SHA" -- local/chunk-network-entanglement-preview.html
+          git diff --name-only > /tmp/changed.txt
+          printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          test "$(git hash-object local/chunk-network-entanglement-preview.html)" = "$(git rev-parse "$TESTED_FIX_SHA":local/chunk-network-entanglement-preview.html)"
+          git show "$TESTED_FIX_SHA":tests/mobile-quantum-touch-zoom-contract.mjs > /tmp/mobile-quantum-contract.mjs
+          node /tmp/mobile-quantum-contract.mjs local/chunk-network-entanglement-preview.html
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Full regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Build and verify production bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VITE_SEISEKI_API_BASE="https://seiseki-api.tokyo-odh-129.workers.dev" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+          node /tmp/mobile-quantum-contract.mjs local/dist --built
+          node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+          cd cloudflare
+          npx wrangler deploy --dry-run --outdir /tmp/production-rc2-dry-run
+          test -d /tmp/production-rc2-dry-run
+
+      - name: Commit verified RC2 source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git diff --name-only > /tmp/final-changed.txt
+          printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected-final.txt
+          diff -u /tmp/expected-final.txt /tmp/final-changed.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add local/chunk-network-entanglement-preview.html
+          git commit -m "Fix mobile quantum selection and zoom in production RC2"
+          git push origin HEAD:"$RC2_BRANCH"
