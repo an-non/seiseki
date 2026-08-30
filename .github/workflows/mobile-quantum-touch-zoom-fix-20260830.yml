@@ -1,0 +1,104 @@
+name: Mobile quantum touch and zoom fix 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-quantum-touch-zoom-20260830
+    paths:
+      - .github/workflows/mobile-quantum-touch-zoom-fix-20260830.yml
+      - scripts/apply-mobile-quantum-touch-zoom-20260830.mjs
+      - tests/mobile-quantum-touch-zoom-contract.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-quantum-touch-zoom-20260830
+          fetch-depth: 0
+
+      - name: Prove branch base contains production RC1
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor e1652c303868b9c20e476abc1888ba7388738b2f HEAD
+
+      - name: Apply scoped quantum patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-quantum-touch-zoom-20260830.mjs
+          git diff --name-only > /tmp/changed.txt
+          printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Verify source interaction contract
+        shell: bash
+        run: node tests/mobile-quantum-touch-zoom-contract.mjs local/chunk-network-entanglement-preview.html
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run application regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+
+      - name: Build local app with quantum entry
+        working-directory: local
+        shell: bash
+        run: npm run build
+
+      - name: Verify built quantum contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s local/dist/quantum/chunk-network-entanglement-preview.html
+          node tests/mobile-quantum-touch-zoom-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+          node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+
+      - name: Commit tested source patch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git status --short
+          git diff --name-only > /tmp/final-changed.txt
+          printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected-final.txt
+          diff -u /tmp/expected-final.txt /tmp/final-changed.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add local/chunk-network-entanglement-preview.html
+          git commit -m "Fix mobile quantum node selection and zoom range"
+          git push origin HEAD:fix/mobile-quantum-touch-zoom-20260830
