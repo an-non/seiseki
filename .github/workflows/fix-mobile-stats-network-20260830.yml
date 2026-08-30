@@ -1,0 +1,156 @@
+name: Fix mobile stats and network 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-stats-network-20260830
+    paths:
+      - .github/workflows/fix-mobile-stats-network-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-stats-network-20260830
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+
+      - name: Patch canonical UI sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('core/ui.jsx')
+          s=p.read_text()
+
+          old='''      <Card>\n        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{q ? q.text : ""}</div>\n        <ResponsiveContainer width="100%" height={optOrder.length * 40 + 24}>\n          <BarChart data={barData} layout="vertical" margin={{ top: 4, right: 40, left: 4, bottom: 4 }}>'''
+          new='''      <Card>\n        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{q ? q.text : ""}</div>\n        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n          <div style={{ minWidth: 620 }}>\n        <ResponsiveContainer width="100%" height={optOrder.length * 40 + 24}>\n          <BarChart data={barData} layout="vertical" margin={{ top: 4, right: 40, left: 4, bottom: 4 }}>'''
+          if s.count(old)!=1: raise SystemExit('distribution opening target mismatch')
+          s=s.replace(old,new,1)
+
+          old='''          </BarChart>\n        </ResponsiveContainer>\n      </Card>\n\n      <H2 eyebrow="CROSS TAB"'''
+          new='''          </BarChart>\n        </ResponsiveContainer>\n          </div>\n        </div>\n      </Card>\n\n      <H2 eyebrow="CROSS TAB"'''
+          if s.count(old)!=1: raise SystemExit('distribution closing target mismatch')
+          s=s.replace(old,new,1)
+
+          old='''            <ResponsiveContainer width="100%" height={crossData.length * 42 + 34}>\n              <BarChart data={crossData} layout="vertical" margin={{ top: 4, right: 14, left: 4, bottom: 4 }}>'''
+          new='''            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n              <div style={{ minWidth: 720 }}>\n            <ResponsiveContainer width="100%" height={crossData.length * 42 + 34}>\n              <BarChart data={crossData} layout="vertical" margin={{ top: 4, right: 14, left: 4, bottom: 4 }}>'''
+          if s.count(old)!=1: raise SystemExit('cross opening target mismatch')
+          s=s.replace(old,new,1)
+
+          old='''              </BarChart>\n            </ResponsiveContainer>\n          </div>\n        )}'''
+          new='''              </BarChart>\n            </ResponsiveContainer>\n              </div>\n            </div>\n          </div>\n        )}'''
+          if s.count(old)!=1: raise SystemExit('cross closing target mismatch')
+          s=s.replace(old,new,1)
+
+          old='''  const gp = selOpt ? paramView(qa.params[selOpt]) : null;\n  const selColor = (q && q.id === ANCHOR_QID && SUP_COLORS[selOpt]) || C.green;'''
+          new='''  const groupOpt = selOpt || optOrder.find(o => (qa.counts[o] || 0) > 0) || "";\n  const gp = groupOpt ? paramView(qa.params[groupOpt]) : null;\n  const selColor = (q && q.id === ANCHOR_QID && SUP_COLORS[groupOpt]) || C.green;'''
+          if s.count(old)!=1: raise SystemExit('group option target mismatch')
+          s=s.replace(old,new,1)
+          s=s.replace('active={selOpt === o} count={qa.counts[o] || 0}', 'active={groupOpt === o} count={qa.counts[o] || 0}', 1)
+          s=s.replace('name={"「" + selOpt + "」グループ"}', 'name={"「" + groupOpt + "」グループ"}', 1)
+          s=s.replace('「{selOpt}」グループの平均', '「{groupOpt}」グループの平均', 1)
+          s=s.replace(') : selOpt ? (\n        <Card pad={14}><div style={{ fontSize: 13, color: C.sub }}>「{selOpt}」にはまだ解析済みの回答がありません。</div></Card>', ') : groupOpt ? (\n        <Card pad={14}><div style={{ fontSize: 13, color: C.sub }}>「{groupOpt}」にはまだ解析済みの回答がありません。</div></Card>', 1)
+
+          # Keep the time-series chart inside its own scroll boundary too.
+          marker='<ResponsiveContainer width="100%" height={300}>\n              <LineChart data={tr}'
+          if marker in s:
+              s=s.replace(marker, '<div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n            <div style={{ minWidth: 720 }}>\n            <ResponsiveContainer width="100%" height={300}>\n              <LineChart data={tr}', 1)
+              close='''              </LineChart>\n            </ResponsiveContainer>'''
+              if s.count(close)<1: raise SystemExit('time series closing target mismatch')
+              s=s.replace(close, '''              </LineChart>\n            </ResponsiveContainer>\n            </div>\n          </div>''', 1)
+
+          p.write_text(s)
+
+          p=Path('core/opinion-network.jsx')
+          s=p.read_text()
+          old='''  const [phase, setPhase] = useState(0);\n  const [motion] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);\n  const placed = useMemo(() => networkLayout(data.nodes, 340, 340, 104, 274), [data]);'''
+          new='''  const [phase, setPhase] = useState(0);\n  const [motion] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);\n  const networkSize = Math.max(680, Math.min(1200, 680 + Math.max(0, data.nodes.length - 12) * 18));\n  const networkOuterRadius = networkSize / 2 - 70;\n  const networkInnerRadius = Math.max(104, networkOuterRadius * 0.38);\n  const placed = useMemo(() => networkLayout(data.nodes, networkSize / 2, networkSize / 2, networkInnerRadius, networkOuterRadius), [data, networkSize, networkInnerRadius, networkOuterRadius]);'''
+          if s.count(old)!=1: raise SystemExit('network layout target mismatch')
+          s=s.replace(old,new,1)
+          s=s.replace('const S = 680, cx = S / 2, cy = S / 2;', 'const S = networkSize, cx = S / 2, cy = S / 2;', 1)
+          old='''  return (\n    <svg viewBox={"0 0 " + S + " " + S} style={{ width: "100%", maxWidth: 680, height: "auto", display: "block", margin: "0 auto" }}>'''
+          new='''  return (\n    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>'''
+          if s.count(old)!=1: raise SystemExit('network svg opening target mismatch')
+          s=s.replace(old,new,1)
+          old='''    </svg>\n  );'''
+          new='''    </svg>\n    </div>\n  );'''
+          if s.count(old)!=1: raise SystemExit('network svg closing target mismatch')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git diff --check
+
+      - name: Add focused contract test
+        shell: bash
+        run: |
+          cat > /tmp/mobile-stats-network-contract.mjs <<'NODE'
+          import fs from 'node:fs';
+          const ui=fs.readFileSync('core/ui.jsx','utf8');
+          const net=fs.readFileSync('core/opinion-network.jsx','utf8');
+          const req=[
+            ['distribution mobile width', ui.includes('minWidth: 620')],
+            ['cross mobile width', ui.includes('minWidth: 720')],
+            ['touch scrolling', (ui.match(/WebkitOverflowScrolling: "touch"/g)||[]).length >= 3],
+            ['default group option', ui.includes('const groupOpt = selOpt || optOrder.find')],
+            ['network dynamic size', net.includes('data.nodes.length - 12')],
+            ['network dynamic outer radius', net.includes('networkOuterRadius')],
+            ['network scroll surface', net.includes('width: S, maxWidth: "none"')]
+          ];
+          for (const [name, ok] of req) { if(!ok) throw new Error(name); console.log('ok',name); }
+          NODE
+          node /tmp/mobile-stats-network-contract.mjs
+
+      - name: Install and regenerate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node scripts/build-app.mjs
+
+      - name: Full regression and production build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node /tmp/mobile-stats-network-contract.mjs
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE="https://seiseki-api.tokyo-odh-129.workers.dev" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+
+      - name: Commit source-only fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/node_modules local/dist cloudflare/node_modules
+          git diff --check
+          git diff --name-only | sort > /tmp/changed.txt
+          printf '%s\n' app/seiseki.jsx core/opinion-network.jsx core/ui.jsx local/src/App.jsx | sort > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/seiseki.jsx core/opinion-network.jsx core/ui.jsx local/src/App.jsx
+          git commit -m 'Improve mobile stats and scale opinion network'
+          git push origin HEAD:fix/mobile-stats-network-20260830
