@@ -1,0 +1,72 @@
+name: Diagnose production dashboard browser 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-tree-fit-dashboard-20260830
+    paths:
+      - .github/workflows/diagnose-production-dashboard-browser-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/seiseki-browser-diag
+          cd /tmp/seiseki-browser-diag
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Execute production dashboard and capture runtime errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/seiseki-browser-diag
+          cat > diag.mjs <<'EOF'
+          import { chromium } from 'playwright';
+          const url = 'https://seiseki-api.tokyo-odh-129.workers.dev/app/dashboard?rev=browser-diag-' + Date.now();
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+          const errors = [];
+          page.on('pageerror', error => {
+            const line = 'PAGEERROR ' + String(error && error.stack || error);
+            errors.push(line); console.log(line);
+          });
+          page.on('console', msg => {
+            if (msg.type() === 'error') {
+              const line = 'CONSOLEERROR ' + msg.text();
+              errors.push(line); console.log(line);
+            }
+          });
+          page.on('requestfailed', req => console.log('REQUESTFAILED ' + req.url() + ' ' + (req.failure()?.errorText || '')));
+          const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          console.log('HTTP', response?.status(), response?.url());
+          await page.waitForTimeout(10000);
+          console.log('TITLE', await page.title());
+          console.log('BODY', (await page.locator('body').innerText()).slice(0, 5000).replace(/\n/g, ' | '));
+          console.log('HTML_BYTES', (await page.content()).length);
+          await page.screenshot({ path: '/tmp/dashboard.png', fullPage: true });
+          await browser.close();
+          console.log('ERROR_COUNT', errors.length);
+          if (errors.length) process.exitCode = 2;
+          EOF
+          node diag.mjs
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-dashboard-browser-diagnosis
+          path: /tmp/dashboard.png
+          if-no-files-found: ignore
