@@ -9,7 +9,10 @@ function OpinionNetwork({ agg, onPick }) {
   const data = useMemo(() => opinionNetwork(agg), [agg]);
   const [phase, setPhase] = useState(0);
   const [motion] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const placed = useMemo(() => networkLayout(data.nodes, 340, 340, 104, 274), [data]);
+  const networkSize = Math.max(680, Math.min(1200, 680 + Math.max(0, data.nodes.length - 12) * 18));
+  const networkOuterRadius = networkSize / 2 - 70;
+  const networkInnerRadius = Math.max(104, networkOuterRadius * 0.38);
+  const placed = useMemo(() => networkLayout(data.nodes, networkSize / 2, networkSize / 2, networkInnerRadius, networkOuterRadius), [data, networkSize, networkInnerRadius, networkOuterRadius]);
 
   useEffect(() => {
     if (!motion || typeof requestAnimationFrame !== "function") return undefined;
@@ -27,7 +30,7 @@ function OpinionNetwork({ agg, onPick }) {
     return <div style={{ minHeight: 150, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 18, fontSize: 13, color: C.sub, lineHeight: 1.9 }}>意見ネットワークに使える意見チャンクがありません。</div>;
   }
 
-  const S = 680, cx = S / 2, cy = S / 2;
+  const S = networkSize, cx = S / 2, cy = S / 2;
   const pos = {};
   const pointFor = (pn, index) => {
     const base = opinionNodeSeed(pn.name) * Math.PI * 2;
@@ -46,7 +49,8 @@ function OpinionNetwork({ agg, onPick }) {
   const textColor = pn => pn.hn > 0.58 ? "#FFFFFF" : C.ink;
 
   return (
-    <svg viewBox={"0 0 " + S + " " + S} style={{ width: "100%", maxWidth: 680, height: "auto", display: "block", margin: "0 auto" }}>
+    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>
+    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>
       {placed.map((pn, i) => {
         const p = points[i];
         return <line key={"c" + pn.name} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke={C.rule} strokeOpacity={0.48} strokeWidth={1} />;
@@ -74,5 +78,6 @@ function OpinionNetwork({ agg, onPick }) {
         <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="central" fontSize={17} fontWeight="700" fill="#FFFFFF" fontFamily={FONT_DISP}>全意見</text>
       </g>
     </svg>
+    </div>
   );
 }

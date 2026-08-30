@@ -1507,7 +1507,10 @@ function OpinionNetwork({ agg, onPick }) {
   const data = useMemo(() => opinionNetwork(agg), [agg]);
   const [phase, setPhase] = useState(0);
   const [motion] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const placed = useMemo(() => networkLayout(data.nodes, 340, 340, 104, 274), [data]);
+  const networkSize = Math.max(680, Math.min(1200, 680 + Math.max(0, data.nodes.length - 12) * 18));
+  const networkOuterRadius = networkSize / 2 - 70;
+  const networkInnerRadius = Math.max(104, networkOuterRadius * 0.38);
+  const placed = useMemo(() => networkLayout(data.nodes, networkSize / 2, networkSize / 2, networkInnerRadius, networkOuterRadius), [data, networkSize, networkInnerRadius, networkOuterRadius]);
 
   useEffect(() => {
     if (!motion || typeof requestAnimationFrame !== "function") return undefined;
@@ -1525,7 +1528,7 @@ function OpinionNetwork({ agg, onPick }) {
     return <div style={{ minHeight: 150, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 18, fontSize: 13, color: C.sub, lineHeight: 1.9 }}>意見ネットワークに使える意見チャンクがありません。</div>;
   }
 
-  const S = 680, cx = S / 2, cy = S / 2;
+  const S = networkSize, cx = S / 2, cy = S / 2;
   const pos = {};
   const pointFor = (pn, index) => {
     const base = opinionNodeSeed(pn.name) * Math.PI * 2;
@@ -1544,7 +1547,8 @@ function OpinionNetwork({ agg, onPick }) {
   const textColor = pn => pn.hn > 0.58 ? "#FFFFFF" : C.ink;
 
   return (
-    <svg viewBox={"0 0 " + S + " " + S} style={{ width: "100%", maxWidth: 680, height: "auto", display: "block", margin: "0 auto" }}>
+    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>
+    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>
       {placed.map((pn, i) => {
         const p = points[i];
         return <line key={"c" + pn.name} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke={C.rule} strokeOpacity={0.48} strokeWidth={1} />;
@@ -1572,6 +1576,7 @@ function OpinionNetwork({ agg, onPick }) {
         <text x={cx} y={cy + 1} textAnchor="middle" dominantBaseline="central" fontSize={17} fontWeight="700" fill="#FFFFFF" fontFamily={FONT_DISP}>全意見</text>
       </g>
     </svg>
+    </div>
   );
 }
 
@@ -4281,8 +4286,9 @@ function Dashboard({ agg, questions, goto }) {
   for (const k of Object.keys(qa.counts)) { if (optOrder.indexOf(k) < 0) optOrder.push(k); }
   const barData = optOrder.map(o => ({ name: o, 回答数: qa.counts[o] || 0 }));
 
-  const gp = selOpt ? paramView(qa.params[selOpt]) : null;
-  const selColor = (q && q.id === ANCHOR_QID && SUP_COLORS[selOpt]) || C.green;
+  const groupOpt = selOpt || optOrder.find(o => (qa.counts[o] || 0) > 0) || "";
+  const gp = groupOpt ? paramView(qa.params[groupOpt]) : null;
+  const selColor = (q && q.id === ANCHOR_QID && SUP_COLORS[groupOpt]) || C.green;
   const radarData = gp ? [
     { k: "感情ポジ度", グループ: gp.emoPos, 全体: emoToPos(ov.emo) },
     { k: "妥当性", グループ: gp.valid, 全体: Math.round(ov.valid) },
@@ -4358,9 +4364,9 @@ function Dashboard({ agg, questions, goto }) {
           </Chip>
         ))}
       </div>
-      <Card>
+      <Card style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{q ? q.text : ""}</div>
-        <ResponsiveContainer width="100%" height={optOrder.length * 40 + 24}>
+        <ResponsiveContainer width="100%" minWidth={620} height={optOrder.length * 40 + 24}>
           <BarChart data={barData} layout="vertical" margin={{ top: 4, right: 40, left: 4, bottom: 4 }}>
             <XAxis type="number" hide allowDecimals={false} />
             <YAxis type="category" dataKey="name" width={148} tick={{ fontSize: 11, fill: C.ink }} axisLine={{ stroke: C.rule }} tickLine={false} />
@@ -4380,7 +4386,7 @@ function Dashboard({ agg, questions, goto }) {
           <Chip key={k} active={crossField === k} onClick={() => setCrossField(k)}>{DEMO_LABELS[k]}</Chip>
         ))}
       </div>
-      <Card>
+      <Card style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
         {!hasCross ? (
           <div style={{ fontSize: 13, color: C.sub }}>
             この集計は旧バージョンのデータです。管理タブの「集計を再構築」を実行すると、既存の回答からクロス集計が生成されます。
@@ -4397,7 +4403,7 @@ function Dashboard({ agg, questions, goto }) {
                 </span>
               ))}
             </div>
-            <ResponsiveContainer width="100%" height={crossData.length * 42 + 34}>
+            <ResponsiveContainer width="100%" minWidth={720} height={crossData.length * 42 + 34}>
               <BarChart data={crossData} layout="vertical" margin={{ top: 4, right: 14, left: 4, bottom: 4 }}>
                 <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 10, fill: C.sub, fontFamily: FONT_MONO }} tickFormatter={v => v + "%"} axisLine={{ stroke: C.rule }} tickLine={false} />
                 <YAxis type="category" dataKey="name" width={148} tick={{ fontSize: 11, fill: C.ink }} axisLine={{ stroke: C.rule }} tickLine={false} />
@@ -4418,7 +4424,7 @@ function Dashboard({ agg, questions, goto }) {
       <H2 eyebrow="GROUP PARAMS" sub="選択肢を選ぶと、そのグループの平均パラメータを全体平均と比較します(例:「支持しない」人の統計)">回答グループ別パラメータ</H2>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         {optOrder.map(o => (
-          <Chip key={o} active={selOpt === o} count={qa.counts[o] || 0} onClick={() => setSelOpt(selOpt === o ? "" : o)}>{o}</Chip>
+          <Chip key={o} active={groupOpt === o} count={qa.counts[o] || 0} onClick={() => setSelOpt(selOpt === o ? "" : o)}>{o}</Chip>
         ))}
       </div>
       {gp ? (
@@ -4429,7 +4435,7 @@ function Dashboard({ agg, questions, goto }) {
                 <PolarGrid stroke={C.rule} />
                 <PolarAngleAxis dataKey="k" tick={{ fontSize: 11, fill: C.ink }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: C.sub }} tickCount={5} stroke={C.rule} />
-                <Radar name={"「" + selOpt + "」グループ"} dataKey="グループ" stroke={selColor} fill={selColor} fillOpacity={0.3} />
+                <Radar name={"「" + groupOpt + "」グループ"} dataKey="グループ" stroke={selColor} fill={selColor} fillOpacity={0.3} />
                 <Radar name="全体平均" dataKey="全体" stroke={C.gray} fill={C.gray} fillOpacity={0.15} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
               </RadarChart>
@@ -4437,7 +4443,7 @@ function Dashboard({ agg, questions, goto }) {
           </Card>
           <Card>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-              「{selOpt}」グループの平均 <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.sub }}>n={gp.n}(解析済み回答)</span>
+              「{groupOpt}」グループの平均 <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.sub }}>n={gp.n}(解析済み回答)</span>
             </div>
             <MeterBar label="感情ポジ度" value={gp.emoPos} color={emoColor((gp.emoPos - 50) / 50)} />
             <MeterBar label="妥当性" value={gp.valid} />
@@ -4446,8 +4452,8 @@ function Dashboard({ agg, questions, goto }) {
             <div style={{ fontSize: 11, color: C.sub, marginTop: 6 }}>グレーの薄い面は全体平均(n={ov.n})との比較です。</div>
           </Card>
         </div>
-      ) : selOpt ? (
-        <Card pad={14}><div style={{ fontSize: 13, color: C.sub }}>「{selOpt}」にはまだ解析済みの回答がありません。</div></Card>
+      ) : groupOpt ? (
+        <Card pad={14}><div style={{ fontSize: 13, color: C.sub }}>「{groupOpt}」にはまだ解析済みの回答がありません。</div></Card>
       ) : (
         <Card pad={14}><div style={{ fontSize: 13, color: C.sub }}>上の選択肢チップから比較したいグループを選んでください。</div></Card>
       )}
