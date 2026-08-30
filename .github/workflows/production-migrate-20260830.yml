@@ -1,0 +1,147 @@
+name: Production D1 migration 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-migrate-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RC_SHA: f2b9d0a6b3642f4c3b064f64c47c13726cc8127c
+      EXPECTED_DB_ID: 8ad5e023-3588-490c-ba61-3f180f8b2887
+    steps:
+      - name: Checkout exact application RC
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact RC
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC_SHA"
+          node - <<'NODE'
+          const fs=require('fs');const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          if(c.d1_databases?.[0]?.database_name!=='seiseki-db'||c.d1_databases?.[0]?.database_id!==process.env.EXPECTED_DB_ID)throw new Error('production D1 config mismatch');
+          NODE
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - name: Install Wrangler
+        shell: bash
+        run: npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Revalidate production D1 immediately before migration
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CLOUDFLARE_API_TOKEN:-}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+          npx wrangler d1 list --json > /tmp/d1-list.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/d1-list.json','utf8'));
+          const hit=(Array.isArray(x)?x:[]).find(v=>v?.name==='seiseki-db');const id=hit?.uuid||hit?.id||'';
+          if(id!==process.env.EXPECTED_DB_ID)throw new Error(`D1 identity mismatch ${id}`);
+          console.log(`production D1 identity PASS ${id}`);
+          NODE
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations-before.txt
+          grep -oE '000[0-9]_[A-Za-z0-9_.-]+\.sql' /tmp/migrations-before.txt | sort -u > /tmp/pending-before.txt || true
+          printf '%s\n' 0006_response_access_revision.sql 0007_response_updated_at.sql 0008_questionnaire_seven_structured.sql 0008_response_follow_up_text.sql > /tmp/expected-pending.txt
+          diff -u /tmp/expected-pending.txt /tmp/pending-before.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS n FROM accounts; SELECT COUNT(*) AS n FROM responses; SELECT COUNT(*) AS n FROM account_responses; SELECT COUNT(*) AS n FROM analysis_runs; SELECT COUNT(*) AS n FROM opinion_chunks; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='response_access'; SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name;" --json > /tmp/before.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/before.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];const scalar=(i,k='n')=>Number(rows(i)?.[0]?.[k]??NaN);
+          const counts=[0,1,2,3,4].map(i=>scalar(i));
+          if(counts.some(v=>!Number.isFinite(v)))throw new Error('row count query malformed');
+          if(counts.some(v=>v!==0))throw new Error(`production D1 no longer empty: ${JSON.stringify(counts)}`);
+          if(scalar(5,'duplicate_groups')!==0)throw new Error('duplicate account response ownership exists');
+          if(rows(6).length)throw new Error(`foreign key violations ${rows(6).length}`);
+          if(scalar(7)!==0||rows(8).length!==0)throw new Error('partial post-0005 schema detected');
+          console.log('pre-migration integrity PASS');
+          NODE
+
+      - name: Capture D1 Time Travel checkpoint
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 time-travel info seiseki-db > /tmp/time-travel-before.txt
+          test -s /tmp/time-travel-before.txt
+          sed -E 's/[0-9a-f]{32,}/[bookmark-redacted]/g' /tmp/time-travel-before.txt
+
+      - name: Apply exactly the pending production migrations
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations apply seiseki-db --remote | tee /tmp/migrations-apply.txt
+
+      - name: Verify migration ledger and production schema
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations-after.txt
+          if grep -qE '0006_response_access_revision|0007_response_updated_at|0008_questionnaire_seven_structured|0008_response_follow_up_text' /tmp/migrations-after.txt; then
+            echo 'one or more expected migrations remain pending' >&2
+            exit 71
+          fi
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='response_access'; SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at','follow_up_text') ORDER BY name; SELECT name FROM sqlite_master WHERE type='index' AND name IN ('account_responses_account_unique','analysis_runs_response_revision_running_unique') ORDER BY name; SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check; SELECT value_json FROM app_config WHERE key='questions'; SELECT COUNT(*) AS n FROM accounts; SELECT COUNT(*) AS n FROM responses; SELECT COUNT(*) AS n FROM account_responses; SELECT COUNT(*) AS n FROM analysis_runs; SELECT COUNT(*) AS n FROM opinion_chunks;" --json > /tmp/after.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/after.json','utf8'));const rows=i=>x?.[i]?.results||x?.[i]?.result||[];const scalar=(i,k='n')=>Number(rows(i)?.[0]?.[k]??NaN);
+          if(scalar(0)!==1)throw new Error('response_access table missing');
+          const cols=rows(1).map(r=>r.name).sort();for(const n of ['follow_up_text','revision','updated_at'])if(!cols.includes(n))throw new Error(`missing responses column ${n}`);
+          const idx=rows(2).map(r=>r.name).sort();for(const n of ['account_responses_account_unique','analysis_runs_response_revision_running_unique'])if(!idx.includes(n))throw new Error(`missing index ${n}`);
+          if(scalar(3,'duplicate_groups')!==0)throw new Error('duplicate ownership after migration');
+          if(rows(4).length)throw new Error(`foreign key violations after migration ${rows(4).length}`);
+          const raw=String(rows(5)?.[0]?.value_json||'');if(!raw)throw new Error('questions config missing');
+          const questions=JSON.parse(raw);if(!Array.isArray(questions)||questions.filter(q=>q?.type!=='free').length!==7)throw new Error(`expected seven structured questions, got ${Array.isArray(questions)?questions.filter(q=>q?.type!=='free').length:'non-array'}`);
+          const counts=[6,7,8,9,10].map(i=>scalar(i));if(counts.some(v=>v!==0))throw new Error(`unexpected production rows after migration ${JSON.stringify(counts)}`);
+          console.log(JSON.stringify({schema:'PASS',indexes:'PASS',foreignKeys:0,duplicates:0,structuredQuestions:7,counts}));
+          NODE
+
+      - name: Migration summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### SEISEKI production D1 migration'
+            echo "- application RC: \`$RC_SHA\`"
+            echo '- target: `seiseki-db` only'
+            echo '- migrations: 0006, 0007, 0008 questionnaire, 0008 follow-up'
+            echo '- Worker deploy: not performed'
+            echo '- Queue changes: not performed'
+            echo '- next gate on success: exact-RC production Worker/UI deploy'
+          } >> "$GITHUB_STEP_SUMMARY"
