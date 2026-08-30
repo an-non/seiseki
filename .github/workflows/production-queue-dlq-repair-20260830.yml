@@ -66,7 +66,8 @@ jobs:
           const fs = require('fs');
           const x = JSON.parse(fs.readFileSync('/tmp/consumers-before.json','utf8'));
           if (!x.success) throw new Error(`consumer list failed: ${JSON.stringify(x.errors)}`);
-          const all = x.result || [];
+          const all = Array.isArray(x.result) ? x.result : Array.isArray(x.result?.consumers) ? x.result.consumers : [];
+          console.log(JSON.stringify(all.map(v => ({consumer_id:v.consumer_id,type:v.type,script_name:v.script_name,dead_letter_queue:v.dead_letter_queue,settings:v.settings}))));
           const matches = all.filter(v => v.type === 'worker' && v.script_name === process.env.SCRIPT_NAME);
           if (matches.length !== 1) throw new Error(`expected exactly one ${process.env.SCRIPT_NAME} consumer, got ${matches.length}`);
           const c = matches[0];
@@ -167,7 +168,8 @@ jobs:
           if (!q.success || !(q.result||[]).some(v=>v.queue_name===process.env.DLQ_NAME)) throw new Error('production DLQ missing after repair');
           const x=JSON.parse(fs.readFileSync('/tmp/consumers-after.json','utf8'));
           if (!x.success) throw new Error('consumer verification list failed');
-          const c=(x.result||[]).find(v=>v.type==='worker' && v.script_name===process.env.SCRIPT_NAME);
+          const all = Array.isArray(x.result) ? x.result : Array.isArray(x.result?.consumers) ? x.result.consumers : [];
+          const c=all.find(v=>v.type==='worker' && v.script_name===process.env.SCRIPT_NAME);
           if (!c || c.dead_letter_queue!==process.env.DLQ_NAME) throw new Error('production consumer DLQ verification failed');
           console.log(JSON.stringify({queue:process.env.QUEUE_NAME, consumer:c.script_name, dlq:c.dead_letter_queue, settings:c.settings}));
           NODE
