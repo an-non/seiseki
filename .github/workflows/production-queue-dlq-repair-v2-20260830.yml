@@ -1,0 +1,167 @@
+name: Production queue DLQ repair v2 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-queue-dlq-repair-v2-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      QUEUE_NAME: seiseki-analysis
+      DLQ_NAME: seiseki-analysis-dlq
+      SCRIPT_NAME: seiseki-api
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      EXPECTED_CONSUMER_ID: f5c011d7c7d640709a044ace2edf664d
+    steps:
+      - name: Checkout exact application RC
+        uses: actions/checkout@v4
+        with:
+          ref: f2b9d0a6b3642f4c3b064f64c47c13726cc8127c
+          fetch-depth: 0
+
+      - name: Verify local production Queue declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const c=JSON.parse(fs.readFileSync('cloudflare/wrangler.jsonc','utf8'));
+          const q=c.queues?.consumers?.filter(x=>x.queue===process.env.QUEUE_NAME) || [];
+          if (q.length !== 1) throw new Error(`expected one local production consumer, got ${q.length}`);
+          const x=q[0];
+          if (x.dead_letter_queue !== process.env.DLQ_NAME) throw new Error('local DLQ declaration mismatch');
+          if (Number(x.max_batch_size)!==3 || Number(x.max_batch_timeout)!==2 || Number(x.max_retries)!==3 || Number(x.max_concurrency)!==1 || Number(x.retry_delay)!==10) throw new Error(`local queue settings mismatch: ${JSON.stringify(x)}`);
+          console.log('local production Queue declaration PASS');
+          NODE
+
+      - name: Read and hard-guard remote Queue consumer
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CF_TOKEN:-}"
+          test -n "${CF_ACCOUNT_ID:-}"
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" \
+            -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/queues.json
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" \
+            -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const q=JSON.parse(fs.readFileSync('/tmp/queues.json','utf8'));
+          if (!q.success) throw new Error(`queue list failed: ${JSON.stringify(q.errors)}`);
+          const prod=(q.result||[]).filter(x=>x.queue_name===process.env.QUEUE_NAME);
+          if (prod.length!==1 || prod[0].queue_id!==process.env.EXPECTED_QUEUE_ID) throw new Error(`production Queue identity drift: ${JSON.stringify(prod)}`);
+          const existingDlq=(q.result||[]).filter(x=>x.queue_name===process.env.DLQ_NAME);
+          if (existingDlq.length>1) throw new Error('multiple production DLQs with same name');
+          const r=JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));
+          if (!r.success) throw new Error(`consumer list failed: ${JSON.stringify(r.errors)}`);
+          const all=Array.isArray(r.result)?r.result:Array.isArray(r.result?.consumers)?r.result.consumers:[];
+          if (all.length!==1) throw new Error(`expected exactly one production Queue consumer, got ${all.length}`);
+          const c=all[0];
+          if (c.type!=='worker' || c.consumer_id!==process.env.EXPECTED_CONSUMER_ID) throw new Error(`consumer identity drift: ${JSON.stringify(c)}`);
+          const s=c.settings||{};
+          if (Number(s.batch_size)!==3 || Number(s.max_retries)!==3 || Number(s.max_wait_time_ms)!==2000 || Number(s.max_concurrency)!==1 || Number(s.retry_delay)!==10) throw new Error(`remote consumer settings drift: ${JSON.stringify(s)}`);
+          fs.writeFileSync('/tmp/remote-consumer.json',JSON.stringify(c));
+          console.log(JSON.stringify({queueId:prod[0].queue_id,consumerId:c.consumer_id,type:c.type,settings:s,dlqExists:existingDlq.length===1}));
+          NODE
+
+      - name: Create missing production DLQ
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node - <<'NODE'
+          const fs=require('fs');const q=JSON.parse(fs.readFileSync('/tmp/queues.json','utf8'));
+          process.exit((q.result||[]).some(x=>x.queue_name===process.env.DLQ_NAME)?0:1);
+          NODE
+          then
+            echo 'production DLQ already exists'
+          else
+            curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer ${CF_TOKEN}" \
+              --data "{\"queue_name\":\"${DLQ_NAME}\"}" > /tmp/create-dlq.json
+            node - <<'NODE'
+            const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/create-dlq.json','utf8'));
+            if(!x.success||x.result?.queue_name!==process.env.DLQ_NAME) throw new Error(`DLQ create failed: ${JSON.stringify(x.errors)}`);
+            console.log(`created ${x.result.queue_name}`);
+            NODE
+          fi
+
+      - name: Attach DLQ to the unique guarded consumer
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/update.json <<EOF
+          {"script_name":"${SCRIPT_NAME}","type":"worker","dead_letter_queue":"${DLQ_NAME}","settings":{"batch_size":3,"max_concurrency":1,"max_retries":3,"max_wait_time_ms":2000,"retry_delay":10}}
+          EOF
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers/${EXPECTED_CONSUMER_ID}" \
+            -X PUT \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer ${CF_TOKEN}" \
+            --data-binary @/tmp/update.json > /tmp/update-result.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/update-result.json','utf8'));
+          if(!x.success) throw new Error(`consumer update failed: ${JSON.stringify(x.errors)}`);
+          const c=x.result||{};
+          if(c.consumer_id!==process.env.EXPECTED_CONSUMER_ID) throw new Error('consumer id changed unexpectedly');
+          if(c.dead_letter_queue!==process.env.DLQ_NAME) throw new Error(`DLQ not attached: ${JSON.stringify(c)}`);
+          const s=c.settings||{};
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10) throw new Error(`settings drift after update: ${JSON.stringify(s)}`);
+          console.log(JSON.stringify({consumerId:c.consumer_id,script:c.script_name,dlq:c.dead_letter_queue,settings:s}));
+          NODE
+
+      - name: Verify production Queue and DLQ after repair
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/queues-after.json
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers/${EXPECTED_CONSUMER_ID}" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumer-after.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const q=JSON.parse(fs.readFileSync('/tmp/queues-after.json','utf8'));
+          if(!q.success||(q.result||[]).filter(x=>x.queue_name===process.env.DLQ_NAME).length!==1) throw new Error('production DLQ verification failed');
+          const x=JSON.parse(fs.readFileSync('/tmp/consumer-after.json','utf8'));
+          if(!x.success) throw new Error(`consumer GET failed: ${JSON.stringify(x.errors)}`);
+          const c=x.result||{};
+          if(c.consumer_id!==process.env.EXPECTED_CONSUMER_ID||c.dead_letter_queue!==process.env.DLQ_NAME) throw new Error(`consumer DLQ verification failed: ${JSON.stringify(c)}`);
+          console.log('production Queue/DLQ repair PASS');
+          NODE
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Production Queue DLQ repair v2'
+            echo
+            echo '- Queue: `seiseki-analysis`'
+            echo '- consumer: one guarded Worker consumer only'
+            echo '- DLQ: `seiseki-analysis-dlq`'
+            echo '- D1: untouched'
+            echo '- application Worker code: not deployed'
+          } >> "$GITHUB_STEP_SUMMARY"
