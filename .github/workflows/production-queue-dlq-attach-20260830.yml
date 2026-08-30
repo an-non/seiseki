@@ -1,0 +1,133 @@
+name: Production Queue DLQ attach 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-queue-dlq-attach-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      QUEUE_NAME: seiseki-analysis
+      DLQ_NAME: seiseki-analysis-dlq
+      SCRIPT_NAME: seiseki-api
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      EXPECTED_CONSUMER_ID: f5c011d7c7d640709a044ace2edf664d
+    steps:
+      - name: Checkout exact application RC
+        uses: actions/checkout@v4
+        with:
+          ref: f2b9d0a6b3642f4c3b064f64c47c13726cc8127c
+          fetch-depth: 0
+
+      - name: Guard exact Queue DLQ and consumer identities
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CF_TOKEN:-}"
+          test -n "${CF_ACCOUNT_ID:-}"
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/queues.json
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const q=JSON.parse(fs.readFileSync('/tmp/queues.json','utf8'));
+          if(!q.success)throw new Error(JSON.stringify(q.errors));
+          const prod=(q.result||[]).filter(x=>x.queue_name===process.env.QUEUE_NAME);
+          const dlq=(q.result||[]).filter(x=>x.queue_name===process.env.DLQ_NAME);
+          if(prod.length!==1||prod[0].queue_id!==process.env.EXPECTED_QUEUE_ID)throw new Error(`queue identity drift ${JSON.stringify(prod)}`);
+          if(dlq.length!==1)throw new Error(`expected one production DLQ, got ${dlq.length}`);
+          const r=JSON.parse(fs.readFileSync('/tmp/consumers.json','utf8'));
+          if(!r.success)throw new Error(JSON.stringify(r.errors));
+          const all=Array.isArray(r.result)?r.result:[];
+          if(all.length!==1)throw new Error(`consumer count drift ${all.length}`);
+          const c=all[0],s=c.settings||{};
+          if(c.type!=='worker'||c.consumer_id!==process.env.EXPECTED_CONSUMER_ID)throw new Error(`consumer identity drift ${JSON.stringify(c)}`);
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`consumer settings drift ${JSON.stringify(s)}`);
+          console.log(JSON.stringify({queueId:prod[0].queue_id,dlqId:dlq[0].queue_id,consumerId:c.consumer_id,settings:s}));
+          NODE
+
+      - name: Generate validated consumer update JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');
+          const body={
+            script_name:process.env.SCRIPT_NAME,
+            type:'worker',
+            dead_letter_queue:process.env.DLQ_NAME,
+            settings:{batch_size:3,max_concurrency:1,max_retries:3,max_wait_time_ms:2000,retry_delay:10}
+          };
+          const text=JSON.stringify(body);
+          JSON.parse(text);
+          fs.writeFileSync('/tmp/update.json',text);
+          console.log(text);
+          NODE
+          node -e "JSON.parse(require('fs').readFileSync('/tmp/update.json','utf8'));console.log('update JSON parse PASS')"
+
+      - name: Attach DLQ with Cloudflare consumer update API
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          HTTP_CODE="$(curl -sS -o /tmp/update-result.json -w '%{http_code}' "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers/${EXPECTED_CONSUMER_ID}" -X PUT -H 'Content-Type: application/json' -H "Authorization: Bearer ${CF_TOKEN}" --data-binary @/tmp/update.json)"
+          if [ "$HTTP_CODE" != 200 ]; then
+            echo "consumer update HTTP ${HTTP_CODE}" >&2
+            node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/update-result.json','utf8'));console.error(JSON.stringify(x.errors||x.messages||[]))"
+            exit 61
+          fi
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/update-result.json','utf8'));
+          if(!x.success)throw new Error(JSON.stringify(x.errors));
+          const c=x.result||{},s=c.settings||{};
+          if(c.consumer_id!==process.env.EXPECTED_CONSUMER_ID||c.script_name!==process.env.SCRIPT_NAME||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error(`consumer mismatch ${JSON.stringify(c)}`);
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`settings drift ${JSON.stringify(s)}`);
+          console.log(JSON.stringify({consumerId:c.consumer_id,script:c.script_name,dlq:c.dead_letter_queue,settings:s}));
+          NODE
+
+      - name: Verify remote consumer independently
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers/${EXPECTED_CONSUMER_ID}" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/final.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/final.json','utf8'));
+          if(!x.success)throw new Error(JSON.stringify(x.errors));
+          const c=x.result||{},s=c.settings||{};
+          if(c.consumer_id!==process.env.EXPECTED_CONSUMER_ID||c.script_name!==process.env.SCRIPT_NAME||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error(`final consumer mismatch ${JSON.stringify(c)}`);
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_wait_time_ms)!==2000||Number(s.max_concurrency)!==1||Number(s.retry_delay)!==10)throw new Error(`final settings drift ${JSON.stringify(s)}`);
+          console.log('production Queue consumer DLQ PASS');
+          NODE
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Production Queue DLQ attach'
+            echo '- queue: `seiseki-analysis`'
+            echo '- DLQ: `seiseki-analysis-dlq`'
+            echo '- consumer identity/settings guarded before and after update'
+            echo '- D1 untouched'
+            echo '- Worker application code untouched'
+          } >> "$GITHUB_STEP_SUMMARY"
