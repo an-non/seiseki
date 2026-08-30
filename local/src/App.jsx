@@ -5786,8 +5786,13 @@ function RadialTree({ agg, questions, onPick }) {
   const rt = useMemo(() => radialTree(agg, supOrder, 12), [agg, questions]);
   if (!rt.total) return null;
 
-  const S = 640, cx = S / 2, cy = S / 2;
-  const R0 = 62, R1 = 128, R2 = 218, R3 = 268;
+  const branchLoad = Math.max(rt.ring2.length, rt.ring3.length);
+  const treeScale = Math.max(1, Math.min(1.9, 1 + Math.max(0, branchLoad - 18) * 0.018));
+  const R0 = 62;
+  const R1 = Math.round(128 * treeScale);
+  const R2 = Math.round(218 * treeScale);
+  const R3 = Math.round(268 * treeScale);
+  const S = Math.max(640, R3 * 2 + 84), cx = S / 2, cy = S / 2;
 
   function label(arc, r, minSpan, size, fill) {
     const span = arc.a1 - arc.a0;
@@ -5806,7 +5811,7 @@ function RadialTree({ agg, questions, onPick }) {
   }
 
   return (
-    <svg viewBox={"0 0 " + S + " " + S} style={{ width: "100%", maxWidth: 640, height: "auto", display: "block", margin: "0 auto" }}>
+    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>
       {rt.ring1.map(arc => (
         <g key={arc.key} className="visual-action" role="button" tabIndex={0}
           onClick={() => onPick && onPick({ sup: arc.sup })}
