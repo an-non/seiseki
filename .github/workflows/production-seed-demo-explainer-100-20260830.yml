@@ -1,0 +1,174 @@
+name: Production seed 100 explainer demos 20260830
+
+on:
+  push:
+    branches: [release/production-20260830]
+    paths: [.github/workflows/production-seed-demo-explainer-100-20260830.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-demo-seed-20260830
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_SHA: 99b5f88f8aa08df086e1f226b331d47ce6bf08ba
+      DATA_SHA: 02616f13fa7ef3b99cfd3d3c1bb2f3c64a9affcc
+      BATCH_ID: demo-explainer-100-v1
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+    steps:
+      - name: Checkout exact production RC2
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 0
+
+      - name: Import exact reviewed demo dataset only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/demo-explainer-100-20260830
+          git show "$DATA_SHA":cloudflare/scripts/demo-explainer-100-v1.mjs > /tmp/demo-explainer-100-v1.mjs
+          git show "$DATA_SHA":tests/demo-explainer-100-contract.mjs > /tmp/demo-contract.mjs
+          sed 's#../cloudflare/scripts/demo-explainer-100-v1.mjs#./demo-explainer-100-v1.mjs#' /tmp/demo-contract.mjs > /tmp/demo-contract-run.mjs
+          node /tmp/demo-contract-run.mjs
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - name: Install Wrangler
+        run: npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Read-only preflight and baseline
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          grep -q 'No migrations to apply' /tmp/migrations.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT value_json FROM app_config WHERE key='questions'; SELECT COUNT(*) AS n FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID'; PRAGMA foreign_key_check;" --json > /tmp/preflight.json
+          node - <<'NODE'
+          const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/preflight.json','utf8'));const rows=i=>x?.[i]?.results||[];
+          const q=JSON.parse(String(rows(0)?.[0]?.value_json||'[]'));if(q.filter(v=>v.type!=='free').length!==7)throw new Error('active questionnaire is not seven structured questions');
+          if(Number(rows(1)?.[0]?.n||0)!==0)throw new Error('demo batch already exists; refusing duplicate seed');
+          if(rows(2).length)throw new Error('foreign key violations before seed');
+          fs.writeFileSync('/tmp/questions.json',JSON.stringify(q));
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/aggregate-before.json
+          node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('/tmp/aggregate-before.json'));fs.writeFileSync('/tmp/real-total-before.txt',String(Number(x.total||0)))"
+
+      - name: Build trusted D1 seed SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/demo-explainer-100-v1.mjs /tmp/demo-data.mjs
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';import { DEMO_EXPLAINER_RECORDS, DEMO_EXPLAINER_BATCH_ID } from '/tmp/demo-data.mjs';
+          const questions=JSON.parse(fs.readFileSync('/tmp/questions.json','utf8'));const esc=v=>"'"+String(v??'').replaceAll("'","''")+"'";const now=Date.now();
+          const ids=[];const sql=['PRAGMA foreign_keys = ON;'];
+          for(let i=0;i<DEMO_EXPLAINER_RECORDS.length;i++){
+            const r=DEMO_EXPLAINER_RECORDS[i];const id='r_'+crypto.createHash('sha256').update(r.key).digest('hex').slice(0,32);ids.push(id);const ts=now-i*60000;
+            sql.push(`INSERT INTO responses (id,created_at,updated_at,app_version,consent_version,consent_at,age,gender,region,occupation,party,free_text,analysis_status,analysis_json,demo_flag,revision) VALUES (${esc(id)},${ts},${ts},${esc(r.appVersion)},'demo-1',${ts},${esc(r.demo.age)},${esc(r.demo.gender)},${esc(r.demo.region)},${esc(r.demo.occupation)},${esc(r.demo.party)},${esc(r.freeText)},'pending',NULL,1,1);`);
+            for(const [qid,value] of Object.entries(r.answers))sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},${esc(qid)},${esc(value)});`);
+            sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},'demo_batch',${esc(DEMO_EXPLAINER_BATCH_ID)});`);
+            questions.forEach((q,pos)=>sql.push(`INSERT INTO response_questions(response_id,qid,position,type,text,options_json,left_label,right_label) VALUES (${esc(id)},${esc(q.id)},${pos},${esc(q.type)},${esc(q.text)},${esc(JSON.stringify(q.options||[]))},${esc(q.left||'')},${esc(q.right||'')});`));
+          }
+          fs.writeFileSync('/tmp/seed.sql',sql.join('\n'));fs.writeFileSync('/tmp/ids.json',JSON.stringify(ids));
+          NODE
+
+      - name: Persist 100 demo inputs to production D1
+        id: persist
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --file /tmp/seed.sql
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(DISTINCT r.id) AS n FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID'; SELECT COUNT(*) AS pending FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID' AND r.analysis_status='pending';" --json > /tmp/persisted.json
+          node -e "const x=require('/tmp/persisted.json');if(Number(x[0]?.results?.[0]?.n)!==100||Number(x[1]?.results?.[0]?.pending)!==100)throw new Error('persisted demo input count mismatch')"
+
+      - name: Publish all demo analyses to production Queue
+        id: enqueue
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/messages.json
+          const ids=require('/tmp/ids.json');console.log(JSON.stringify(ids.map(responseId=>({body:{type:'analyze-response',responseId,revision:1},content_type:'json'}))));
+          NODE
+          node - <<'NODE'
+          const fs=require('fs');const a=JSON.parse(fs.readFileSync('/tmp/messages.json','utf8'));for(let i=0;i<a.length;i+=20)fs.writeFileSync(`/tmp/batch-${i/20}.json`,JSON.stringify({messages:a.slice(i,i+20)}));
+          NODE
+          for f in /tmp/batch-*.json; do
+            curl -fsS -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${QUEUE_ID}/messages/batch" -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data-binary "@$f" > /tmp/push.json
+            node -e "const x=require('/tmp/push.json');if(x.success!==true)throw new Error(JSON.stringify(x.errors||x))"
+          done
+
+      - name: Wait for real Workers AI pipeline
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          done_count=0
+          for i in $(seq 1 80); do
+            npx wrangler d1 execute seiseki-db --remote --command "SELECT SUM(CASE WHEN r.analysis_status='completed' THEN 1 ELSE 0 END) AS completed, SUM(CASE WHEN r.analysis_status='failed' THEN 1 ELSE 0 END) AS failed, SUM(CASE WHEN r.analysis_status IN ('pending','running') THEN 1 ELSE 0 END) AS waiting FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID';" --json > /tmp/status.json
+            completed=$(node -e "const x=require('/tmp/status.json');process.stdout.write(String(Number(x[0]?.results?.[0]?.completed||0)))")
+            failed=$(node -e "const x=require('/tmp/status.json');process.stdout.write(String(Number(x[0]?.results?.[0]?.failed||0)))")
+            echo "demo analysis progress: completed=$completed failed=$failed / 100"
+            if [ "$completed" = 100 ]; then done_count=1; break; fi
+            if [ "$failed" != 0 ]; then echo 'demo analysis failure detected' >&2; exit 72; fi
+            sleep 10
+          done
+          test "$done_count" = 1
+
+      - name: Verify demo visibility and real-data isolation
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(DISTINCT r.id) AS responses, COUNT(DISTINCT ar.response_id) AS analyzed, COUNT(c.rowid) AS chunks FROM responses r JOIN answers a ON a.response_id=r.id LEFT JOIN analysis_runs ar ON ar.response_id=r.id AND ar.status='completed' LEFT JOIN opinion_chunks c ON c.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID'; PRAGMA foreign_key_check;" --json > /tmp/final.json
+          node - <<'NODE'
+          const x=require('/tmp/final.json');const r=x[0]?.results?.[0]||{};if(Number(r.responses)!==100||Number(r.analyzed)!==100||Number(r.chunks)<=0)throw new Error(JSON.stringify(r));if((x[1]?.results||[]).length)throw new Error('FK violations');
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/demo-responses" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100||x.responses.some(r=>r.demoFlag!==true))throw new Error('public demo endpoint mismatch')"
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/aggregate-after.json
+          before=$(cat /tmp/real-total-before.txt)
+          after=$(node -e "const x=require('/tmp/aggregate-after.json');process.stdout.write(String(Number(x.total||0)))")
+          test "$before" = "$after"
+          echo "real aggregate unchanged: $before; demo dataset visible: 100"
+
+      - name: Cleanup batch if seeding fails before completion
+        if: ${{ failure() && steps.persist.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --command "DELETE FROM responses WHERE id IN (SELECT response_id FROM answers WHERE qid='demo_batch' AND value='$BATCH_ID');" || true
