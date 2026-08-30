@@ -1,0 +1,169 @@
+name: Production RC5 radial tree compensated deploy 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-deploy-rc5-radial-tree-compensated-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-20260830
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RC4_SHA: 7f3f878f87dc5e67c274d1589abda38987ee05dc
+      RC5_SHA: 02441688c2cc55c8d2112499354da5c3e797bc7a
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      EXPECTED_QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+      DLQ_NAME: seiseki-analysis-dlq
+    steps:
+      - name: Checkout exact RC5
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RC5_SHA }}
+          fetch-depth: 0
+
+      - name: Prove RC5 is UI-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RC5_SHA"
+          git diff --name-only "$RC4_SHA" "$RC5_SHA" | grep -v '^.github/workflows/' | sort > /tmp/changed.txt
+          printf '%s\n' app/seiseki.jsx core/ui.jsx local/src/App.jsx | sort > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          test "$(git rev-parse "$RC5_SHA":cloudflare/src/index.mjs)" = "$(git rev-parse "$RC4_SHA":cloudflare/src/index.mjs)"
+          test "$(git rev-parse "$RC5_SHA":cloudflare/wrangler.jsonc)" = "$(git rev-parse "$RC4_SHA":cloudflare/wrangler.jsonc)"
+          test "$(git rev-parse "$RC5_SHA":cloudflare/migrations)" = "$(git rev-parse "$RC4_SHA":cloudflare/migrations)"
+          grep -Fq 'const branchLoad = Math.max(rt.ring2.length, rt.ring3.length)' core/ui.jsx
+          grep -Fq 'const treeScale = Math.max(1, Math.min(1.9' core/ui.jsx
+          grep -Fq 'const R3 = Math.round(268 * treeScale)' core/ui.jsx
+          grep -Fq 'const S = Math.max(640, R3 * 2 + 84)' core/ui.jsx
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            local/package-lock.json
+            cloudflare/package-lock.json
+
+      - name: Install full regression and production build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE="$PRODUCTION_URL" VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+          APP_ASSET=$(basename "$(find local/dist/assets -maxdepth 1 -type f -name 'App-*.js' | head -n1)")
+          test -n "$APP_ASSET"
+          echo "APP_ASSET=$APP_ASSET" >> "$GITHUB_ENV"
+          sha256sum "local/dist/assets/$APP_ASSET" | awk '{print $1}' > /tmp/app.sha
+          cd cloudflare
+          npx wrangler deploy --env="" --dry-run --outdir /tmp/rc5-dry-run
+
+      - name: Compensating read-only production gates through live Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/health?pre=rc5-$(date +%s)" > /tmp/health.json
+          node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')throw new Error(JSON.stringify(h))"
+          curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/demo-responses?pre=rc5-$(date +%s)" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100)throw new Error('expected 100 production demos')"
+          curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/public-aggregate?pre=rc5-$(date +%s)" > /tmp/agg.json
+          node -e "const x=require('/tmp/agg.json');if(!x||typeof x!=='object')throw new Error('aggregate unavailable')"
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app/tree?pre=rc5-$(date +%s)" > /tmp/tree-before.html
+          grep -qi '<!doctype html>' /tmp/tree-before.html
+
+      - name: Queue gate before deploy
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/consumers.json
+          node - <<'NODE'
+          const x=require('/tmp/consumers.json'),all=Array.isArray(x.result)?x.result:[];
+          if(!x.success||all.length!==1) throw new Error('consumer gate');
+          const c=all[0],s=c.settings||{};
+          if(c.type!=='worker'||c.dead_letter_queue!==process.env.DLQ_NAME) throw new Error('DLQ drift');
+          if(Number(s.batch_size)!==3||Number(s.max_retries)!==3||Number(s.max_concurrency)!==1) throw new Error('queue settings drift');
+          NODE
+
+      - name: Deploy exact RC5
+        id: deploy_prod
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env="" --strict 2>&1 | tee /tmp/deploy.log
+          grep -E 'Current Version ID|Uploaded|Deployed|https://' /tmp/deploy.log || true
+
+      - name: Verify exact live RC5 and D1-backed APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3 4 5 6 7 8; do
+            curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/health?post=rc5-$i-$(date +%s)" > /tmp/health.json || true
+            if node -e "const h=require('/tmp/health.json');if(h.status!=='ok'||h.database!=='d1')process.exit(1)" 2>/dev/null; then ok=1; break; fi
+            sleep 3
+          done
+          test "$ok" = 1
+          curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/demo-responses?post=rc5-$(date +%s)" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100)throw new Error('demo count mismatch')"
+          curl -fsS -H 'Cache-Control: no-cache' "$PRODUCTION_URL/api/public-aggregate?post=rc5-$(date +%s)" > /tmp/agg.json
+          node -e "const x=require('/tmp/agg.json');if(!x||typeof x!=='object')throw new Error('aggregate unavailable')"
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/assets/$APP_ASSET?rev=rc5-$(date +%s)" > /tmp/live-app.js
+          sha256sum /tmp/live-app.js | awk '{print $1}' > /tmp/live.sha
+          diff -u /tmp/app.sha /tmp/live.sha
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app/tree?rev=rc5-$(date +%s)" > /tmp/tree.html
+          grep -qi '<!doctype html>' /tmp/tree.html
+          curl -fsS -L -H 'Cache-Control: no-cache' "$PRODUCTION_URL/app/quantum?rev=rc5-$(date +%s)" > /tmp/quantum.html
+          grep -qi '<!doctype html>' /tmp/quantum.html
+          echo 'exact RC5 radial-tree UI asset and live routes PASS'
+
+      - name: Verify Queue and DLQ after deploy
+        if: ${{ always() && steps.deploy_prod.outcome == 'success' }}
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${EXPECTED_QUEUE_ID}/consumers" -H "Authorization: Bearer ${CF_TOKEN}" > /tmp/after.json
+          node -e "const x=require('/tmp/after.json'),c=(Array.isArray(x.result)?x.result:[])[0];if(!x.success||!c||c.dead_letter_queue!==process.env.DLQ_NAME)throw new Error('Queue/DLQ verification failed')"
+
+      - name: Roll back Worker if post-deploy verification fails
+        if: ${{ failure() && steps.deploy_prod.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler rollback --name seiseki-api --message "Automatic rollback after failed RC5 radial-tree verification"
