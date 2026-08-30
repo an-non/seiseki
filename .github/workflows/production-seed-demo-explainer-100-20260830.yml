@@ -85,7 +85,7 @@ jobs:
             sql.push(`INSERT INTO responses (id,created_at,updated_at,app_version,consent_version,consent_at,age,gender,region,occupation,party,free_text,analysis_status,analysis_json,demo_flag,revision) VALUES (${esc(id)},${ts},${ts},${esc(r.appVersion)},'demo-1',${ts},${esc(r.demo.age)},${esc(r.demo.gender)},${esc(r.demo.region)},${esc(r.demo.occupation)},${esc(r.demo.party)},${esc(r.freeText)},'pending',NULL,1,1);`);
             for(const [qid,value] of Object.entries(r.answers))sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},${esc(qid)},${esc(value)});`);
             sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},'demo_batch',${esc(DEMO_EXPLAINER_BATCH_ID)});`);
-            questions.forEach((q,pos)=>sql.push(`INSERT INTO response_questions(response_id,qid,position,type,text,options_json,left_label,right_label) VALUES (${esc(id)},${esc(q.id)},${pos},${esc(q.type)},${esc(q.text)},${esc(JSON.stringify(q.options||[]))},${esc(q.left||'')},${esc(q.right||'')});`));
+            questions.filter(q=>q.type!=='free').forEach((q,pos)=>sql.push(`INSERT INTO response_questions(response_id,qid,position,type,text,options_json,left_label,right_label) VALUES (${esc(id)},${esc(q.id)},${pos},${esc(q.type)},${esc(q.text)},${esc(JSON.stringify(q.options||[]))},${esc(q.left||'')},${esc(q.right||'')});`));
           }
           fs.writeFileSync('/tmp/seed.sql',sql.join('\n'));fs.writeFileSync('/tmp/ids.json',JSON.stringify(ids));
           NODE
