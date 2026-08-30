@@ -1,0 +1,56 @@
+name: Fix production demo queue publish 20260830
+on:
+  push:
+    branches: [release/production-20260830]
+    paths: [.github/workflows/fix-production-demo-queue-publish-20260830.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/production-20260830
+      - name: Replace batch push with verified single-message HTTP shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/production-seed-demo-explainer-100-20260830.yml')
+          s=p.read_text()
+          start=s.index('      - name: Publish all demo analyses to production Queue\n')
+          end=s.index('      - name: Wait for real Workers AI pipeline\n', start)
+          block='''      - name: Publish all demo analyses to production Queue
+        id: enqueue
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE' > /tmp/messages.ndjson
+          const ids=require('/tmp/ids.json');for(const responseId of ids)console.log(JSON.stringify({body:{type:'analyze-response',responseId,revision:1}}));
+          NODE
+          sent=0
+          while IFS= read -r payload; do
+            code=$(curl -sS -o /tmp/push.json -w '%{http_code}' -X POST "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues/${QUEUE_ID}/messages" -H "Authorization: Bearer ${CF_TOKEN}" -H 'Content-Type: application/json' --data-binary "$payload")
+            test "$code" = 200
+            node -e "const x=require('/tmp/push.json');if(x.success!==true)throw new Error(JSON.stringify(x.errors||x))"
+            sent=$((sent+1))
+            if [ $((sent % 10)) -eq 0 ]; then echo "queued $sent / 100"; fi
+          done < /tmp/messages.ndjson
+          test "$sent" = 100
+
+'''
+          p.write_text(s[:start]+block+s[end:])
+          PY
+          git diff --check
+          grep -F '/messages"' .github/workflows/production-seed-demo-explainer-100-20260830.yml
+          grep -F 'test "$sent" = 100' .github/workflows/production-seed-demo-explainer-100-20260830.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/production-seed-demo-explainer-100-20260830.yml
+          git commit -m 'Use single-message Queue API for trusted demo seed'
+          git push origin HEAD:release/production-20260830
