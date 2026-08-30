@@ -18,7 +18,7 @@ jobs:
     env:
       STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
     steps:
-      - name: Verify staging health and quantum assets
+      - name: Verify staging health
         shell: bash
         run: |
           set -euo pipefail
@@ -29,8 +29,41 @@ jobs:
           console.log('staging health PASS');
           NODE
 
-          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830" > /tmp/quantum.html
-          grep -qi '<!doctype html>' /tmp/quantum.html
+      - name: Diagnose quantum asset routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in \
+            '/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830' \
+            '/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830' \
+            '/app/quantum'; do
+            safe=$(printf '%s' "$path" | tr '/?&=' '_____')
+            code=$(curl -sS -L -D "/tmp/${safe}.headers" -o "/tmp/${safe}.body" -w '%{http_code}' "$STAGING_URL$path")
+            echo "ROUTE $path STATUS $code"
+            grep -iE '^(content-type|location|cache-control|cf-cache-status):' "/tmp/${safe}.headers" || true
+            echo -n 'BODY_PREFIX '
+            head -c 240 "/tmp/${safe}.body" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g'
+            echo
+          done
+
+      - name: Verify whichever live quantum route contains the built entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          chosen=''
+          for path in \
+            '/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830' \
+            '/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830'; do
+            tmp=/tmp/candidate.html
+            curl -fsS -L "$STAGING_URL$path" > "$tmp"
+            if grep -qi '<!doctype html>' "$tmp" && grep -qiE 'quantum|chunk-network' "$tmp"; then
+              cp "$tmp" /tmp/quantum.html
+              chosen="$path"
+              break
+            fi
+          done
+          test -n "$chosen"
+          echo "chosen quantum route: $chosen"
 
           node - <<'NODE'
           const fs=require('fs');const html=fs.readFileSync('/tmp/quantum.html','utf8');
@@ -39,7 +72,7 @@ jobs:
             for(const m of html.matchAll(re)) if(/\.js(?:\?|$)/.test(m[1])) refs.push(m[1]);
           }
           const unique=[...new Set(refs)];
-          if(!unique.length) throw new Error('no JS asset refs found in live quantum HTML');
+          if(!unique.length) throw new Error(`no JS refs; html prefix=${html.slice(0,300)}`);
           fs.writeFileSync('/tmp/jsrefs.txt',unique.join('\n'));
           console.log('live JS refs:', unique.join(', '));
           NODE
@@ -52,7 +85,7 @@ jobs:
               *) url="$STAGING_URL/quantum/$src" ;;
             esac
             echo "fetch $url"
-            curl -fsS "$url" >> /tmp/all-js.txt
+            curl -fsS -L "$url" >> /tmp/all-js.txt
             printf '\n' >> /tmp/all-js.txt
           done < /tmp/jsrefs.txt
 
@@ -67,6 +100,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS "$STAGING_URL/app/quantum" > /tmp/app-quantum.html
+          curl -fsS -L "$STAGING_URL/app/quantum" > /tmp/app-quantum.html
           grep -qi '<!doctype html>' /tmp/app-quantum.html
           echo 'staging /app/quantum PASS'
