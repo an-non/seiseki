@@ -1,0 +1,35 @@
+name: Fix production demo seed snapshot 20260830
+on:
+  push:
+    branches: [release/production-20260830]
+    paths: [.github/workflows/fix-production-demo-seed-snapshot-20260830.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/production-20260830
+      - name: Match production question snapshot semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          p=.github/workflows/production-seed-demo-explainer-100-20260830.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/production-seed-demo-explainer-100-20260830.yml')
+          s=p.read_text()
+          old="questions.forEach((q,pos)=>sql.push(`INSERT INTO response_questions"
+          new="questions.filter(q=>q.type!=='free').forEach((q,pos)=>sql.push(`INSERT INTO response_questions"
+          if old not in s: raise SystemExit('target not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+          grep -F "questions.filter(q=>q.type!='free').forEach" "$p"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$p"
+          git commit -m 'Match trusted demo seed to structured question snapshot'
+          git push origin HEAD:release/production-20260830
