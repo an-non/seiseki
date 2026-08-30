@@ -1,0 +1,156 @@
+name: Production seed 100 explainer demos v3 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/production-seed-demo-explainer-100-v3-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-demo-seed-20260830
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_SHA: 99b5f88f8aa08df086e1f226b331d47ce6bf08ba
+      DATA_SHA: 02616f13fa7ef3b99cfd3d3c1bb2f3c64a9affcc
+      BATCH_ID: demo-explainer-100-v1
+      PRODUCTION_URL: https://seiseki-api.tokyo-odh-129.workers.dev
+      QUEUE_ID: 4606abc6f57645358bad7444b83e3b1b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 0
+
+      - name: Load exact synthetic dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feature/demo-explainer-100-20260830
+          git show "$DATA_SHA":cloudflare/scripts/demo-explainer-100-v1.mjs > /tmp/demo-data.mjs
+          git show "$DATA_SHA":tests/demo-explainer-100-contract.mjs > /tmp/demo-contract.mjs
+          sed 's#../cloudflare/scripts/demo-explainer-100-v1.mjs#./demo-data.mjs#' /tmp/demo-contract.mjs > /tmp/demo-contract-run.mjs
+          node /tmp/demo-contract-run.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+
+      - run: npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+
+      - name: Preflight production D1 and real aggregate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list seiseki-db --remote | tee /tmp/migrations.txt
+          grep -q 'No migrations to apply' /tmp/migrations.txt
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT value_json FROM app_config WHERE key='questions'; SELECT COUNT(*) AS n FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID'; PRAGMA foreign_key_check;" --json > /tmp/preflight.json
+          node - <<'NODE'
+          const fs=require('fs'),x=require('/tmp/preflight.json'),rows=i=>x?.[i]?.results||[];
+          const q=JSON.parse(String(rows(0)?.[0]?.value_json||'[]'));
+          if(q.filter(v=>v.type!=='free').length!==7)throw new Error('questionnaire mismatch');
+          if(Number(rows(1)?.[0]?.n||0)!==0)throw new Error('demo batch exists');
+          if(rows(2).length)throw new Error('foreign key violations');
+          fs.writeFileSync('/tmp/questions.json',JSON.stringify(q.filter(v=>v.type!=='free')));
+          NODE
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/real-before.json
+          node -e "const fs=require('fs'),x=require('/tmp/real-before.json');fs.writeFileSync('/tmp/real-total-before.txt',String(Number(x.total||0)))"
+
+      - name: Generate and persist trusted demo inputs
+        id: persist
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';import crypto from 'node:crypto';import { DEMO_EXPLAINER_RECORDS, DEMO_EXPLAINER_BATCH_ID } from '/tmp/demo-data.mjs';
+          const questions=JSON.parse(fs.readFileSync('/tmp/questions.json','utf8')),esc=v=>"'"+String(v??'').replaceAll("'","''")+"'",now=Date.now(),ids=[],sql=['PRAGMA foreign_keys = ON;'];
+          for(let i=0;i<DEMO_EXPLAINER_RECORDS.length;i++){const r=DEMO_EXPLAINER_RECORDS[i],id='r_'+crypto.createHash('sha256').update(r.key).digest('hex').slice(0,32),ts=now-i*60000;ids.push(id);
+          sql.push(`INSERT INTO responses (id,created_at,updated_at,app_version,consent_version,consent_at,age,gender,region,occupation,party,free_text,analysis_status,analysis_json,demo_flag,revision) VALUES (${esc(id)},${ts},${ts},${esc(r.appVersion)},'demo-1',${ts},${esc(r.demo.age)},${esc(r.demo.gender)},${esc(r.demo.region)},${esc(r.demo.occupation)},${esc(r.demo.party)},${esc(r.freeText)},'pending',NULL,1,1);`);
+          for(const [qid,value] of Object.entries(r.answers))sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},${esc(qid)},${esc(value)});`);sql.push(`INSERT INTO answers(response_id,qid,value) VALUES (${esc(id)},'demo_batch',${esc(DEMO_EXPLAINER_BATCH_ID)});`);
+          questions.forEach((q,pos)=>sql.push(`INSERT INTO response_questions(response_id,qid,position,type,text,options_json,left_label,right_label) VALUES (${esc(id)},${esc(q.id)},${pos},${esc(q.type)},${esc(q.text)},${esc(JSON.stringify(q.options||[]))},${esc(q.left||'')},${esc(q.right||'')});`));}
+          fs.writeFileSync('/tmp/seed.sql',sql.join('\n'));fs.writeFileSync('/tmp/ids.json',JSON.stringify(ids));
+          NODE
+          npx wrangler d1 execute seiseki-db --remote --file /tmp/seed.sql
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(DISTINCT r.id) AS n FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID';" --json > /tmp/persisted.json
+          node -e "const x=require('/tmp/persisted.json');if(Number(x[0]?.results?.[0]?.n)!==100)throw new Error('persist mismatch')"
+
+      - name: Publish through real production Queue using Node fetch
+        id: enqueue
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs=require('fs');const ids=JSON.parse(fs.readFileSync('/tmp/ids.json','utf8'));
+          const url=`https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/queues/${process.env.QUEUE_ID}/messages`;
+          (async()=>{let sent=0;for(const responseId of ids){const payload={body:{type:'analyze-response',responseId,revision:1}};const res=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${process.env.CF_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});const text=await res.text();let json;try{json=JSON.parse(text)}catch{throw new Error(`non-json Queue response ${res.status}: ${text}`)}if(!res.ok||json.success!==true)throw new Error(`Queue push failed ${res.status}: ${text}`);sent++;if(sent%10===0)console.log(`queued ${sent} / 100`);}if(sent!==100)throw new Error(`sent ${sent}`);})().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+
+      - name: Wait for real Workers AI consumer
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          all_done=0
+          for i in $(seq 1 120); do
+            npx wrangler d1 execute seiseki-db --remote --command "SELECT SUM(CASE WHEN r.analysis_status='completed' THEN 1 ELSE 0 END) AS completed, SUM(CASE WHEN r.analysis_status='failed' THEN 1 ELSE 0 END) AS failed FROM responses r JOIN answers a ON a.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID';" --json > /tmp/status.json
+            completed=$(node -e "const x=require('/tmp/status.json');process.stdout.write(String(Number(x[0]?.results?.[0]?.completed||0)))")
+            failed=$(node -e "const x=require('/tmp/status.json');process.stdout.write(String(Number(x[0]?.results?.[0]?.failed||0)))")
+            echo "analysis completed=$completed failed=$failed / 100"
+            if [ "$completed" = 100 ]; then all_done=1; break; fi
+            if [ "$failed" != 0 ]; then exit 74; fi
+            sleep 10
+          done
+          test "$all_done" = 1
+
+      - name: Verify 100 demos and isolation from real aggregate
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --command "SELECT COUNT(DISTINCT r.id) AS responses, COUNT(DISTINCT ar.response_id) AS analyzed, COUNT(DISTINCT c.rowid) AS chunks FROM responses r JOIN answers a ON a.response_id=r.id LEFT JOIN analysis_runs ar ON ar.response_id=r.id AND ar.status='completed' LEFT JOIN opinion_chunks c ON c.response_id=r.id WHERE r.demo_flag=1 AND a.qid='demo_batch' AND a.value='$BATCH_ID'; PRAGMA foreign_key_check;" --json > /tmp/final.json
+          node -e "const x=require('/tmp/final.json'),r=x[0]?.results?.[0]||{};console.log(r);if(Number(r.responses)!==100||Number(r.analyzed)!==100||Number(r.chunks)<=0||(x[1]?.results||[]).length)throw new Error('final DB verification')"
+          curl -fsS "$PRODUCTION_URL/api/demo-responses" > /tmp/demos.json
+          node -e "const x=require('/tmp/demos.json');if(!Array.isArray(x.responses)||x.responses.length!==100||x.responses.some(r=>r.demoFlag!==true))throw new Error('demo endpoint mismatch')"
+          curl -fsS "$PRODUCTION_URL/api/public-aggregate" > /tmp/real-after.json
+          before=$(cat /tmp/real-total-before.txt); after=$(node -e "const x=require('/tmp/real-after.json');process.stdout.write(String(Number(x.total||0)))")
+          test "$before" = "$after"
+          echo "DEMO SEED PASS demo=100 real-total=$after"
+
+      - name: Cleanup incomplete demo batch on failure
+        if: ${{ failure() && steps.persist.outcome == 'success' }}
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute seiseki-db --remote --command "DELETE FROM responses WHERE id IN (SELECT response_id FROM answers WHERE qid='demo_batch' AND value='$BATCH_ID');" || true
