@@ -44,11 +44,8 @@ jobs:
           new='''  return (\n    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n      <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>'''
           if s.count(old)!=1: raise SystemExit('radial svg opening mismatch')
           s=s.replace(old,new,1)
-          # only close the RadialTree svg immediately before the next function marker
           marker='''    </svg>\n  );\n}\n\nfunction'''
           repl='''      </svg>\n    </div>\n  );\n}\n\nfunction'''
-          if s.count(marker)<1: raise SystemExit('radial svg closing mismatch')
-          # choose first marker after RadialTree opening
           start=s.index('function RadialTree')
           pos=s.find(marker,start)
           if pos<0: raise SystemExit('radial close after component not found')
