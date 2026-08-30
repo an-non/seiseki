@@ -27,7 +27,7 @@
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
     "AI_MAX_ATTEMPTS": "2",
     "AI_MAX_OUTPUT_TOKENS": "1800",
-    "PASSWORD_ITERATIONS": "120000"
+    "PASSWORD_ITERATIONS": "100000"
   },
   "env": {
     "staging": {
