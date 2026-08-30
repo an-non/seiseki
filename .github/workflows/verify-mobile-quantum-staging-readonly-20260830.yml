@@ -1,0 +1,72 @@
+name: Verify mobile quantum staging read only 20260830
+
+on:
+  push:
+    branches:
+      - release/production-20260830
+    paths:
+      - .github/workflows/verify-mobile-quantum-staging-readonly-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+    steps:
+      - name: Verify staging health and quantum assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$STAGING_URL/api/health" > /tmp/health.json
+          node - <<'NODE'
+          const fs=require('fs');const h=JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          if(h.status!=='ok'||h.database!=='d1')throw new Error(JSON.stringify(h));
+          console.log('staging health PASS');
+          NODE
+
+          curl -fsS "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=mobile-touch-zoom-20260830" > /tmp/quantum.html
+          grep -qi '<!doctype html>' /tmp/quantum.html
+
+          node - <<'NODE'
+          const fs=require('fs');const html=fs.readFileSync('/tmp/quantum.html','utf8');
+          const refs=[];
+          for(const re of [/<script[^>]+src=["']([^"']+)["']/g,/<link[^>]+href=["']([^"']+)["']/g]){
+            for(const m of html.matchAll(re)) if(/\.js(?:\?|$)/.test(m[1])) refs.push(m[1]);
+          }
+          const unique=[...new Set(refs)];
+          if(!unique.length) throw new Error('no JS asset refs found in live quantum HTML');
+          fs.writeFileSync('/tmp/jsrefs.txt',unique.join('\n'));
+          console.log('live JS refs:', unique.join(', '));
+          NODE
+
+          : > /tmp/all-js.txt
+          while IFS= read -r src; do
+            case "$src" in
+              http*) url="$src" ;;
+              /*) url="$STAGING_URL$src" ;;
+              *) url="$STAGING_URL/quantum/$src" ;;
+            esac
+            echo "fetch $url"
+            curl -fsS "$url" >> /tmp/all-js.txt
+            printf '\n' >> /tmp/all-js.txt
+          done < /tmp/jsrefs.txt
+
+          grep -Fq 'pointerdown' /tmp/all-js.txt
+          grep -Fq 'pointerup' /tmp/all-js.txt
+          grep -Fq 'pointercancel' /tmp/all-js.txt
+          grep -Fq '(pointer: coarse)' /tmp/all-js.txt
+          grep -Fq '(max-width:700px)' /tmp/all-js.txt
+          echo 'live staging mobile quantum interaction bundle PASS'
+
+      - name: Verify app quantum route
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS "$STAGING_URL/app/quantum" > /tmp/app-quantum.html
+          grep -qi '<!doctype html>' /tmp/app-quantum.html
+          echo 'staging /app/quantum PASS'
