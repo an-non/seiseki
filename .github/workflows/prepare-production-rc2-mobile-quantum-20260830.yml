@@ -32,6 +32,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$BASE_SHA"
           git diff --exit-code
+          git diff --cached --exit-code
 
       - name: Import only the staging-tested quantum source
         shell: bash
@@ -39,7 +40,7 @@ jobs:
           set -euo pipefail
           git fetch origin fix/mobile-quantum-touch-zoom-20260830
           git checkout "$TESTED_FIX_SHA" -- local/chunk-network-entanglement-preview.html
-          git diff --name-only > /tmp/changed.txt
+          git diff --cached --name-only > /tmp/changed.txt
           printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected.txt
           diff -u /tmp/expected.txt /tmp/changed.txt
           test "$(git hash-object local/chunk-network-entanglement-preview.html)" = "$(git rev-parse "$TESTED_FIX_SHA":local/chunk-network-entanglement-preview.html)"
@@ -94,11 +95,12 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf local/dist local/node_modules cloudflare/node_modules
-          git diff --name-only > /tmp/final-changed.txt
+          git diff --cached --name-only > /tmp/final-changed.txt
           printf '%s\n' local/chunk-network-entanglement-preview.html > /tmp/expected-final.txt
           diff -u /tmp/expected-final.txt /tmp/final-changed.txt
+          git diff --name-only > /tmp/unstaged.txt
+          test ! -s /tmp/unstaged.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add local/chunk-network-entanglement-preview.html
           git commit -m "Fix mobile quantum selection and zoom in production RC2"
           git push origin HEAD:"$RC2_BRANCH"
