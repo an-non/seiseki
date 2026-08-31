@@ -22,6 +22,7 @@
   ],
   "vars": {
     "TURNSTILE_REQUIRED": "false",
+    "TURNSTILE_REGISTER_REQUIRED": "false",
     "ALLOWED_ORIGINS": "https://seiseki-api.tokyo-odh-129.workers.dev",
     "AI_ANALYSIS_ENABLED": "true",
     "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
@@ -68,6 +69,7 @@
         "SEISEKI_ENV": "staging",
         "STAGING_ADMIN_ENABLED": "true",
         "TURNSTILE_REQUIRED": "false",
+        "TURNSTILE_REGISTER_REQUIRED": "false",
         "ALLOWED_ORIGINS": "https://seiseki-api-staging.tokyo-odh-129.workers.dev,http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:5173,http://localhost:5173",
         "AI_ANALYSIS_ENABLED": "true",
         "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",

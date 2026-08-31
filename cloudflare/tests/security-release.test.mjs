@@ -108,6 +108,67 @@ test("required Turnstile mode fails closed if the secret is absent", async () =>
   database.close();
 });
 
+test("registration Turnstile is required independently from response submission", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    TURNSTILE_REQUIRED: "false",
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "register-secret"
+  };
+  const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "登録試験", password: "correct-horse-1" })
+  }), env);
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "TURNSTILE_REQUIRED");
+  database.close();
+});
+
+test("registration Turnstile validates token action and hostname before account creation", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "register-secret",
+    TURNSTILE_REGISTER_HOSTNAME: "staging.example"
+  };
+  const originalFetch = globalThis.fetch;
+  let verificationBody = null;
+  globalThis.fetch = async (_url, options) => {
+    verificationBody = options.body;
+    return Response.json({ success: true, hostname: "staging.example", action: "register" });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "認証済試験", password: "correct-horse-1", turnstileToken: "verified-token" })
+    }), env);
+    assert.equal(response.status, 201);
+    assert.equal(verificationBody.get("secret"), "register-secret");
+    assert.equal(verificationBody.get("response"), "verified-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+    database.close();
+  }
+});
+
+test("public config exposes registration site key but never its secret", async () => {
+  const database = createDatabase();
+  const response = await worker.fetch(new Request("http://local/api/config"), {
+    DB: new D1DatabaseAdapter(database),
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SITE_KEY: "public-site-key",
+    TURNSTILE_REGISTER_SECRET: "must-not-leak"
+  });
+  const body = await response.json();
+  assert.deepEqual(body.turnstile, { registerSiteKey: "public-site-key", registerRequired: true });
+  assert.equal(JSON.stringify(body).includes("must-not-leak"), false);
+  database.close();
+});
+
 test("login attempts are limited before repeated password derivation", async () => {
   const database = createDatabase();
   const env = { DB: new D1DatabaseAdapter(database), TURNSTILE_REQUIRED: "false" };

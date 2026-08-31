@@ -136,11 +136,14 @@ async function readJson(request) {
   }
 }
 
-async function verifyTurnstile(body, request, env) {
-  const required = String(env.TURNSTILE_REQUIRED).toLowerCase() === "true";
+async function verifyTurnstile(body, request, options = {}) {
+  const required = String(options.required).toLowerCase() === "true";
+  const secret = String(options.secret || "").trim();
+  const expectedHostname = String(options.hostname || "").trim();
+  const expectedAction = String(options.action || "").trim();
   const token = String(body?.turnstileToken ?? "").trim();
 
-  if (!env.TURNSTILE_SECRET) {
+  if (!secret) {
     if (required) {
       throw new RequestError(503, "TURNSTILE_NOT_CONFIGURED", "Turnstile is required but not configured");
     }
@@ -153,7 +156,7 @@ async function verifyTurnstile(body, request, env) {
   }
 
   const form = new FormData();
-  form.set("secret", env.TURNSTILE_SECRET);
+  form.set("secret", secret);
   form.set("response", token);
   form.set("idempotency_key", crypto.randomUUID());
   const remoteIp = request.headers.get("CF-Connecting-IP");
@@ -165,15 +168,22 @@ async function verifyTurnstile(body, request, env) {
   });
   const result = await response.json();
   if (!result.success) throw new RequestError(403, "TURNSTILE_FAILED", "Turnstile verification failed");
-  if (env.TURNSTILE_HOSTNAME && result.hostname !== env.TURNSTILE_HOSTNAME) {
+  if (expectedHostname && result.hostname !== expectedHostname) {
     throw new RequestError(403, "TURNSTILE_HOSTNAME_MISMATCH", "Turnstile hostname did not match");
+  }
+  if (expectedAction && result.action !== expectedAction) {
+    throw new RequestError(403, "TURNSTILE_ACTION_MISMATCH", "Turnstile action did not match");
   }
 }
 
 async function handleCreateResponse(request, env, ctx) {
   await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.response);
   const body = await readJson(request);
-  await verifyTurnstile(body, request, env);
+  await verifyTurnstile(body, request, {
+    required: env.TURNSTILE_REQUIRED,
+    secret: env.TURNSTILE_SECRET,
+    hostname: env.TURNSTILE_HOSTNAME
+  });
   const normalized = normalizeSubmission(body);
   const questions = await loadQuestions(env.DB);
   if (!validateAnswersAgainstQuestions(normalized.answers, questions, normalized.demoFlag)) {
@@ -296,7 +306,13 @@ async function handleRequest(request, env, ctx) {
     return json({ status: row?.ok === 1 ? "ok" : "degraded", database: "d1" });
   }
   if (request.method === "GET" && url.pathname === "/api/config") {
-    return json({ questions: await loadQuestions(env.DB) });
+    return json({
+      questions: await loadQuestions(env.DB),
+      turnstile: {
+        registerSiteKey: String(env.TURNSTILE_REGISTER_SITE_KEY || ""),
+        registerRequired: String(env.TURNSTILE_REGISTER_REQUIRED).toLowerCase() === "true"
+      }
+    });
   }
   if (request.method === "POST" && url.pathname === "/api/responses") {
     return handleCreateResponse(request, env, ctx);
@@ -314,7 +330,14 @@ async function handleRequest(request, env, ctx) {
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/register") {
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register);
-    return json(await registerAccount(env.DB, await readJson(request), env.PASSWORD_ITERATIONS), 201);
+    const body = await readJson(request);
+    await verifyTurnstile(body, request, {
+      required: env.TURNSTILE_REGISTER_REQUIRED,
+      secret: env.TURNSTILE_REGISTER_SECRET,
+      hostname: env.TURNSTILE_REGISTER_HOSTNAME,
+      action: "register"
+    });
+    return json(await registerAccount(env.DB, body, env.PASSWORD_ITERATIONS), 201);
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
     const body = await readJson(request);

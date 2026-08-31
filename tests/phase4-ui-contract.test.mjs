@@ -18,9 +18,9 @@ test("an existing account response replaces the initial survey with separate edi
   assert.match(ui, /cloudLoadOwnResponse\(rec\.respId, session\.token\)/);
   assert.match(ui, /if \(currentResponse && phase === "consent"\)/);
   assert.match(ui, /重複回答を避けるため、初回アンケートは開始していません/);
-  assert.match(ui, /自由記述を追記/);
-  assert.match(ui, /自由記述を修正/);
-  assert.match(ui, /アンケート回答を修正/);
+  assert.match(ui, /二度目の自由記述/);
+  assert.match(ui, /初回回答を修正/);
+  assert.match(ui, /アンケートと1回目自由記述を一緒に更新/);
   assert.doesNotMatch(ui, /setAddendum|setLimit/);
 });
 

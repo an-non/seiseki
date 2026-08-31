@@ -263,7 +263,12 @@ async function cloudLoadConfig() {
   if (!cloudApiEnabled()) return null;
   const payload = await cloudApiRequest("/api/config");
   const questions = sanitizeQuestions(payload && payload.questions);
-  return questions ? { questions: questions } : null;
+  const rawTurnstile = payload && payload.turnstile;
+  const turnstile = {
+    registerSiteKey: String(rawTurnstile && rawTurnstile.registerSiteKey || "").trim().slice(0, 200),
+    registerRequired: rawTurnstile && rawTurnstile.registerRequired === true
+  };
+  return questions ? { questions: questions, turnstile: turnstile } : null;
 }
 
 async function cloudWaitForResponseAnalysis(id) {
@@ -416,6 +421,9 @@ function cloudRegistrationError(error) {
   if (code === "ORIGIN_NOT_ALLOWED") return "この確認画面から登録APIへ接続できません (ORIGIN_NOT_ALLOWED)";
   if (code === "AUTH_KDF_FAILED") return "認証処理が実行環境の上限を超えました (AUTH_KDF_FAILED)";
   if (code === "AUTH_CONFIG_INVALID") return "認証設定が不正です (AUTH_CONFIG_INVALID)";
+  if (code === "TURNSTILE_REQUIRED") return "不正利用防止の確認を完了してください";
+  if (code === "TURNSTILE_FAILED" || code === "TURNSTILE_ACTION_MISMATCH" || code === "TURNSTILE_HOSTNAME_MISMATCH") return "不正利用防止の確認に失敗しました。もう一度お試しください";
+  if (code === "TURNSTILE_NOT_CONFIGURED") return "不正利用防止の認証設定が完了していません";
   if (Number(error && error.status) === 429) return "登録が混み合っています (HTTP 429)";
   if (code) return "登録に失敗しました (" + code + ")";
   if (error && error.name === "AbortError") return "登録APIが時間内に応答しませんでした";
@@ -536,13 +544,17 @@ async function acctGet(name, strictRemote) {
   }
   return await sGet(await acctStorageKey(nm));
 }
-async function acctRegister(name, pass) {
+async function acctRegister(name, pass, turnstileToken) {
   const nm = normAcctName(name);
   if (nm.length < 2) return { error: "名前は2〜20文字で入力してください(本名は使わないでください)" };
   if (String(pass).length < 8) return { error: "パスワードは8文字以上にしてください" };
   if (cloudApiEnabled()) {
     try {
-      const result = await cloudAccountCall("/api/accounts/register", "POST", { name: nm, password: String(pass) });
+      const result = await cloudAccountCall("/api/accounts/register", "POST", {
+        name: nm,
+        password: String(pass),
+        turnstileToken: String(turnstileToken || "")
+      });
       return { acct: cloudAccountRecord(result) };
     } catch (e) {
       return { error: cloudRegistrationError(e) };
@@ -1318,6 +1330,7 @@ function AccountSettings({ session, onUpdated }) {
 export default function App() {
   const [view, setView] = useState(() => viewFromPath(currentPath()));
   const [questions, setQuestions] = useState(DEFAULT_QUESTIONS);
+  const [turnstileConfig, setTurnstileConfig] = useState({ registerSiteKey: "", registerRequired: false });
   const [policy, setPolicy] = useState(DEFAULT_POLICY);
   const [agg, setAgg] = useState(null);
   const [ready, setReady] = useState(false);
@@ -1365,6 +1378,7 @@ export default function App() {
       if (!alive) return;
       if (cloudConfig && cloudConfig.questions) setQuestions(cloudConfig.questions);
       else if (q) setQuestions(q);
+      if (cloudConfig && cloudConfig.turnstile) setTurnstileConfig(cloudConfig.turnstile);
       setPolicy(effectivePolicy);
       setCloudDemos(demos);
       const visibleAggregate = withCloudDemos(cloudAggregate || a || newAgg(), demos);
@@ -1512,15 +1526,15 @@ export default function App() {
         {!ready ? (
           <div style={{ display: "flex", justifyContent: "center", padding: 80 }}><Spinner /></div>
         ) : view === "entry" ? (
-          <Entry session={session} onAuthed={onAuthed} goto={goView} />
+          <Entry session={session} onAuthed={onAuthed} goto={goView} turnstileConfig={turnstileConfig} />
         ) : view === "home" ? (
           <Home agg={agg} goto={goView} hasDraft={hasDraft} myId={myId} session={session} />
         ) : view === "followup" || view === "followupEdit" ? (
-          <FollowUpSurvey goto={goView} session={session} onAuthed={onAuthed} notify={notify} editExisting={view === "followupEdit"} />
+          <FollowUpSurvey goto={goView} session={session} onAuthed={onAuthed} notify={notify} editExisting={view === "followupEdit"} turnstileConfig={turnstileConfig} />
         ) : view === "survey" || view === "surveyEdit" ? (
           <Survey questions={questions} policy={policy} notify={notify} onFinished={(a, result) => { const shown = withCloudDemos(a, cloudDemos); setAgg(shown); setCompletion({ ...result, agg: shown }); goView("complete"); }} goto={goView}
             startEditMode={view === "surveyEdit" ? "answers" : null}
-            session={session} onAuthed={onAuthed}
+            session={session} onAuthed={onAuthed} turnstileConfig={turnstileConfig}
             onDraftChange={d => {
               setHasDraft(d);
               if (!d && session) {
@@ -1544,7 +1558,7 @@ export default function App() {
         ) : view === "admin" ? (
           <Admin questions={questions} setQuestions={setQuestions} policy={policy} setPolicy={setPolicy} notify={notify} refreshAgg={refreshAgg} agg={agg} />
         ) : (
-          <Entry session={session} onAuthed={onAuthed} goto={goView} />
+          <Entry session={session} onAuthed={onAuthed} goto={goView} turnstileConfig={turnstileConfig} />
         )}
       </main>
 
@@ -1565,7 +1579,7 @@ export default function App() {
 /* ============================================================
    入口
    ============================================================ */
-function Entry({ session, onAuthed, goto }) {
+function Entry({ session, onAuthed, goto, turnstileConfig }) {
   return (
     <div style={{ maxWidth: 620, margin: "22px auto 0" }}>
       <div style={{ padding: "20px 0 12px" }}>
@@ -1594,6 +1608,7 @@ function Entry({ session, onAuthed, goto }) {
           goto={goto}
           destination="概要"
           guestView="home"
+          turnstileConfig={turnstileConfig}
         />
       )}
     </div>
@@ -1709,7 +1724,7 @@ function Progress({ idx, total }) {
   );
 }
 
-function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting }) {
+function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnstileConfig }) {
   const [current, setCurrent] = useState(null);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1784,7 +1799,7 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting }) {
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
         <H2 eyebrow="SECOND FREE TEXT" sub="初回回答と同じアカウントに保存します">二度目の自由記述</H2>
-        <AuthGate onAuthed={onAuthed} goto={goto} />
+        <AuthGate onAuthed={onAuthed} goto={goto} turnstileConfig={turnstileConfig} />
       </div>
     );
   }
@@ -1842,7 +1857,7 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting }) {
   );
 }
 
-function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, session, onAuthed, startEditMode }) {
+function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, session, onAuthed, startEditMode, turnstileConfig }) {
   const [phase, setPhase] = useState("consent");
   const [qi, setQi] = useState(0);
   const [agree, setAgree] = useState(false);
@@ -1863,8 +1878,8 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const timerRef = useRef(null);
 
   const freeQids = useMemo(() => questions.filter(q => q.type === "free").map(q => q.id), [questions]);
-  const totalSteps = questions.length + 2;
-  const stepIdx = phase === "consent" ? 0 : phase === "demo" ? 1 : phase === "q" ? 2 + qi : totalSteps;
+  const totalSteps = questions.length + 3;
+  const stepIdx = phase === "consent" ? 0 : phase === "demo" ? 1 : phase === "q" ? 2 + qi : phase === "confirm" ? totalSteps - 1 : totalSteps;
 
   /* 回答済み判定の正本はremote account responseとする。
      localStorageの有無では初回回答へ戻さない。 */
@@ -1956,7 +1971,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         setDemo(d.demo || {});
         setAnswers(d.answers || {});
         setQi(Math.max(0, Math.min(Number(d.qi) || 0, questions.length - 1)));
-        if (d.phase === "demo" || d.phase === "q") setPhase(d.phase);
+        if (d.phase === "demo" || d.phase === "q" || d.phase === "confirm") setPhase(d.phase);
         setRestored(true);
       }
       loadedRef.current = true;
@@ -1967,7 +1982,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   /* 入力のたびに自動保存(1秒のデバウンス)。解析中・完了後は保存しない。 */
   useEffect(() => {
     if (!loadedRef.current) return;
-    if (phase !== "consent" && phase !== "demo" && phase !== "q") return;
+    if (phase !== "consent" && phase !== "demo" && phase !== "q" && phase !== "confirm") return;
     const hasInput = agree || Object.keys(demo).length > 0 || Object.keys(answers).length > 0;
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
@@ -2181,7 +2196,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     return (
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
         <H2 eyebrow="SIGN IN" sub="統計の閲覧は登録不要です。回答(発言)には、匿名のユーザー登録が必要です">回答にはログイン</H2>
-        <AuthGate onAuthed={onAuthed} goto={goto} />
+        <AuthGate onAuthed={onAuthed} goto={goto} turnstileConfig={turnstileConfig} />
       </div>
     );
   }
@@ -2402,10 +2417,51 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
           <Btn kind="ghost" onClick={() => (qi === 0 ? setPhase("demo") : setQi(qi - 1))}>戻る</Btn>
           {last ? (
-            <Btn disabled={!canNext} onClick={submit}>{cloudApiEnabled() ? "AI解析して送信" : "端末内で解析して保存"}</Btn>
+            <Btn disabled={!canNext} onClick={() => setPhase("confirm")}>入力内容を確認</Btn>
           ) : (
             <Btn disabled={!canNext} onClick={() => setQi(qi + 1)}>次へ</Btn>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "confirm") {
+    return (
+      <div>
+        <Progress idx={stepIdx} total={totalSteps} />
+        {restoreBar}
+        <H2 eyebrow="CONFIRM" sub="この時点ではまだ保存・解析されていません">入力内容の確認</H2>
+        <Card pad={14} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>属性</div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {Object.keys(DEMO_OPTS).map(key => (
+              <div key={key} style={{ display: "grid", gridTemplateColumns: "minmax(100px, 150px) 1fr", gap: 10, fontSize: 12 }}>
+                <span style={{ color: C.sub }}>{DEMO_LABELS[key]}</span>
+                <span>{demo[key] || "未回答"}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card pad={14} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>アンケート・自由記述</div>
+          <div style={{ display: "grid", gap: 12 }}>
+            {questions.map((q, index) => (
+              <div key={q.id} style={{ borderTop: index ? "1px solid " + C.rule : "none", paddingTop: index ? 10 : 0 }}>
+                <div style={{ fontSize: 11, color: C.sub, marginBottom: 4 }}>Q{index + 1}. {q.text}</div>
+                <div style={{ fontSize: 13, lineHeight: 1.75, whiteSpace: q.type === "free" ? "pre-wrap" : "normal", overflowWrap: "anywhere" }}>
+                  {String(answers[q.id] || "（記入なし）")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
+          内容を確定すると回答を保存し、AI解析を開始します。
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Btn kind="ghost" onClick={() => { setQi(Math.max(0, questions.length - 1)); setPhase("q"); }}>戻って修正</Btn>
+          <Btn onClick={submit}>{cloudApiEnabled() ? "内容を確定してAI解析へ" : "内容を確定して端末内解析へ"}</Btn>
         </div>
       </div>
     );
@@ -4062,13 +4118,70 @@ function TargetTree({ agg, onPick }) {
    ユーザー登録・ログイン(v0.15)
    「閲覧は誰でも・発言は登録者」。ニックネームのみ・本名禁止。
    ============================================================ */
-function AuthGate({ onAuthed, goto, destination, guestView }) {
+let turnstileApiPromise = null;
+function loadTurnstileApi() {
+  if (typeof window === "undefined" || typeof document === "undefined") return Promise.reject(new Error("Turnstile requires a browser"));
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (turnstileApiPromise) return turnstileApiPromise;
+  turnstileApiPromise = new Promise((resolve, reject) => {
+    const finish = () => window.turnstile ? resolve(window.turnstile) : reject(new Error("Turnstile API did not initialize"));
+    let script = document.querySelector('script[data-seiseki-turnstile="true"]');
+    if (!script) {
+      script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.defer = true;
+      script.dataset.seisekiTurnstile = "true";
+      document.head.appendChild(script);
+    }
+    script.addEventListener("load", finish, { once: true });
+    script.addEventListener("error", () => reject(new Error("Turnstile API could not be loaded")), { once: true });
+  });
+  return turnstileApiPromise;
+}
+
+function RegisterTurnstile({ siteKey, resetKey, onToken, onStatus }) {
+  const containerRef = useRef(null);
+  useEffect(() => {
+    if (!siteKey || !containerRef.current) return undefined;
+    let active = true;
+    let widgetId = null;
+    onToken("");
+    onStatus("認証を準備しています…");
+    loadTurnstileApi().then(api => {
+      if (!active || !containerRef.current) return;
+      widgetId = api.render(containerRef.current, {
+        sitekey: siteKey,
+        action: "register",
+        appearance: "interaction-only",
+        theme: "light",
+        callback(token) { if (active) { onToken(String(token || "")); onStatus(""); } },
+        "expired-callback"() { if (active) { onToken(""); onStatus("認証の有効時間が切れました。もう一度確認してください。"); } },
+        "error-callback"() { if (active) { onToken(""); onStatus("認証を完了できませんでした。再読み込みしてお試しください。"); } }
+      });
+    }).catch(() => { if (active) onStatus("認証機能を読み込めませんでした。通信状態を確認してください。"); });
+    return () => {
+      active = false;
+      if (widgetId !== null && window.turnstile && typeof window.turnstile.remove === "function") {
+        window.turnstile.remove(widgetId);
+      }
+    };
+  }, [siteKey, resetKey]);
+  return <div ref={containerRef} aria-label="不正利用防止の確認" style={{ minHeight: 4 }} />;
+}
+
+function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
   const [mode, setMode] = useState("register"); // register | login
   const [name, setName] = useState("");
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileStatus, setTurnstileStatus] = useState("");
+  const [turnstileReset, setTurnstileReset] = useState(0);
+  const registerSiteKey = String(turnstileConfig && turnstileConfig.registerSiteKey || "");
+  const registerTurnstileRequired = turnstileConfig && turnstileConfig.registerRequired === true;
 
   async function go() {
     if (busy) return;
@@ -4076,7 +4189,9 @@ function AuthGate({ onAuthed, goto, destination, guestView }) {
     let r;
     if (mode === "register") {
       if (pass !== pass2) { setErr("確認用パスワードが一致しません"); setBusy(false); return; }
-      r = await acctRegister(name, pass);
+      if (registerTurnstileRequired && !turnstileToken) { setErr("不正利用防止の確認を完了してください"); setBusy(false); return; }
+      r = await acctRegister(name, pass, turnstileToken);
+      if (registerSiteKey) { setTurnstileToken(""); setTurnstileReset(value => value + 1); }
     } else {
       r = await acctLogin(name, pass);
     }
@@ -4089,8 +4204,8 @@ function AuthGate({ onAuthed, goto, destination, guestView }) {
     <div>
       <Card>
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-          <Chip active={mode === "register"} onClick={() => { setMode("register"); setErr(""); }}>はじめて(登録)</Chip>
-          <Chip active={mode === "login"} onClick={() => { setMode("login"); setErr(""); }}>2回目以降(ログイン)</Chip>
+          <Chip active={mode === "register"} onClick={() => { setMode("register"); setErr(""); setTurnstileToken(""); setTurnstileReset(value => value + 1); }}>はじめて(登録)</Chip>
+          <Chip active={mode === "login"} onClick={() => { setMode("login"); setErr(""); setTurnstileToken(""); }}>2回目以降(ログイン)</Chip>
         </div>
         <Field label="名前(ニックネーム)" sub="2〜20文字。本名や実在の氏名は使わないでください">
           <input value={name} onChange={e => setName(e.target.value)} placeholder="例: 川辺の亀" style={{ ...INPUT_STYLE }} autoComplete="off" />
@@ -4099,13 +4214,23 @@ function AuthGate({ onAuthed, goto, destination, guestView }) {
           <input type="password" value={pass} onChange={e => setPass(e.target.value)} style={{ ...INPUT_STYLE }} />
         </Field>
         {mode === "register" ? (
-          <Field label="パスワード(確認)">
-            <input type="password" value={pass2} onChange={e => setPass2(e.target.value)} style={{ ...INPUT_STYLE }} />
-          </Field>
+          <>
+            <Field label="パスワード(確認)">
+              <input type="password" value={pass2} onChange={e => setPass2(e.target.value)} style={{ ...INPUT_STYLE }} />
+            </Field>
+            {registerSiteKey ? (
+              <div style={{ marginBottom: 12 }}>
+                <RegisterTurnstile siteKey={registerSiteKey} resetKey={turnstileReset} onToken={setTurnstileToken} onStatus={setTurnstileStatus} />
+                {turnstileStatus ? <div role="status" style={{ fontSize: 11, color: C.sub, marginTop: 5 }}>{turnstileStatus}</div> : null}
+              </div>
+            ) : registerTurnstileRequired ? (
+              <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>認証機能が設定されていません。管理者へお知らせください。</div>
+            ) : null}
+          </>
         ) : null}
         {err ? <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>{err}</div> : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Btn onClick={go} disabled={busy || !name.trim() || !pass}>
+          <Btn onClick={go} disabled={busy || !name.trim() || !pass || (mode === "register" && registerTurnstileRequired && !turnstileToken)}>
             {busy ? "確認しています…" : mode === "register"
               ? "登録して" + (destination || "回答") + "へ進む"
               : "ログインして" + (destination || "回答") + "へ進む"}

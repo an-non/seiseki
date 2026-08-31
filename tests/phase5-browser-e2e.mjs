@@ -489,7 +489,7 @@ try {
     await waitForExpression(`/Q\\d+ \\/ \\d+/.test(document.body.innerText) || document.body.innerText.includes("解析")`, "survey question or analysis phase");
     const state = await evaluate(`(() => {
       const m = document.body.innerText.match(/Q(\\d+) \\/ (\\d+)/);
-      return { q: m ? Number(m[1]) : 0, total: m ? Number(m[2]) : 0, hasTextarea: !![...document.querySelectorAll('textarea')].find(n => n.offsetWidth || n.offsetHeight || n.getClientRects().length), submit: [...document.querySelectorAll('button')].some(b => (b.textContent || '').includes('AI解析して送信') && !b.disabled) };
+      return { q: m ? Number(m[1]) : 0, total: m ? Number(m[2]) : 0, hasTextarea: !![...document.querySelectorAll('textarea')].find(n => n.offsetWidth || n.offsetHeight || n.getClientRects().length), review: [...document.querySelectorAll('button')].some(b => (b.textContent || '').includes('入力内容を確認') && !b.disabled) };
     })()`);
     if (!state.q) break;
     if (state.hasTextarea) {
@@ -501,7 +501,7 @@ try {
         if (!root) return false;
         const options = [...root.querySelectorAll('button')].filter(b => {
           const text = (b.textContent || '').trim();
-          return (b.offsetWidth || b.offsetHeight || b.getClientRects().length) && !['戻る','次へ','AI解析して送信','端末内で解析して保存'].includes(text);
+          return (b.offsetWidth || b.offsetHeight || b.getClientRects().length) && !['戻る','次へ','入力内容を確認'].includes(text);
         });
         if (!options.length) return false;
         options[0].click();
@@ -510,9 +510,11 @@ try {
       assert.equal(selected, true, `question ${state.q} option was not selectable`);
       await sleep(50);
     }
-    const submitVisible = await evaluate(`[...document.querySelectorAll('button')].some(b => (b.textContent || '').includes('AI解析して送信') && !b.disabled)`);
-    if (submitVisible) {
-      await clickText("AI解析して送信");
+    const reviewVisible = await evaluate(`[...document.querySelectorAll('button')].some(b => (b.textContent || '').includes('入力内容を確認') && !b.disabled)`);
+    if (reviewVisible) {
+      await clickText("入力内容を確認");
+      await waitForExpression(`document.body.innerText.includes("入力内容の確認") && document.body.innerText.includes("内容を確定してAI解析へ")`, "initial response confirmation");
+      await clickText("内容を確定してAI解析へ");
       break;
     }
     await clickText("次へ");
