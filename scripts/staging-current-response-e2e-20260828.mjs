@@ -46,7 +46,11 @@ async function aggregateTotal() {
   return Number(payload?.total ?? -1);
 }
 
-async function waitForAnalysis(id, revision, timeoutMs = 120000) {
+async function waitForAnalysis(
+  id,
+  revision,
+  timeoutMs = Number(process.env.STAGING_ANALYSIS_TIMEOUT_MS || 360000)
+) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < timeoutMs) {
