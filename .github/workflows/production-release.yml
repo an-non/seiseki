@@ -97,8 +97,6 @@ jobs:
           }
           if (config.ai?.binding !== 'AI') throw new Error('production AI binding missing');
           NODE
-          npx wrangler deploy --dry-run --strict
-
       - name: Verify production infrastructure without changing it
         working-directory: cloudflare
         shell: bash
@@ -144,6 +142,13 @@ jobs:
           test -f dist/quantum/chunk-network-entanglement-preview.html
           test ! -e dist/quantum-v2/quantum-node-relations-v2-preview.html
           npm --prefix ../cloudflare run assets:check:production
+
+      - name: Verify production package after asset build
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --strict --env=""
 
       - name: Record existing production state before deploy
         working-directory: cloudflare
