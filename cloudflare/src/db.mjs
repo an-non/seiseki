@@ -1,4 +1,11 @@
-export async function insertPendingResponse(db, response, questionContext = [], manageTokenHash = null, accountId = null) {
+export async function insertPendingResponse(
+  db,
+  response,
+  questionContext = [],
+  manageTokenHash = null,
+  accountId = null,
+  submissionFingerprint = null
+) {
   const statements = [
     db.prepare(`
       INSERT INTO responses (
@@ -61,6 +68,29 @@ export async function insertPendingResponse(db, response, questionContext = [], 
     `).bind(accountId, response.id, response.createdAt));
   }
 
+  if (submissionFingerprint) {
+    statements.push(db.prepare(`
+      INSERT INTO response_text_fingerprints (response_id, input_hmac, normalized_length, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).bind(
+      response.id,
+      submissionFingerprint.inputHmac,
+      submissionFingerprint.normalizedLength,
+      response.createdAt
+    ));
+    statements.push(db.prepare(`
+      UPDATE responses
+      SET publication_status = CASE
+        WHEN EXISTS (
+          SELECT 1 FROM response_text_fingerprints
+          WHERE input_hmac = ? AND response_id <> ?
+        ) THEN 'held_duplicate'
+        ELSE 'accepted'
+      END
+      WHERE id = ?
+    `).bind(submissionFingerprint.inputHmac, response.id, response.id));
+  }
+
   try {
     await db.batch(statements);
   } catch (error) {
@@ -74,13 +104,18 @@ export async function insertPendingResponse(db, response, questionContext = [], 
     }
     throw error;
   }
+  const stored = await db.prepare(`
+    SELECT publication_status AS publicationStatus
+    FROM responses WHERE id = ?
+  `).bind(response.id).first();
+  return { publicationStatus: stored?.publicationStatus ?? "accepted" };
 }
 
 export async function getResponseMetadata(db, id) {
   return db.prepare(`
     SELECT id, created_at AS createdAt, updated_at AS updatedAt, app_version AS appVersion,
            consent_version AS consentVersion, analysis_status AS analysisStatus,
-           demo_flag AS demoFlag, revision
+           demo_flag AS demoFlag, revision, publication_status AS publicationStatus
     FROM responses
     WHERE id = ?
   `).bind(id).first();
@@ -342,7 +377,8 @@ export function analysisRetryState(row, run, now = Date.now()) {
 
 async function currentAnalysisRow(db, id) {
   const row = await db.prepare(`
-    SELECT analysis_status AS analysisStatus, analysis_json AS analysisJson, revision, updated_at AS updatedAt
+    SELECT analysis_status AS analysisStatus, analysis_json AS analysisJson, revision,
+           updated_at AS updatedAt, publication_status AS publicationStatus
     FROM responses WHERE id = ?
   `).bind(id).first();
   if (!row) return { row: null, run: null };
@@ -361,9 +397,11 @@ export async function getResponseAnalysis(db, id) {
   const revision = Number(row.revision ?? 1);
   let analysis = null;
   if (row.analysisJson) { try { analysis = JSON.parse(row.analysisJson); } catch { analysis = null; } }
-  const retry = analysisRetryState(row, run);
+  const held = row.publicationStatus === "held_duplicate";
+  const retry = held ? { stalled: false, retryable: false, lastActivityAt: Number(row.updatedAt || 0), leaseUntil: 0 } : analysisRetryState(row, run);
   return {
-    analysisStatus: row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,
+    analysisStatus: held ? "held" : row.analysisStatus === "pending" && run?.status === "running" ? "running" : row.analysisStatus,
+    publicationStatus: row.publicationStatus || "accepted",
     revision,
     analysis,
     updatedAt: Number(row.updatedAt || 0),
@@ -441,6 +479,23 @@ function expectedRevisionGuard() {
 async function mutateResponseFollowUpText(db, id, expectedRevision, followUpText, mode) {
   const now = Date.now();
   const createOnly = mode === "create";
+  const current = await db.prepare(`
+    SELECT revision, follow_up_text AS followUpText,
+           analysis_status AS analysisStatus, updated_at AS updatedAt
+    FROM responses WHERE id = ?
+  `).bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+  if (createOnly && current.followUpText != null) return { status: "exists" };
+  if (!createOnly && current.followUpText == null) return { status: "missing" };
+  if (!createOnly && String(current.followUpText) === followUpText) {
+    return {
+      status: "unchanged",
+      revision: Number(current.revision ?? 1),
+      analysisStatus: current.analysisStatus,
+      updatedAt: Number(current.updatedAt || now)
+    };
+  }
   const condition = createOnly ? "follow_up_text IS NULL" : "follow_up_text IS NOT NULL";
   const guard = "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ? AND " + condition + ")";
   const statements = [
@@ -460,13 +515,13 @@ async function mutateResponseFollowUpText(db, id, expectedRevision, followUpText
   if (Number(results?.[2]?.meta?.changes ?? 0) === 1) {
     return { status: "updated", revision: expectedRevision + 1, updatedAt: now };
   }
-  const current = await db.prepare(
+  const latest = await db.prepare(
     "SELECT revision, follow_up_text AS followUpText FROM responses WHERE id = ?"
   ).bind(id).first();
-  if (!current) return { status: "not_found" };
-  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
-  if (createOnly && current.followUpText != null) return { status: "exists" };
-  if (!createOnly && current.followUpText == null) return { status: "missing" };
+  if (!latest) return { status: "not_found" };
+  if (Number(latest.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+  if (createOnly && latest.followUpText != null) return { status: "exists" };
+  if (!createOnly && latest.followUpText == null) return { status: "missing" };
   return { status: "conflict" };
 }
 
@@ -508,6 +563,21 @@ export async function deleteResponseFollowUpText(db, id, expectedRevision) {
 
 export async function updateResponseFreeText(db, id, expectedRevision, freeText) {
   const now = Date.now();
+  const current = await db.prepare(`
+    SELECT revision, free_text AS freeText,
+           analysis_status AS analysisStatus, updated_at AS updatedAt
+    FROM responses WHERE id = ?
+  `).bind(id).first();
+  if (!current) return { status: "not_found" };
+  if (Number(current.revision ?? 1) !== Number(expectedRevision)) return { status: "stale" };
+  if (String(current.freeText || "") === freeText) {
+    return {
+      status: "unchanged",
+      revision: Number(current.revision ?? 1),
+      analysisStatus: current.analysisStatus,
+      updatedAt: Number(current.updatedAt || now)
+    };
+  }
   const guard = expectedRevisionGuard();
   const statements = [
     db.prepare(`DELETE FROM opinion_chunks WHERE response_id = ? AND ${guard}`)
@@ -524,16 +594,41 @@ export async function updateResponseFreeText(db, id, expectedRevision, freeText)
     `).bind(freeText, now, id, expectedRevision)
   ];
   const results = await db.batch(statements);
-  if (Number(results?.[2]?.meta?.changes ?? 0) !== 1) return null;
-  return expectedRevision + 1;
+  if (Number(results?.[2]?.meta?.changes ?? 0) !== 1) return { status: "stale" };
+  return { status: "updated", revision: expectedRevision + 1, analysisStatus: "pending", updatedAt: now };
 }
 
 export async function updateInitialResponse(db, id, expectedRevision, answers, freeText) {
   const revision = Number(expectedRevision);
   const now = Date.now();
-  const current = await db.prepare("SELECT revision FROM responses WHERE id = ?").bind(id).first();
+  const current = await db.prepare(`
+    SELECT revision, free_text AS freeText,
+           analysis_status AS analysisStatus, updated_at AS updatedAt
+    FROM responses WHERE id = ?
+  `).bind(id).first();
   if (!current) return { status: "not_found" };
   if (Number(current.revision ?? 1) !== revision) return { status: "stale" };
+  const storedAnswersResult = await db.prepare(
+    "SELECT qid, value FROM answers WHERE response_id = ? ORDER BY qid"
+  ).bind(id).all();
+  const storedAnswers = (storedAnswersResult.results ?? [])
+    .map(answer => [String(answer.qid), String(answer.value)])
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  const submittedAnswers = answers
+    .map(answer => [String(answer.qid), String(answer.value)])
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  const answersUnchanged = storedAnswers.length === submittedAnswers.length
+    && storedAnswers.every((answer, index) => (
+      answer[0] === submittedAnswers[index][0] && answer[1] === submittedAnswers[index][1]
+    ));
+  if (String(current.freeText || "") === freeText && answersUnchanged) {
+    return {
+      status: "unchanged",
+      revision,
+      analysisStatus: current.analysisStatus,
+      updatedAt: Number(current.updatedAt || now)
+    };
+  }
   const guard = "EXISTS (SELECT 1 FROM responses WHERE id = ? AND revision = ?)";
   const statements = [
     db.prepare("DELETE FROM opinion_chunks WHERE response_id = ? AND " + guard).bind(id, id, revision),
@@ -582,10 +677,10 @@ export async function deleteResponse(db, id) {
 
 export async function getBasicStats(db) {
   const [responseRow, chunkRow, statusRows, answerRows] = await Promise.all([
-    db.prepare("SELECT count(*) AS count FROM responses WHERE demo_flag = 0").first(),
-    db.prepare("SELECT count(*) AS count FROM opinion_chunks c JOIN responses r ON r.id = c.response_id WHERE r.demo_flag = 0").first(),
-    db.prepare("SELECT analysis_status AS status, count(*) AS count FROM responses WHERE demo_flag = 0 GROUP BY analysis_status").all(),
-    db.prepare("SELECT qid, value, count(*) AS count FROM answers a JOIN responses r ON r.id = a.response_id WHERE r.demo_flag = 0 GROUP BY qid, value ORDER BY qid, value").all()
+    db.prepare("SELECT count(*) AS count FROM responses WHERE demo_flag = 0 AND publication_status = 'accepted'").first(),
+    db.prepare("SELECT count(*) AS count FROM opinion_chunks c JOIN responses r ON r.id = c.response_id WHERE r.demo_flag = 0 AND r.publication_status = 'accepted'").first(),
+    db.prepare("SELECT analysis_status AS status, count(*) AS count FROM responses WHERE demo_flag = 0 AND publication_status = 'accepted' GROUP BY analysis_status").all(),
+    db.prepare("SELECT qid, value, count(*) AS count FROM answers a JOIN responses r ON r.id = a.response_id WHERE r.demo_flag = 0 AND r.publication_status = 'accepted' GROUP BY qid, value ORDER BY qid, value").all()
   ]);
 
   return {
@@ -610,6 +705,10 @@ function publicDemoAnalysis(value) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
   };
+  const nodeText = value => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length <= 160 ? chars.join("") : chars.slice(0, 159).join("") + "…";
+  };
   return {
     params: {
       emo: { pol: Number(emotion.pol ?? 0), label: String(emotion.label ?? "中立").slice(0, 6) },
@@ -624,7 +723,7 @@ function publicDemoAnalysis(value) {
     },
     attrs: Array.isArray(parsed.attrs) ? parsed.attrs.slice(0, 4).map(value => String(value).slice(0, 14)) : [],
     chunks: parsed.chunks.slice(0, 5).map(chunk => ({
-      s: String(chunk.s ?? "").slice(0, 48),
+      s: nodeText(chunk.s),
       cat: String(chunk.cat ?? "評価"),
       topic: String(chunk.topic ?? "その他").slice(0, 24),
       tt: String(chunk.tt ?? "その他"),

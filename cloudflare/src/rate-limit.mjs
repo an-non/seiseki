@@ -11,14 +11,48 @@ async function sha256Hex(value) {
   return bytesToHex(new Uint8Array(digest));
 }
 
+async function hmacSha256Hex(secret, value) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(String(secret)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(String(value)));
+  return bytesToHex(new Uint8Array(signature));
+}
+
 function requestNetworkId(request) {
   return request.headers.get("CF-Connecting-IP")
     || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     || "unknown";
 }
 
-async function fingerprint(scope, value) {
-  return sha256Hex(`seiseki-rate-v1|${scope}|${String(value)}`);
+async function fingerprint(scope, value, secret = "") {
+  const payload = `seiseki-rate-v1|${scope}|${String(value)}`;
+  return secret ? hmacSha256Hex(secret, payload) : sha256Hex(payload);
+}
+
+export class RateLimitError extends RequestError {
+  constructor(code, message, retryAt) {
+    super(429, code, message);
+    this.retryAt = Number(retryAt);
+    this.retryAfterSeconds = Math.max(1, Math.ceil((this.retryAt - Date.now()) / 1000));
+  }
+}
+
+export async function enforcePlatformRateLimit(limiter, request, scope, fingerprintSecret = "") {
+  if (!limiter?.limit) return;
+  const key = await fingerprint(scope, requestNetworkId(request), fingerprintSecret);
+  const result = await limiter.limit({ key });
+  if (!result?.success) {
+    throw new RateLimitError(
+      "ANALYSIS_RATE_LIMITED",
+      "analysis submissions are temporarily limited; try again in one minute",
+      Date.now() + 60 * 1000
+    );
+  }
 }
 
 async function incrementBucket(db, key, resetAt, now) {
@@ -45,28 +79,28 @@ async function incrementBucket(db, key, resetAt, now) {
   }
 }
 
-async function consumeWindow(db, scope, subject, limit, windowMs, now) {
+async function consumeWindow(db, scope, subject, limit, windowMs, now, fingerprintSecret) {
   const windowId = Math.floor(now / windowMs);
   const resetAt = (windowId + 1) * windowMs;
-  const subjectHash = await fingerprint(scope, subject);
+  const subjectHash = await fingerprint(scope, subject, fingerprintSecret);
   const key = `${scope}:${windowId}:${subjectHash}`;
   const result = await incrementBucket(db, key, resetAt, now);
   if (result.hitCount > limit) {
-    throw new RequestError(429, "RATE_LIMITED", "too many requests; try again later");
+    throw new RateLimitError("RATE_LIMITED", "too many requests; try again later", result.resetAt);
   }
   return result;
 }
 
-export async function enforceRateLimit(db, request, policy, extraSubject = "") {
+export async function enforceRateLimit(db, request, policy, extraSubject = "", fingerprintSecret = "") {
   if (!db || !policy) return;
   const now = Date.now();
   const network = requestNetworkId(request);
   for (const rule of policy.network || []) {
-    await consumeWindow(db, `${policy.name}:net:${rule.label}`, network, rule.limit, rule.windowMs, now);
+    await consumeWindow(db, `${policy.name}:net:${rule.label}`, network, rule.limit, rule.windowMs, now, fingerprintSecret);
   }
   if (extraSubject) {
     for (const rule of policy.subject || []) {
-      await consumeWindow(db, `${policy.name}:subject:${rule.label}`, extraSubject, rule.limit, rule.windowMs, now);
+      await consumeWindow(db, `${policy.name}:subject:${rule.label}`, extraSubject, rule.limit, rule.windowMs, now, fingerprintSecret);
     }
   }
 
@@ -89,6 +123,16 @@ export const RATE_LIMIT_POLICIES = Object.freeze({
     ]),
     subject: Object.freeze([
       Object.freeze({ label: "minute", limit: 10, windowMs: 60 * 1000 })
+    ])
+  }),
+  recovery: Object.freeze({
+    name: "recovery",
+    network: Object.freeze([
+      Object.freeze({ label: "ten-minute", limit: 5, windowMs: 10 * 60 * 1000 }),
+      Object.freeze({ label: "day", limit: 20, windowMs: 24 * 60 * 60 * 1000 })
+    ]),
+    subject: Object.freeze([
+      Object.freeze({ label: "ten-minute", limit: 5, windowMs: 10 * 60 * 1000 })
     ])
   }),
   register: Object.freeze({

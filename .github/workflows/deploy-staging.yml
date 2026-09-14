@@ -35,7 +35,8 @@ jobs:
     timeout-minutes: 30
     env:
       VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
-      VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_API_REQUIRED: 'true'
+      VITE_SEISEKI_RUNTIME_MODE: staging
     steps:
       - name: Confirm intent
         shell: bash
@@ -126,6 +127,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build:staging
           cd ..
+          npm --prefix cloudflare run assets:check:staging
           test -s local/dist/index.html
           test -d local/dist/assets
           test -f local/dist/model/manifest.json
@@ -147,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
+          npm run deploy:staging 2>&1 | tee /tmp/deploy.log
           printf '\n### Deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
           printf -- '- environment: `staging` (production untouched)\n' >> "$GITHUB_STEP_SUMMARY"
           grep -E 'Current Version ID|Uploaded' /tmp/deploy.log \

@@ -55,7 +55,7 @@ class D1DatabaseAdapter {
 
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql", "0009_analysis_cache.sql", "0010_submission_review.sql", "0011_account_recovery.sql"]) {
     const migration = readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8");
     database.exec(migration);
   }
@@ -458,6 +458,58 @@ test("Workers AI output is validated and stored as neutral opinion chunks", asyn
   database.close();
 });
 
+test("Workers AI distribution scoring stores expected values in the existing analysis contract", async () => {
+  const database = createDatabase();
+  const pending = [];
+  let aiRequest = null;
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    TURNSTILE_REQUIRED: "false",
+    AI_ANALYSIS_ENABLED: "true",
+    AI_PROVIDER: "workers-ai",
+    AI_SCORING_MODE: "distribution",
+    AI_MODEL: "mock-distribution-model",
+    AI: { async run(_model, request) {
+      aiRequest = request;
+      return { response: {
+        params: { emo: { pol: -0.2, label: "negative" }, valid: 0, crit: 0, motiv: 0 },
+        ideology: { econ: 0, soc: 0, confidence: 72 },
+        attrs: [],
+        chunks: [],
+        scoreDistributions: {
+          valid: [0, 0, 1, 3, 0],
+          crit: [0, 0, 0, 1, 1],
+          motiv: [0, 1, 3, 0, 0],
+          econ: [0, 3, 1, 0, 0],
+          soc: [0, 0, 1, 2, 1]
+        }
+      } };
+    } }
+  };
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+  const create = await worker.fetch(new Request("http://local/api/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(submission())
+  }), env, ctx);
+  const createdPayload = await create.json();
+  await Promise.all(pending);
+
+  assert.match(aiRequest.messages[1].content, /scoreDistributions/u);
+  assert.equal(aiRequest.response_format.json_schema.required.includes("scoreDistributions"), true);
+  const response = await worker.fetch(new Request(`http://local/api/responses/${createdPayload.id}/analysis`, {
+    headers: { "x-response-manage-token": createdPayload.manageToken }
+  }), env);
+  const stored = await response.json();
+  assert.deepEqual(stored.analysis.params, {
+    emo: { pol: -0.2, label: "negati" }, valid: 69, crit: 88, motiv: 44
+  });
+  assert.deepEqual(stored.analysis.ideology, { econ: -38, soc: 50, confidence: 72 });
+  assert.equal(stored.analysis.diagnostics.scoringMode, "distribution");
+  assert.equal(database.prepare("SELECT prompt_version FROM analysis_runs WHERE response_id = ?").get(createdPayload.id).prompt_version, "seiseki-quantize-v6-distribution");
+  database.close();
+});
+
 test("Workers AI failures complete with deterministic rule fallback", async () => {
   const database = createDatabase();
   const pending = [];
@@ -668,5 +720,55 @@ test("duplicate queue deliveries claim one analysis run and create one node set"
   assert.equal(database.prepare("SELECT count(*) AS count FROM analysis_runs WHERE response_id = ?").get(responseId).count, 1);
   assert.equal(database.prepare("SELECT count(*) AS count FROM opinion_chunks WHERE response_id = ?").get(responseId).count, 1);
   assert.equal(database.prepare("SELECT analysis_status FROM responses WHERE id = ?").get(responseId).analysis_status, "completed");
+  database.close();
+});
+
+test("identical complete analysis input reuses an HMAC cache entry without a second AI call", async () => {
+  const database = createDatabase();
+  const queued = [];
+  const waits = [];
+  let aiCalls = 0;
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    TURNSTILE_REQUIRED: "false",
+    AI_ANALYSIS_ENABLED: "true",
+    AI_MODEL: "cache-test-model",
+    ANALYSIS_CACHE_HMAC_SECRET: "test-only-secret-with-at-least-32-characters",
+    ANALYSIS_QUEUE: { async send(body) { queued.push(body); } },
+    AI: { async run() {
+      aiCalls += 1;
+      return { response: {
+        params: { emo: { pol: 0.1, label: "中立" }, valid: 63, crit: 57, motiv: 61 },
+        ideology: { econ: 12, soc: -8, confidence: 55 },
+        attrs: ["教育"],
+        chunks: [{
+          s: "教育制度について検討する", cat: "提言", topic: "教育", tt: "政府全般", tn: "",
+          emo: 0.1, crit: 57, fact: "意見"
+        }]
+      } };
+    } }
+  };
+  const ctx = { waitUntil(promise) { waits.push(promise); } };
+  const first = await worker.fetch(new Request("http://local/api/responses", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission())
+  }), env, ctx);
+  const second = await worker.fetch(new Request("http://local/api/responses", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(submission())
+  }), env, ctx);
+  const firstId = (await first.json()).id;
+  const secondId = (await second.json()).id;
+  await Promise.all(waits);
+  const deliver = body => worker.queue({ messages: [{
+    id: crypto.randomUUID(), body, attempts: 1, ack() {}, retry() { assert.fail("cache delivery should not retry"); }
+  }] }, env);
+  await deliver(queued.find(item => item.responseId === firstId));
+  await deliver(queued.find(item => item.responseId === secondId));
+  assert.equal(aiCalls, 1);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM analysis_cache").get().count, 1);
+  assert.equal(database.prepare("SELECT hit_count AS count FROM analysis_cache").get().count, 1);
+  const cachedResponse = database.prepare("SELECT analysis_json AS analysisJson FROM responses WHERE id=?").get(secondId);
+  const cachedAnalysis = JSON.parse(cachedResponse.analysisJson);
+  assert.equal(cachedAnalysis.diagnostics.cache.hit, true);
+  assert.equal(cachedAnalysis.diagnostics.valueTrace.responseRevision, 1);
   database.close();
 });

@@ -22,7 +22,7 @@ class D1 {
 }
 function createDatabase() {
   const database = new DatabaseSync(":memory:");
-  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql"]) {
+  for (const name of ["0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql", "0004_response_question_context.sql", "0005_rate_limits.sql", "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql", "0010_submission_review.sql", "0011_account_recovery.sql"]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
   return database;
@@ -76,6 +76,46 @@ test("free-text PATCH keeps one response and increments revision while invalidat
   assert.deepEqual([stored.revision, stored.t, stored.s, stored.a], [2, "更新済み本文", "pending", null]);
   assert.equal(database.prepare("SELECT count(*) AS n FROM opinion_chunks WHERE response_id=?").get(created.id).n, 0);
   assert.deepEqual(queued.at(-1), { type: "analyze-response", responseId: created.id, revision: 2 });
+  database.close();
+});
+
+test("unchanged free-text PATCH keeps the completed revision and does not enqueue analysis", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", AI_ANALYSIS_ENABLED: "true", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const owner = await register(env, "同一本文確認者"); const cr = await create(env, owner.token); const created = await cr.json();
+  database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
+  queued.length = 0;
+  const response = await worker.fetch(new Request(`http://local/api/responses/${created.id}/free-text`, {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+    body: JSON.stringify({ expectedRevision: 1, freeText: "最初の自由記述" })
+  }), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual([body.revision, body.analysisStatus, body.unchanged], [1, "completed", true]);
+  assert.deepEqual(queued, []);
+  assert.equal(database.prepare("SELECT revision FROM responses WHERE id=?").get(created.id).revision, 1);
+  database.close();
+});
+
+test("unchanged initial response PATCH does not replace answers or enqueue analysis", async () => {
+  const database = createDatabase(); const queued = [];
+  const env = { DB: new D1(database), TURNSTILE_REQUIRED: "false", AI_ANALYSIS_ENABLED: "true", ANALYSIS_QUEUE: { send: async x => queued.push(x) } };
+  const owner = await register(env, "同一初回答確認者"); const cr = await create(env, owner.token); const created = await cr.json();
+  database.prepare("UPDATE responses SET analysis_status='completed', analysis_json='{}' WHERE id=?").run(created.id);
+  queued.length = 0;
+  const response = await worker.fetch(new Request(`http://local/api/responses/${created.id}/initial`, {
+    method: "PATCH", headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+    body: JSON.stringify({
+      expectedRevision: 1,
+      answers: { q_support: "わからない", q_priority: "子育て・教育", q_econ: "3" },
+      freeText: "最初の自由記述"
+    })
+  }), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual([body.revision, body.analysisStatus, body.unchanged], [1, "completed", true]);
+  assert.deepEqual(queued, []);
+  assert.equal(database.prepare("SELECT revision FROM responses WHERE id=?").get(created.id).revision, 1);
   database.close();
 });
 

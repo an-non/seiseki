@@ -514,6 +514,14 @@ try {
     if (reviewVisible) {
       await clickText("入力内容を確認");
       await waitForExpression(`document.body.innerText.includes("入力内容の確認") && document.body.innerText.includes("内容を確定してAI解析へ")`, "initial response confirmation");
+      const analysisConfirmed = await evaluate(`(() => {
+        const label = [...document.querySelectorAll('label')].find(node => (node.textContent || '').includes('入力内容を確認し、AI解析を実行します'));
+        const checkbox = label?.querySelector('input[type="checkbox"]');
+        if (!checkbox) return false;
+        checkbox.click();
+        return checkbox.checked;
+      })()`);
+      assert.equal(analysisConfirmed, true, "analysis confirmation checkbox could not be selected");
       await clickText("内容を確定してAI解析へ");
       break;
     }

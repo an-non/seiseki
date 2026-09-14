@@ -3,6 +3,7 @@ import {
   deleteResponseFollowUpText,
   deleteResponse,
   getBasicStats,
+  getResponseForAnalysis,
   getResponseMetadata,
   getResponseQuestionSnapshot,
   insertPendingResponse,
@@ -21,7 +22,9 @@ import {
   listAccountResponses,
   loginAccount,
   logoutAccount,
+  resetPasswordWithRecoveryCode,
   registerAccount,
+  rotateAccountRecoveryCode,
   updateAccount
 } from "./auth.mjs";
 import { analyzeStoredResponse } from "./analysis.mjs";
@@ -29,6 +32,7 @@ import { loadQuestions, snapshotQuestions, validateAnswersAgainstQuestions } fro
 import {
   createResponseId,
   normalizeExpectedRevision,
+  normalizeRevisionRequest,
   normalizeFollowUpTextCreate,
   normalizeFollowUpTextDelete,
   normalizeFollowUpTextUpdate,
@@ -37,9 +41,10 @@ import {
   normalizeSubmission,
   RequestError
 } from "./validation.mjs";
-import { enforceRateLimit, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
+import { enforcePlatformRateLimit, enforceRateLimit, RateLimitError, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
 import { getPublicAggregate } from "./public-aggregate.mjs";
 import { handleStagingAdminRequest } from "./staging-admin.mjs";
+import { createSubmissionFingerprint, refreshSubmissionReview } from "./submission-review.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -120,17 +125,39 @@ function routeRequeueId(pathname) {
   return match ? match[1] : null;
 }
 
+const MAX_JSON_BODY_BYTES = 32 * 1024;
+
+async function readBodyText(request, maxBytes) {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    byteLength += value.byteLength;
+    if (byteLength > maxBytes) {
+      await reader.cancel();
+      throw new RequestError(413, "BODY_TOO_LARGE", "request body is too large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 async function readJson(request) {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().startsWith("application/json")) {
     throw new RequestError(415, "UNSUPPORTED_MEDIA_TYPE", "application/json is required");
   }
   const length = Number(request.headers.get("content-length") ?? 0);
-  if (length > 32 * 1024) {
+  if (length > MAX_JSON_BODY_BYTES) {
     throw new RequestError(413, "BODY_TOO_LARGE", "request body is too large");
   }
+  const text = await readBodyText(request, MAX_JSON_BODY_BYTES);
   try {
-    return await request.json();
+    return JSON.parse(text);
   } catch {
     throw new RequestError(400, "INVALID_JSON", "request body is not valid JSON");
   }
@@ -142,6 +169,10 @@ async function verifyTurnstile(body, request, options = {}) {
   const expectedHostname = String(options.hostname || "").trim();
   const expectedAction = String(options.action || "").trim();
   const token = String(body?.turnstileToken ?? "").trim();
+
+  if (token.length > 2048) {
+    throw new RequestError(400, "TURNSTILE_TOKEN_INVALID", "Turnstile token is too long");
+  }
 
   if (!secret) {
     if (required) {
@@ -177,7 +208,8 @@ async function verifyTurnstile(body, request, options = {}) {
 }
 
 async function handleCreateResponse(request, env, ctx) {
-  await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.response);
+  await enforcePlatformRateLimit(env.ANALYSIS_SUBMISSION_LIMITER, request, "analysis-submission", env.RATE_LIMIT_FINGERPRINT_SECRET);
+  await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.response, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
   const body = await readJson(request);
   await verifyTurnstile(body, request, {
     required: env.TURNSTILE_REQUIRED,
@@ -205,13 +237,16 @@ async function handleCreateResponse(request, env, ctx) {
     createdAt: Date.now()
   };
 
+  const fingerprint = await createSubmissionFingerprint(env, response.freeText);
+  let review;
   try {
-    await insertPendingResponse(
+    review = await insertPendingResponse(
       env.DB,
       response,
       snapshotQuestions(questions),
       manageAccess?.tokenHash ?? null,
-      account?.id ?? null
+      account?.id ?? null,
+      fingerprint
     );
   } catch (error) {
     if (error?.code === "RESPONSE_ALREADY_EXISTS" || String(error?.message ?? "") === "RESPONSE_ALREADY_EXISTS") {
@@ -220,7 +255,7 @@ async function handleCreateResponse(request, env, ctx) {
     throw error;
   }
 
-  if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() === "true" && ctx) {
+  if (review.publicationStatus === "accepted" && String(env.AI_ANALYSIS_ENABLED).toLowerCase() === "true" && ctx) {
     const dispatch = async () => {
       if (env.ANALYSIS_QUEUE?.send) {
         try {
@@ -251,9 +286,17 @@ async function handleCreateResponse(request, env, ctx) {
     id: response.id,
     revision: 1,
     status: "stored",
-    analysisStatus: "pending",
+    analysisStatus: review.publicationStatus === "held_duplicate" ? "held" : "pending",
+    publicationStatus: review.publicationStatus,
     ...(manageAccess ? { manageToken: manageAccess.token } : {})
   }, 201);
+}
+
+async function refreshResponseReview(env, responseId) {
+  const record = await getResponseForAnalysis(env.DB, responseId);
+  if (!record) return { publicationStatus: "accepted", duplicateOf: null };
+  const fingerprint = await createSubmissionFingerprint(env, record.freeText, record.followUpText);
+  return refreshSubmissionReview(env.DB, responseId, fingerprint);
 }
 
 function retryDelayForLease(outcome, now = Date.now()) {
@@ -280,8 +323,8 @@ async function enqueueAnalysisRevision(env, responseId, revision) {
   }
 }
 
-function dispatchUpdatedAnalysis(env, ctx, responseId, revision) {
-  if (String(env.AI_ANALYSIS_ENABLED).toLowerCase() !== "true" || !ctx) return;
+function dispatchUpdatedAnalysis(env, ctx, responseId, revision, publicationStatus = "accepted") {
+  if (publicationStatus !== "accepted" || String(env.AI_ANALYSIS_ENABLED).toLowerCase() !== "true" || !ctx) return;
   ctx.waitUntil((async () => {
     try {
       await enqueueAnalysisRevision(env, responseId, revision);
@@ -298,7 +341,9 @@ async function handleRequest(request, env, ctx) {
   if (!env.DB) throw new RequestError(503, "DB_NOT_BOUND", "D1 binding DB is not configured");
   const url = new URL(request.url);
 
-  const stagingAdminResponse = await handleStagingAdminRequest(request, env, url);
+  const stagingAdminResponse = await handleStagingAdminRequest(request, env, url, {
+    enqueueAnalysis: (responseId, revision) => enqueueAnalysisRevision(env, responseId, revision)
+  });
   if (stagingAdminResponse) return stagingAdminResponse;
 
   if (request.method === "GET" && url.pathname === "/api/health") {
@@ -310,7 +355,9 @@ async function handleRequest(request, env, ctx) {
       questions: await loadQuestions(env.DB),
       turnstile: {
         registerSiteKey: String(env.TURNSTILE_REGISTER_SITE_KEY || ""),
-        registerRequired: String(env.TURNSTILE_REGISTER_REQUIRED).toLowerCase() === "true"
+        registerRequired: String(env.TURNSTILE_REGISTER_REQUIRED).toLowerCase() === "true",
+        recoverySiteKey: String(env.TURNSTILE_RECOVERY_SITE_KEY || ""),
+        recoveryRequired: String(env.TURNSTILE_RECOVERY_REQUIRED).toLowerCase() === "true"
       }
     });
   }
@@ -329,7 +376,7 @@ async function handleRequest(request, env, ctx) {
     });
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/register") {
-    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register);
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
     const body = await readJson(request);
     await verifyTurnstile(body, request, {
       required: env.TURNSTILE_REGISTER_REQUIRED,
@@ -342,8 +389,20 @@ async function handleRequest(request, env, ctx) {
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
     const body = await readJson(request);
     const accountName = String(body?.name ?? "").normalize("NFKC").trim().toLowerCase();
-    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.login, accountName);
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.login, accountName, env.RATE_LIMIT_FINGERPRINT_SECRET);
     return json(await loginAccount(env.DB, body));
+  }
+  if (request.method === "POST" && url.pathname === "/api/accounts/recover") {
+    const body = await readJson(request);
+    const accountName = String(body?.name ?? "").normalize("NFKC").trim().toLowerCase();
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.recovery, accountName, env.RATE_LIMIT_FINGERPRINT_SECRET);
+    await verifyTurnstile(body, request, {
+      required: env.TURNSTILE_RECOVERY_REQUIRED,
+      secret: env.TURNSTILE_RECOVERY_SECRET,
+      hostname: env.TURNSTILE_RECOVERY_HOSTNAME,
+      action: "recover"
+    });
+    return json(await resetPasswordWithRecoveryCode(env.DB, body, env.PASSWORD_ITERATIONS));
   }
   if (url.pathname === "/api/accounts/me") {
     const account = await authenticateRequest(env.DB, request, true);
@@ -355,6 +414,10 @@ async function handleRequest(request, env, ctx) {
       await deleteAccount(env.DB, account, await readJson(request));
       return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
     }
+  }
+  if (request.method === "POST" && url.pathname === "/api/accounts/me/recovery-code") {
+    const account = await authenticateRequest(env.DB, request, true);
+    return json(await rotateAccountRecoveryCode(env.DB, account, await readJson(request)));
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/logout") {
     const account = await authenticateRequest(env.DB, request, true);
@@ -370,13 +433,17 @@ async function handleRequest(request, env, ctx) {
   if (freeTextId && request.method === "PATCH") {
     await authorizeResponseAccess(env.DB, request, freeTextId);
     const input = normalizeFreeTextUpdate(await readJson(request));
-    const nextRevision = await updateResponseFreeText(env.DB, freeTextId, input.expectedRevision, input.freeText);
-    if (nextRevision == null) {
+    const outcome = await updateResponseFreeText(env.DB, freeTextId, input.expectedRevision, input.freeText);
+    if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (outcome.status === "stale") {
       throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     }
-    dispatchUpdatedAnalysis(env, ctx, freeTextId, nextRevision);
-    const current = await getResponseMetadata(env.DB, freeTextId);
-    return json({ id: freeTextId, revision: nextRevision, analysisStatus: "pending", updatedAt: Number(current?.updatedAt || Date.now()) });
+    if (outcome.status === "unchanged") {
+      return json({ id: freeTextId, revision: outcome.revision, analysisStatus: outcome.analysisStatus, unchanged: true, updatedAt: outcome.updatedAt });
+    }
+    const review = await refreshResponseReview(env, freeTextId);
+    dispatchUpdatedAnalysis(env, ctx, freeTextId, outcome.revision, review.publicationStatus);
+    return json({ id: freeTextId, revision: outcome.revision, analysisStatus: review.publicationStatus === "held_duplicate" ? "held" : "pending", publicationStatus: review.publicationStatus, unchanged: false, updatedAt: outcome.updatedAt });
   }
 
   const followUpId = routeFollowUpId(url.pathname);
@@ -397,13 +464,26 @@ async function handleRequest(request, env, ctx) {
     if (outcome.status === "stale") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
     if (outcome.status === "exists") throw new RequestError(409, "FOLLOW_UP_ALREADY_EXISTS", "second free-text response has already been submitted");
     if (outcome.status === "missing") throw new RequestError(409, "FOLLOW_UP_NOT_SUBMITTED", "second free-text response has not been submitted yet");
+    if (outcome.status === "unchanged") {
+      return json({
+        id: followUpId,
+        revision: outcome.revision,
+        analysisStatus: outcome.analysisStatus,
+        followUpSubmitted: true,
+        unchanged: true,
+        updatedAt: outcome.updatedAt
+      });
+    }
     if (outcome.status !== "updated") throw new RequestError(409, "FOLLOW_UP_CONFLICT", "second free-text response could not be updated");
-    dispatchUpdatedAnalysis(env, ctx, followUpId, outcome.revision);
+    const review = await refreshResponseReview(env, followUpId);
+    dispatchUpdatedAnalysis(env, ctx, followUpId, outcome.revision, review.publicationStatus);
     return json({
       id: followUpId,
       revision: outcome.revision,
-      analysisStatus: "pending",
+      analysisStatus: review.publicationStatus === "held_duplicate" ? "held" : "pending",
+      publicationStatus: review.publicationStatus,
       followUpSubmitted: request.method === "DELETE" ? false : true,
+      unchanged: false,
       updatedAt: outcome.updatedAt
     }, request.method === "POST" ? 201 : 200);
   }
@@ -418,9 +498,13 @@ async function handleRequest(request, env, ctx) {
     }
     const outcome = await updateInitialResponse(env.DB, initialId, input.expectedRevision, input.answers, input.freeText);
     if (outcome.status === "not_found") throw new RequestError(404, "NOT_FOUND", "response was not found");
+    if (outcome.status === "unchanged") {
+      return json({ id: initialId, revision: outcome.revision, analysisStatus: outcome.analysisStatus, unchanged: true, updatedAt: outcome.updatedAt });
+    }
     if (outcome.status !== "updated") throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before editing");
-    dispatchUpdatedAnalysis(env, ctx, initialId, outcome.revision);
-    return json({ id: initialId, revision: outcome.revision, analysisStatus: "pending", updatedAt: outcome.updatedAt });
+    const review = await refreshResponseReview(env, initialId);
+    dispatchUpdatedAnalysis(env, ctx, initialId, outcome.revision, review.publicationStatus);
+    return json({ id: initialId, revision: outcome.revision, analysisStatus: review.publicationStatus === "held_duplicate" ? "held" : "pending", publicationStatus: review.publicationStatus, unchanged: false, updatedAt: outcome.updatedAt });
   }
 
   const answersId = routeAnswersId(url.pathname);
@@ -432,9 +516,9 @@ async function handleRequest(request, env, ctx) {
   const requeueId = routeRequeueId(url.pathname);
   if (requeueId && request.method === "POST") {
     await authorizeResponseAccess(env.DB, request, requeueId);
-    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.analysisRequeue, requeueId);
-    const body = await readJson(request);
-    const expectedRevision = normalizeExpectedRevision(body?.expectedRevision);
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.analysisRequeue, requeueId, env.RATE_LIMIT_FINGERPRINT_SECRET);
+    const body = normalizeRevisionRequest(await readJson(request));
+    const expectedRevision = body.expectedRevision;
     const current = await getResponseAnalysis(env.DB, requeueId);
     if (!current) throw new RequestError(404, "NOT_FOUND", "response was not found");
     if (Number(current.revision ?? 1) !== expectedRevision) throw new RequestError(409, "REVISION_CONFLICT", "response revision changed; reload before retrying");
@@ -485,7 +569,12 @@ export default {
       return withCors(await handleRequest(request, env, ctx), origin);
     } catch (error) {
       if (error instanceof RequestError) {
-        return withCors(json({ error: error.code, message: error.message }, error.status), origin);
+        const rateLimit = error instanceof RateLimitError;
+        return withCors(json({
+          error: error.code,
+          message: error.message,
+          ...(rateLimit ? { retryAt: error.retryAt } : {})
+        }, error.status, rateLimit ? { "retry-after": String(error.retryAfterSeconds) } : {}), origin);
       }
       console.error("request failed", error);
       return withCors(json({ error: "INTERNAL_ERROR", message: "request failed" }, 500), origin);
@@ -511,6 +600,11 @@ export default {
             queuedRevision: revision,
             currentRevision: current ? Number(current.revision ?? 1) : null
           }));
+          message.ack();
+          continue;
+        }
+        if (current.publicationStatus === "held_duplicate") {
+          console.info(JSON.stringify({ event: "analysis_queue_held_duplicate", responseId, revision }));
           message.ack();
           continue;
         }

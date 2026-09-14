@@ -1,0 +1,116 @@
+name: Migrate SEISEKI production D1
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full 40-character commit SHA containing the approved migrations
+        required: true
+        type: string
+      confirmation:
+        description: Type migrate-production-d1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-production-d1-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Validate immutable migration request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "migrate-production-d1"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout approved migration commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify immutable checkout and install Wrangler
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test -z "$(git status --porcelain)"
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Preflight production D1
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --remote \
+            --command "SELECT COUNT(*) AS duplicate_groups FROM (SELECT account_id FROM account_responses GROUP BY account_id HAVING COUNT(*) > 1); PRAGMA foreign_key_check;" \
+            --json > /tmp/preflight.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const result = JSON.parse(fs.readFileSync('/tmp/preflight.json', 'utf8'));
+          const counts = result?.[0]?.results?.[0] || {};
+          const foreignKeys = result?.[1]?.results || [];
+          if (Number(counts.duplicate_groups) !== 0) throw new Error('production has duplicate account-response ownership');
+          if (foreignKeys.length) throw new Error(`production has ${foreignKeys.length} foreign-key violation(s)`);
+          NODE
+
+      - name: Record Time Travel bookmark before migration
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 time-travel info DB --json > /tmp/time-travel.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const info = JSON.parse(fs.readFileSync('/tmp/time-travel.json', 'utf8'));
+          const bookmark = info.bookmark || info?.result?.bookmark;
+          if (!bookmark) throw new Error('production Time Travel bookmark was not returned');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Pre-migration recovery point\n\n- bookmark: \`${bookmark}\`\n`);
+          NODE
+
+      - name: Apply production D1 migrations only
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list DB --remote | tee /tmp/migrations-before.txt
+          npx wrangler d1 migrations apply DB --remote | tee /tmp/migrations-apply.txt
+
+      - name: Verify production D1 after migration
+        working-directory: cloudflare
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 migrations list DB --remote > /tmp/migrations-after.txt
+          grep -qi 'No migrations to apply' /tmp/migrations-after.txt
+          npx wrangler d1 execute DB --remote \
+            --command "PRAGMA foreign_key_check; SELECT name FROM sqlite_master WHERE type='table' AND name IN ('analysis_cache','response_text_fingerprints','account_recovery_tokens') ORDER BY name;" \
+            --json > /tmp/postflight.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const result = JSON.parse(fs.readFileSync('/tmp/postflight.json', 'utf8'));
+          const foreignKeys = result?.[0]?.results || [];
+          const names = new Set((result?.[1]?.results || []).map(row => row.name));
+          if (foreignKeys.length) throw new Error(`production has ${foreignKeys.length} foreign-key violation(s) after migration`);
+          for (const name of ['analysis_cache', 'response_text_fingerprints', 'account_recovery_tokens']) {
+            if (!names.has(name)) throw new Error(`production table is missing after migration: ${name}`);
+          }
+          NODE
+          printf '\n### Applied migrations\n\n' >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' /tmp/migrations-apply.txt >> "$GITHUB_STEP_SUMMARY"

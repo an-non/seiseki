@@ -11,6 +11,15 @@ var SeisekiLocal = (function () {
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+  function nodeText(value) {
+    var cleaned = String(value == null ? '' : value)
+      .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    var chars = Array.from(cleaned);
+    return chars.length <= 160 ? chars.join('') : chars.slice(0, 159).join('') + '…';
+  }
+
   function dot(vec, coef) {
     var s = coef[vec.length];                 /* 最後の1つがバイアス */
     for (var i = 0; i < vec.length; i++) s += vec[i] * coef[i];
@@ -136,7 +145,7 @@ var SeisekiLocal = (function () {
          tn（具体名）は本文からしか取れないので規則のまま */
       if (a.tt) tg = { tt: a.tt, tn: tg.tn || (defaultTarget ? defaultTarget.tn : '') };
       chunks.push({
-        s: pieces[i].slice(0, 25),                 /* 要約は作れないので冒頭25字 */
+        s: nodeText(pieces[i]),                    /* 分割文を保持し、保存上限だけ適用 */
         cat: a.cat,
         topic: C.findTopic(pieces[i], tg.tn),
         tt: tg.tt,

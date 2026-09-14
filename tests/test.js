@@ -48,7 +48,7 @@ t("範囲外の数値をクランプ", () => {
   assert.strictEqual(r.chunks[0].emo, 0.5);
   assert.strictEqual(r.chunks[0].crit, 100);
   assert.strictEqual(r.chunks[0].fact, "意見");
-  assert.ok(r.chunks[0].s.length <= 48);
+  assert.ok(Array.from(r.chunks[0].s).length <= 160);
 });
 t("数値でない値は中央値に補正", () => {
   const r = sanitizeAnalysis({ params: { emo: { pol: "abc" }, valid: null }, ideology: {} });

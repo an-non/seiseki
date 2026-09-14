@@ -21,18 +21,24 @@ config.queues = {
     max_batch_size: 3,
     max_batch_timeout: 2,
     max_retries: 3,
+    dead_letter_queue: "seiseki-analysis-dlq",
     max_concurrency: 1,
     retry_delay: 10
   }]
 };
 config.vars = {
+  ...config.vars,
   TURNSTILE_REQUIRED: "false",
+  TURNSTILE_REGISTER_REQUIRED: "false",
+  TURNSTILE_RECOVERY_REQUIRED: "false",
   ALLOWED_ORIGINS: "https://seiseki-api.tokyo-odh-129.workers.dev",
   AI_ANALYSIS_ENABLED: "true",
+  AI_PROVIDER: "workers-ai",
+  AI_SCORING_MODE: "direct",
   AI_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
   AI_MAX_ATTEMPTS: "2",
   AI_MAX_OUTPUT_TOKENS: "1800",
-  PASSWORD_ITERATIONS: "120000"
+  PASSWORD_ITERATIONS: "30000"
 };
 
 fs.writeFileSync(file, JSON.stringify(config, null, 2) + "\n");

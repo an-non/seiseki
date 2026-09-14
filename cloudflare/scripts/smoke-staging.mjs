@@ -55,10 +55,23 @@ try {
   responseId = created?.id;
   if (!responseId) throw new Error("response creation did not return an id");
 
+  const duplicate = await request("/api/responses", {
+    method: "POST",
+    body: JSON.stringify({
+      appVersion: "staging-smoke",
+      consent: { accepted: true, version: "smoke-1", at: Date.now() },
+      answers: { q_priority: "子育て・教育" },
+      freeText: "教育制度では、地域差を確認しながら学習支援を改善してほしい。"
+    })
+  }, [409]);
+  if (duplicate?.error !== "RESPONSE_ALREADY_EXISTS") {
+    throw new Error(`unexpected duplicate response result: ${duplicate?.error ?? "missing"}`);
+  }
+
   let analysis = null;
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 15; attempt++) {
     analysis = await request(`/api/responses/${responseId}/analysis`);
-    if (analysis?.analysisStatus !== "pending") break;
+    if (!["pending", "running"].includes(analysis?.analysisStatus)) break;
     await sleep(2000);
   }
   if (analysis?.analysisStatus !== "completed") {
@@ -72,8 +85,8 @@ try {
   }
 
   const mine = await request("/api/accounts/me/responses");
-  if (!mine?.responses?.some(item => item.id === responseId)) {
-    throw new Error("response was not linked to the account");
+  if (mine?.responses?.length !== 1 || mine.responses[0]?.id !== responseId) {
+    throw new Error("account must retain exactly one linked response");
   }
 
   const updated = await request("/api/accounts/me", {
@@ -95,6 +108,7 @@ try {
     health: health.status,
     accountLifecycle: "verified",
     responseLink: "verified",
+    duplicateInitialResponse: "rejected",
     analysisStatus: analysis.analysisStatus,
     analysisEngine: analysis.analysis.engine,
     chunkCount: analysis.analysis.chunks.length

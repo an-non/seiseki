@@ -29,7 +29,21 @@ function requireObject(value, name) {
   return value;
 }
 
+export function requireAllowedKeys(value, allowed, name = "body") {
+  const object = requireObject(value, name);
+  const accepted = new Set(allowed);
+  for (const key of Object.keys(object)) {
+    if (!accepted.has(key)) {
+      throw new RequestError(400, "INVALID_FIELD", `unsupported ${name} field: ${key}`);
+    }
+  }
+  return object;
+}
+
 function cleanText(value, max, name, required = false) {
+  if (value != null && typeof value !== "string") {
+    throw new RequestError(400, "INVALID_FIELD", `${name} must be a string`);
+  }
   const text = String(value ?? "").replaceAll("\u0000", "").trim();
   if (required && !text) throw new RequestError(400, "INVALID_FIELD", `${name} is required`);
   if ([...text].length > max) throw new RequestError(400, "INVALID_FIELD", `${name} is too long`);
@@ -37,7 +51,10 @@ function cleanText(value, max, name, required = false) {
 }
 
 function normalizeEpoch(value, name) {
-  const number = Number(value);
+  if (typeof value !== "number") {
+    throw new RequestError(400, "INVALID_FIELD", `${name} must be a number`);
+  }
+  const number = value;
   if (!Number.isFinite(number) || number <= 0) {
     throw new RequestError(400, "INVALID_FIELD", `${name} must be a positive timestamp`);
   }
@@ -45,13 +62,24 @@ function normalizeEpoch(value, name) {
 }
 
 export function normalizeSubmission(input) {
-  const body = requireObject(input, "body");
-  const consent = requireObject(body.consent, "consent");
+  const body = requireAllowedKeys(input, [
+    "appVersion", "consent", "demo", "answers", "freeText", "free",
+    "demoFlag", "turnstileToken", "analysis", "nodes"
+  ]);
+  const consent = requireAllowedKeys(body.consent, ["accepted", "version", "at"], "consent");
   if (consent.accepted !== true) {
     throw new RequestError(400, "CONSENT_REQUIRED", "consent must be accepted");
   }
 
-  const demoInput = body.demo == null ? {} : requireObject(body.demo, "demo");
+  const demoInput = body.demo == null
+    ? {}
+    : requireAllowedKeys(body.demo, Object.keys(DEMO_OPTIONS), "demo");
+  if (body.demoFlag != null && typeof body.demoFlag !== "boolean") {
+    throw new RequestError(400, "INVALID_FIELD", "demoFlag must be a boolean");
+  }
+  if (body.turnstileToken != null && typeof body.turnstileToken !== "string") {
+    throw new RequestError(400, "INVALID_FIELD", "turnstileToken must be a string");
+  }
   const demo = {};
   for (const [field, allowed] of Object.entries(DEMO_OPTIONS)) {
     const value = cleanText(demoInput[field], field === "party" ? 30 : 20, `demo.${field}`);
@@ -94,6 +122,11 @@ export function normalizeExpectedRevision(value) {
     throw new RequestError(400, "INVALID_REVISION", "expectedRevision must be a positive integer");
   }
   return revision;
+}
+
+export function normalizeRevisionRequest(input) {
+  const body = requireAllowedKeys(input, ["expectedRevision"]);
+  return Object.freeze({ expectedRevision: normalizeExpectedRevision(body.expectedRevision) });
 }
 
 export function normalizeFreeTextUpdate(input) {

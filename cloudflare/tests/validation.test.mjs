@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createResponseId, normalizeSubmission, RequestError } from "../src/validation.mjs";
+import {
+  createResponseId,
+  normalizeRevisionRequest,
+  normalizeSubmission,
+  RequestError
+} from "../src/validation.mjs";
 
 function fixture(overrides = {}) {
   return {
@@ -13,7 +18,7 @@ function fixture(overrides = {}) {
   };
 }
 
-test("valid submission is normalized without accepting analysis or nodes", () => {
+test("valid submission is normalized without accepting server-owned analysis or nodes", () => {
   const result = normalizeSubmission({
     ...fixture(),
     analysis: { params: { valid: 100 } },
@@ -23,6 +28,39 @@ test("valid submission is normalized without accepting analysis or nodes", () =>
   assert.equal(result.answers.length, 2);
   assert.equal(Object.hasOwn(result, "analysis"), false);
   assert.equal(Object.hasOwn(result, "nodes"), false);
+});
+
+test("unknown submission and nested keys are rejected", () => {
+  assert.throws(
+    () => normalizeSubmission({ ...fixture(), adminOverride: true }),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
+  assert.throws(
+    () => normalizeSubmission(fixture({ consent: { accepted: true, version: "1.3", at: 1, admin: true } })),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
+  assert.throws(
+    () => normalizeSubmission(fixture({ demo: { age: "30代", role: "admin" } })),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
+});
+
+test("structured values cannot be coerced into text fields", () => {
+  assert.throws(
+    () => normalizeSubmission(fixture({ freeText: ["not", "text"] })),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
+  assert.throws(
+    () => normalizeSubmission(fixture({ answers: { q_support: { value: "わからない" } } })),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
+});
+
+test("revision-only requests reject extra state fields", () => {
+  assert.throws(
+    () => normalizeRevisionRequest({ expectedRevision: 2, analysisStatus: "completed" }),
+    error => error instanceof RequestError && error.code === "INVALID_FIELD"
+  );
 });
 
 test("consent is mandatory", () => {

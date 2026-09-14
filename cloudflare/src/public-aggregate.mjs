@@ -9,6 +9,11 @@ function clamp(value, min, max) {
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : (min + max) / 2;
 }
 
+function nodeText(value) {
+  const chars = Array.from(String(value ?? ""));
+  return chars.length <= 160 ? chars.join("") : chars.slice(0, 159).join("") + "…";
+}
+
 function jstDateKey(ts) {
   const n = Number(ts);
   return new Date((Number.isFinite(n) ? n : Date.now()) + 9 * 3600 * 1000).toISOString().slice(0, 10);
@@ -52,7 +57,7 @@ function safeAnalysis(value) {
       soc: clamp(parsed.ideology.soc, -100, 100)
     },
     chunks: chunks.map(chunk => ({
-      s: String(chunk?.s || "").slice(0, 48),
+      s: nodeText(chunk?.s),
       cat: String(chunk?.cat || "評価").slice(0, 12),
       topic: String(chunk?.topic || "その他").slice(0, 24),
       tt: String(chunk?.tt || "その他").slice(0, 16),
@@ -162,6 +167,7 @@ export async function getPublicAggregate(db) {
              analysis_status AS analysisStatus, analysis_json AS analysisJson, demo_flag AS demoFlag
       FROM responses
       WHERE demo_flag = 0
+        AND publication_status = 'accepted'
         AND analysis_status = 'completed'
         AND analysis_json IS NOT NULL
       ORDER BY created_at ASC
@@ -171,6 +177,7 @@ export async function getPublicAggregate(db) {
       FROM answers a
       JOIN responses r ON r.id = a.response_id
       WHERE r.demo_flag = 0
+        AND r.publication_status = 'accepted'
         AND r.analysis_status = 'completed'
         AND r.analysis_json IS NOT NULL
       ORDER BY a.response_id, a.qid

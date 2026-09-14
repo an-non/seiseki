@@ -37,6 +37,7 @@ function insertResponse(database, { id, status, demo = 0, analysisJson = analysi
 test("public aggregate includes only completed non-demo responses with current analysis", async () => {
   const database = new DatabaseSync(":memory:");
   database.exec(readFileSync(new URL("../migrations/0001_initial.sql", import.meta.url), "utf8"));
+  database.exec(readFileSync(new URL("../migrations/0010_submission_review.sql", import.meta.url), "utf8"));
 
   insertResponse(database, { id: "r_publiccompleted001", status: "completed", age: "30代", support: "支持する" });
   insertResponse(database, { id: "r_publicpending00001", status: "pending", age: "40代", support: "支持しない" });

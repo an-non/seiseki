@@ -1,6 +1,6 @@
-import { RequestError } from "./validation.mjs";
+import { RequestError, requireAllowedKeys } from "./validation.mjs";
 
-const PASSWORD_ITERATIONS = 120000;
+const PASSWORD_ITERATIONS = 30000;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const encoder = new TextEncoder();
 
@@ -60,6 +60,9 @@ function equalHex(left, right) {
 }
 
 function normalizeAccountName(value) {
+  if (typeof value !== "string") {
+    throw new RequestError(400, "INVALID_ACCOUNT_NAME", "account name must be a string");
+  }
   const name = String(value ?? "")
     .normalize("NFKC")
     .replace(/[\u0000-\u001F\u007F]/gu, "")
@@ -72,6 +75,9 @@ function normalizeAccountName(value) {
 }
 
 function validatePassword(value, field = "password") {
+  if (typeof value !== "string") {
+    throw new RequestError(400, "INVALID_PASSWORD", `${field} must be a string`);
+  }
   const password = String(value ?? "");
   const length = [...password].length;
   if (length < 8 || length > 128) {
@@ -93,6 +99,16 @@ async function createSessionRecord(accountId, now = Date.now()) {
   const tokenHash = await sha256Hex(token);
   const expiresAt = now + SESSION_TTL_MS;
   return { token, tokenHash, accountId, createdAt: now, expiresAt };
+}
+
+async function createRecoveryRecord(accountId, now = Date.now()) {
+  const token = randomToken();
+  return {
+    token,
+    tokenHash: await sha256Hex(token),
+    accountId,
+    createdAt: now
+  };
 }
 
 async function issueSession(db, accountId, now = Date.now()) {
@@ -165,6 +181,7 @@ export async function authorizeResponseAccess(db, request, responseId) {
 }
 
 export async function registerAccount(db, input, configuredIterations) {
+  requireAllowedKeys(input, ["name", "password", "turnstileToken"]);
   const { name, normalized } = normalizeAccountName(input?.name);
   const password = validatePassword(input?.password);
   const existing = await db.prepare("SELECT 1 AS found FROM accounts WHERE normalized_name = ?")
@@ -177,6 +194,7 @@ export async function registerAccount(db, input, configuredIterations) {
   const salt = bytesToHex(randomBytes(16));
   const passwordHash = await derivePassword(password, salt, iterations);
   const session = await createSessionRecord(id, now);
+  const recovery = await createRecoveryRecord(id, now);
   try {
     await db.batch([
       db.prepare(`
@@ -188,7 +206,11 @@ export async function registerAccount(db, input, configuredIterations) {
       db.prepare(`
         INSERT INTO account_sessions (token_hash, account_id, created_at, expires_at)
         VALUES (?, ?, ?, ?)
-      `).bind(session.tokenHash, id, now, session.expiresAt)
+      `).bind(session.tokenHash, id, now, session.expiresAt),
+      db.prepare(`
+        INSERT INTO account_recovery_tokens (account_id, token_hash, created_at)
+        VALUES (?, ?, ?)
+      `).bind(id, recovery.tokenHash, now)
     ]);
   } catch (error) {
     if (error instanceof RequestError) throw error;
@@ -197,10 +219,11 @@ export async function registerAccount(db, input, configuredIterations) {
     }
     throw new RequestError(500, "AUTH_STORAGE_FAILED", "account storage failed");
   }
-  return accountPayload(db, { id, name }, session);
+  return { ...(await accountPayload(db, { id, name }, session)), recoveryCode: recovery.token };
 }
 
 export async function loginAccount(db, input) {
+  requireAllowedKeys(input, ["name", "password"]);
   const { normalized } = normalizeAccountName(input?.name);
   const password = validatePassword(input?.password);
   const account = await db.prepare(`
@@ -216,6 +239,82 @@ export async function loginAccount(db, input) {
   }
   const session = await issueSession(db, account.id);
   return accountPayload(db, account, session);
+}
+
+export async function resetPasswordWithRecoveryCode(db, input, configuredIterations) {
+  requireAllowedKeys(input, ["name", "recoveryCode", "newPassword", "turnstileToken"]);
+  const { normalized } = normalizeAccountName(input?.name);
+  const recoveryCode = String(input?.recoveryCode ?? "").trim();
+  if (!/^[A-Za-z0-9_-]{40,64}$/u.test(recoveryCode)) {
+    throw new RequestError(401, "RECOVERY_INVALID", "account name or recovery code is incorrect");
+  }
+  const password = validatePassword(input?.newPassword, "newPassword");
+  const recoveryHash = await sha256Hex(recoveryCode);
+  const account = await db.prepare(`
+    SELECT a.id, a.name
+    FROM accounts a
+    JOIN account_recovery_tokens r ON r.account_id = a.id
+    WHERE a.normalized_name = ? AND r.token_hash = ?
+  `).bind(normalized, recoveryHash).first();
+  if (!account) throw new RequestError(401, "RECOVERY_INVALID", "account name or recovery code is incorrect");
+
+  const now = Date.now();
+  const iterations = normalizeIterations(configuredIterations);
+  const salt = bytesToHex(randomBytes(16));
+  const passwordHash = await derivePassword(password, salt, iterations);
+  const session = await createSessionRecord(account.id, now);
+  const nextRecovery = await createRecoveryRecord(account.id, now);
+  const results = await db.batch([
+    db.prepare(`
+      UPDATE accounts
+      SET password_salt = ?, password_hash = ?, password_iterations = ?, updated_at = ?
+      WHERE id = ? AND EXISTS (
+        SELECT 1 FROM account_recovery_tokens
+        WHERE account_id = ? AND token_hash = ?
+      )
+    `).bind(salt, passwordHash, iterations, now, account.id, account.id, recoveryHash),
+    db.prepare("DELETE FROM account_sessions WHERE account_id = ?").bind(account.id),
+    db.prepare("DELETE FROM account_recovery_tokens WHERE account_id = ?").bind(account.id),
+    db.prepare(`
+      INSERT INTO account_sessions (token_hash, account_id, created_at, expires_at)
+      SELECT ?, id, ?, ? FROM accounts WHERE id = ? AND updated_at = ?
+    `).bind(session.tokenHash, now, session.expiresAt, account.id, now),
+    db.prepare(`
+      INSERT INTO account_recovery_tokens (account_id, token_hash, created_at)
+      SELECT id, ?, ? FROM accounts WHERE id = ? AND updated_at = ?
+    `).bind(nextRecovery.tokenHash, now, account.id, now)
+  ]);
+  if (Number(results?.[0]?.meta?.changes ?? 0) !== 1) {
+    throw new RequestError(409, "RECOVERY_CONFLICT", "recovery code was already used");
+  }
+  return {
+    ...(await accountPayload(db, account, session)),
+    recoveryCode: nextRecovery.token
+  };
+}
+
+export async function rotateAccountRecoveryCode(db, account, input) {
+  requireAllowedKeys(input, ["currentPassword"]);
+  const row = await db.prepare(`
+    SELECT password_salt AS passwordSalt, password_hash AS passwordHash,
+           password_iterations AS passwordIterations
+    FROM accounts WHERE id = ?
+  `).bind(account.id).first();
+  if (!row) throw new RequestError(404, "ACCOUNT_NOT_FOUND", "account was not found");
+  const currentPassword = validatePassword(input?.currentPassword, "currentPassword");
+  const actual = await derivePassword(currentPassword, row.passwordSalt, row.passwordIterations);
+  if (!equalHex(actual, row.passwordHash)) {
+    throw new RequestError(401, "INVALID_CREDENTIALS", "current password is incorrect");
+  }
+  const recovery = await createRecoveryRecord(account.id);
+  await db.batch([
+    db.prepare("DELETE FROM account_recovery_tokens WHERE account_id = ?").bind(account.id),
+    db.prepare(`
+      INSERT INTO account_recovery_tokens (account_id, token_hash, created_at)
+      VALUES (?, ?, ?)
+    `).bind(account.id, recovery.tokenHash, recovery.createdAt)
+  ]);
+  return { recoveryCode: recovery.token, createdAt: recovery.createdAt };
 }
 
 export async function authenticateRequest(db, request, required = false) {
@@ -245,6 +344,7 @@ export async function getAccount(db, account) {
 }
 
 export async function updateAccount(db, account, input, configuredIterations) {
+  requireAllowedKeys(input, ["currentPassword", "name", "newPassword"]);
   const row = await db.prepare(`
     SELECT id, name, normalized_name AS normalizedName, password_salt AS passwordSalt,
            password_hash AS passwordHash, password_iterations AS passwordIterations
@@ -296,6 +396,7 @@ export async function logoutAccount(db, account) {
 }
 
 export async function deleteAccount(db, account, input) {
+  requireAllowedKeys(input, ["currentPassword"]);
   const row = await db.prepare(`
     SELECT password_salt AS passwordSalt, password_hash AS passwordHash,
            password_iterations AS passwordIterations
@@ -345,6 +446,7 @@ export async function listAccountResponses(db, accountId) {
            r.age, r.gender, r.region, r.occupation, r.party,
            r.free_text AS freeText, r.follow_up_text AS followUpText, r.analysis_status AS analysisStatus,
            r.analysis_json AS analysisJson, r.demo_flag AS demoFlag,
+           r.publication_status AS publicationStatus,
            r.revision AS revision
     FROM account_responses ar
     JOIN responses r ON r.id = ar.response_id
@@ -416,7 +518,8 @@ export async function listAccountResponses(db, accountId) {
       followUpSubmitted: row.followUpText != null,
       freeQids: ["q_free"],
       analysis,
-      analysisStatus: row.analysisStatus
+      analysisStatus: row.publicationStatus === "held_duplicate" ? "held" : row.analysisStatus,
+      publicationStatus: row.publicationStatus || "accepted"
     };
   });
 }

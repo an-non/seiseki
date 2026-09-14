@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "seiseki-workers-ai-comparison",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-08-03",
+  "ai": { "binding": "AI" },
+  "vars": {
+    "AI_PROVIDER": "workers-ai",
+    "AI_MAX_ATTEMPTS": "2",
+    "AI_MAX_OUTPUT_TOKENS": "1800"
+  }
+}

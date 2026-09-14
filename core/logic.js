@@ -160,6 +160,15 @@ function cleanStr(v, max) {
   return String(v == null ? "" : v).replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, max);
 }
 
+const NODE_TEXT_SAFETY_LIMIT = 160;
+function cleanNodeText(v) {
+  const cleaned = cleanStr(v, 1000);
+  const chars = Array.from(cleaned);
+  return chars.length <= NODE_TEXT_SAFETY_LIMIT
+    ? chars.join("")
+    : chars.slice(0, NODE_TEXT_SAFETY_LIMIT - 1).join("") + "…";
+}
+
 /* ---------- AI解析結果のサニタイズ(型・範囲を保証) ---------- */
 function sanitizeAnalysis(a) {
   if (!a || typeof a !== "object") return null;
@@ -197,7 +206,7 @@ function sanitizeAnalysis(a) {
   for (const c of cs) {
     if (out.chunks.length >= 6) break;
     if (!c || typeof c !== "object") continue;
-    const s = cleanStr(c.s, 48);
+    const s = cleanNodeText(c.s);
     if (!s) continue;
     out.chunks.push({
       s: s,
@@ -368,7 +377,7 @@ function localSummary(text) {
   s = s.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[メール]");
   s = s.replace(/(?:\+81[- ]?|0)\d{1,4}[- ]?\d{1,4}[- ]?\d{3,4}/g, "[電話番号]");
   s = s.replace(/〒?\d{3}-\d{4}/g, "[郵便番号]");
-  return cleanStr(s, 48);
+  return cleanNodeText(s);
 }
 
 function localPhraseScore(text, phrases) {

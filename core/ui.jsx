@@ -93,6 +93,8 @@ async function cloudApiRequest(path, options) {
       const error = new Error((payload && payload.message) || "Cloudflare API request failed");
       error.status = response.status;
       error.code = payload && payload.error;
+      error.retryAt = Number(payload && payload.retryAt || 0);
+      error.retryAfterSeconds = Number(response.headers.get("retry-after") || 0);
       throw error;
     }
     return payload;
@@ -127,7 +129,9 @@ async function cloudCreateInitialResponse(resp, token) {
   const result = {
     id: String(created.id),
     revision: Number(created.revision || 1),
-    manageToken: String(created.manageToken || "")
+    manageToken: String(created.manageToken || ""),
+    analysisStatus: String(created.analysisStatus || "pending"),
+    publicationStatus: String(created.publicationStatus || "accepted")
   };
   if (result.manageToken) {
     await pSet("response-access:" + result.id, {
@@ -212,7 +216,7 @@ async function cloudLoadResponseAnalysis(id) {
 }
 
 function normalizeCloudAnalysisResult(payload) {
-  const knownStatuses = new Set(["pending", "running", "failed", "completed"]);
+  const knownStatuses = new Set(["pending", "running", "failed", "completed", "held"]);
   const rawStatus = String(payload && payload.analysisStatus || "pending");
   const analysis = sanitizeAnalysis(payload && payload.analysis);
   const valueTrace = normalizeAnalysisValueTrace(payload, analysis, payload && payload.revision);
@@ -221,6 +225,7 @@ function normalizeCloudAnalysisResult(payload) {
   }
   return {
     status: knownStatuses.has(rawStatus) ? rawStatus : "pending",
+    publicationStatus: String(payload && payload.publicationStatus || "accepted"),
     analysis: analysis,
     valueTrace: valueTrace,
     errorCode: String(payload && payload.errorCode || ""),
@@ -238,6 +243,13 @@ function normalizeCloudAnalysisResult(payload) {
 
 function analysisStateLabel(response) {
   if (!response) return null;
+  if (response.publicationStatus === "held_duplicate" || response.cloudAnalysisStatus === "held") {
+    return {
+      tone: "warning",
+      title: "同一内容の確認のため公開・AI解析を保留",
+      detail: "回答は保存済みです。現在は端末内の参考解析だけを表示し、公開集計と意見ノードには反映していません。"
+    };
+  }
   if (response.analysis && response.analysis.engine === "rules-fallback-v1") {
     return { tone: "warning", title: "規則による代替解析", detail: "AI解析が完了しなかったため、保存済み回答を規則解析で処理しました。" };
   }
@@ -266,7 +278,9 @@ async function cloudLoadConfig() {
   const rawTurnstile = payload && payload.turnstile;
   const turnstile = {
     registerSiteKey: String(rawTurnstile && rawTurnstile.registerSiteKey || "").trim().slice(0, 200),
-    registerRequired: rawTurnstile && rawTurnstile.registerRequired === true
+    registerRequired: rawTurnstile && rawTurnstile.registerRequired === true,
+    recoverySiteKey: String(rawTurnstile && rawTurnstile.recoverySiteKey || "").trim().slice(0, 200),
+    recoveryRequired: rawTurnstile && rawTurnstile.recoveryRequired === true
   };
   return questions ? { questions: questions, turnstile: turnstile } : null;
 }
@@ -398,9 +412,15 @@ async function cloudLoadOwnResponse(id, token) {
     response.followUpText = raw && raw.followUpText == null ? "" : String(raw && raw.followUpText || "");
     response.followUpSubmitted = !!(raw && raw.followUpSubmitted === true);
     response.updatedAt = Number(raw && raw.updatedAt || response.updatedAt || response.ts || 0);
-    response.analysis = state.analysis;
+    response.publicationStatus = String(raw && raw.publicationStatus || state.publicationStatus || "accepted");
+    if (state.status === "held") {
+      response.analysis = await callAI(response, response.questions || []);
+      response.analysisSource = "local-provisional";
+    } else {
+      response.analysis = state.analysis;
+      response.analysisSource = "cloudflare";
+    }
     response.analysisValueTrace = state.valueTrace || null;
-    response.analysisSource = "cloudflare";
     response.cloudAnalysisStatus = state.status;
     response.cloudAnalysisMode = state.mode;
     response.cloudAnalysisErrorCode = state.errorCode;
@@ -424,7 +444,7 @@ function cloudRegistrationError(error) {
   if (code === "TURNSTILE_REQUIRED") return "不正利用防止の確認を完了してください";
   if (code === "TURNSTILE_FAILED" || code === "TURNSTILE_ACTION_MISMATCH" || code === "TURNSTILE_HOSTNAME_MISMATCH") return "不正利用防止の確認に失敗しました。もう一度お試しください";
   if (code === "TURNSTILE_NOT_CONFIGURED") return "不正利用防止の認証設定が完了していません";
-  if (Number(error && error.status) === 429) return "登録が混み合っています (HTTP 429)";
+  if (Number(error && error.status) === 429) return rateLimitMessage(error, "登録が混み合っています");
   if (code) return "登録に失敗しました (" + code + ")";
   if (error && error.name === "AbortError") return "登録APIが時間内に応答しませんでした";
   return "登録に失敗しました (HTTP " + String(error && error.status || "通信エラー") + ")";
@@ -555,7 +575,7 @@ async function acctRegister(name, pass, turnstileToken) {
         password: String(pass),
         turnstileToken: String(turnstileToken || "")
       });
-      return { acct: cloudAccountRecord(result) };
+      return { acct: cloudAccountRecord(result), recoveryCode: String(result && result.recoveryCode || "") };
     } catch (e) {
       return { error: cloudRegistrationError(e) };
     }
@@ -580,6 +600,46 @@ async function acctLogin(name, pass) {
   const hash = await pbkdf2Hex(pass, rec.salt, rec.iter || 120000);
   if (hash !== rec.hash) return { error: "名前かパスワードが違います" };
   return { acct: rec };
+}
+
+function rateLimitMessage(error, prefix) {
+  const fromHeader = Number(error && error.retryAfterSeconds || 0);
+  const fromTimestamp = Math.ceil((Number(error && error.retryAt || 0) - Date.now()) / 1000);
+  const seconds = Math.max(0, fromHeader || fromTimestamp);
+  if (!seconds) return prefix + "。少し時間をおいてください";
+  if (seconds < 60) return prefix + "。約" + seconds + "秒後にもう一度お試しください";
+  return prefix + "。約" + Math.ceil(seconds / 60) + "分後にもう一度お試しください";
+}
+async function acctRecover(name, recoveryCode, newPassword, turnstileToken) {
+  if (!cloudApiEnabled()) return { error: "パスワード再設定はオンライン版でのみ利用できます" };
+  try {
+    const result = await cloudAccountCall("/api/accounts/recover", "POST", {
+      name: normAcctName(name), recoveryCode: String(recoveryCode || "").trim(), newPassword: String(newPassword),
+      turnstileToken: String(turnstileToken || "")
+    });
+    return { acct: cloudAccountRecord(result), recoveryCode: String(result && result.recoveryCode || "") };
+  } catch (e) {
+    if (e && (e.code === "RECOVERY_INVALID" || e.code === "INVALID_CREDENTIALS")) return { error: "名前または復旧コードが違います" };
+    if (e && e.code === "RATE_LIMITED") return { error: rateLimitMessage(e, "再設定の試行が続いています") };
+    if (e && e.code === "TURNSTILE_REQUIRED") return { error: "不正利用防止の確認を完了してください" };
+    if (e && (e.code === "TURNSTILE_FAILED" || e.code === "TURNSTILE_ACTION_MISMATCH" || e.code === "TURNSTILE_HOSTNAME_MISMATCH")) return { error: "不正利用防止の確認に失敗しました。もう一度お試しください" };
+    if (e && e.code === "TURNSTILE_NOT_CONFIGURED") return { error: "不正利用防止の認証設定が完了していません" };
+    return { error: "パスワードを再設定できませんでした" };
+  }
+}
+async function acctRotateRecoveryCode(currentPassword) {
+  if (!cloudApiEnabled()) return { error: "復旧コードはオンライン版でのみ利用できます" };
+  const session = await pGet("session:current");
+  if (!session || !session.token) return { error: "ログインし直してください" };
+  try {
+    const result = await cloudAccountCall("/api/accounts/me/recovery-code", "POST", {
+      currentPassword: String(currentPassword)
+    }, session.token);
+    return { recoveryCode: String(result && result.recoveryCode || "") };
+  } catch (e) {
+    if (e && e.code === "INVALID_CREDENTIALS") return { error: "現在のパスワードが違います" };
+    return { error: "復旧コードを再発行できませんでした" };
+  }
 }
 async function acctBindResp(name, respId) {
   if (cloudApiEnabled()) return true;
@@ -876,7 +936,7 @@ function FactBadge({ fact }) {
     </span>
   );
 }
-function MeterBar({ label, value, color, note, small }) {
+function MeterBar({ label, value, color, note, small, valueLabel }) {
   const v = Math.round(clamp(value, 0, 100));
   return (
     <div style={{ marginBottom: small ? 7 : 10 }}>
@@ -885,7 +945,9 @@ function MeterBar({ label, value, color, note, small }) {
           {label}
           {note ? <span style={{ color: C.sub, fontSize: 10, marginLeft: 5 }}>{note}</span> : null}
         </span>
-        <span style={{ fontFamily: FONT_MONO, fontSize: small ? 11 : 12, color: C.ink }}>{v}</span>
+        <span style={{ fontFamily: FONT_MONO, fontSize: small ? 11 : 12, color: C.ink }}>
+          {valueLabel ? valueLabel + " " : ""}{v}
+        </span>
       </div>
       <div style={{ position: "relative", height: small ? 7 : 10, background: C.soft, borderRadius: 2, overflow: "hidden" }}>
         <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, display: "flex", width: "100%" }}>
@@ -957,6 +1019,9 @@ function Toast({ msg }) {
   );
 }
 function OpinionCard({ o, compact }) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = String(o.s || "");
+  const canExpand = Array.from(summary).length > 48;
   return (
     <Card pad={12}>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 5 }}>
@@ -966,7 +1031,17 @@ function OpinionCard({ o, compact }) {
         <span style={{ fontSize: 11, color: C.sub }}>{o.tt}{o.tn ? "・" + o.tn : ""}</span>
         {o.dm ? <span style={{ fontSize: 10, color: C.sub, border: "1px solid " + C.rule, padding: "1px 6px", borderRadius: 3 }}>デモ</span> : null}
       </div>
-      <div style={{ fontSize: 14, fontWeight: 500 }}>{o.s}</div>
+      <div style={{ fontSize: 14, fontWeight: 500, overflowWrap: "anywhere", ...(expanded ? {} : { display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }) }}>{summary}</div>
+      {canExpand ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(value => !value)}
+          style={{ marginTop: 4, padding: 0, border: 0, background: "transparent", color: C.green, fontSize: 11, cursor: "pointer" }}
+        >
+          {expanded ? "折りたたむ" : "全文を表示"}
+        </button>
+      ) : null}
       <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6, fontSize: 11, color: C.sub, flexWrap: "wrap" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
           <span style={{ width: 8, height: 8, borderRadius: 99, background: emoColor(o.emo), display: "inline-block" }} />
@@ -1280,6 +1355,7 @@ function AccountSettings({ session, onUpdated }) {
   const [nextPass2, setNextPass2] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   useEffect(() => { setName(session.name); }, [session.name]);
 
@@ -1293,6 +1369,16 @@ function AccountSettings({ session, onUpdated }) {
     if (result.error) { setErr(result.error); return; }
     setCurrentPass(""); setNextPass(""); setNextPass2("");
     await onUpdated(result.acct);
+  }
+
+  async function rotateRecovery() {
+    if (busy || !currentPass) return;
+    setErr(""); setBusy(true);
+    const result = await acctRotateRecoveryCode(currentPass);
+    setBusy(false);
+    if (result.error) { setErr(result.error); return; }
+    setRecoveryCode(result.recoveryCode);
+    setCurrentPass("");
   }
 
   return (
@@ -1321,7 +1407,18 @@ function AccountSettings({ session, onUpdated }) {
         <Btn type="submit" small disabled={busy || !name.trim() || !currentPass}>
           {busy ? "更新しています…" : "変更を保存"}
         </Btn>
+        {cloudApiEnabled() ? (
+          <Btn type="button" small kind="ghost" onClick={rotateRecovery} disabled={busy || !currentPass} style={{ marginLeft: 8 }}>
+            復旧コードを再発行
+          </Btn>
+        ) : null}
       </form>
+      {recoveryCode ? (
+        <div role="status" style={{ marginTop: 12, padding: 10, border: "1px solid " + C.karashi, borderRadius: 4 }}>
+          <div style={{ fontSize: 11, color: C.sub }}>新しい復旧コード。この画面を閉じると再表示できません。</div>
+          <div style={{ marginTop: 6, fontFamily: FONT_MONO, fontSize: 12, overflowWrap: "anywhere", userSelect: "all" }}>{recoveryCode}</div>
+        </div>
+      ) : null}
       <ModelDataPanel />
     </Card>
   );
@@ -1729,7 +1826,9 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [done, setDone] = useState(false);
+  const [submitStage, setSubmitStage] = useState("input"); // input | confirm | analysis
+  const [submittedRevision, setSubmittedRevision] = useState(0);
+  const [pollError, setPollError] = useState("");
   const busyRef = useRef(false);
 
   async function load() {
@@ -1752,6 +1851,45 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
 
   useEffect(() => { load(); }, [session && session.name, session && session.token, editExisting]);
 
+  useEffect(() => {
+    if (submitStage !== "analysis" || !session || !session.token || !current || !submittedRevision || !cloudApiEnabled()) return;
+    const id = current.remoteId || current.id;
+    let alive = true;
+    let timer = null;
+    async function poll() {
+      try {
+        const fresh = await cloudLoadOwnResponse(id, session.token);
+        if (!alive || !fresh) return;
+        const revision = Number(fresh.remoteRevision || fresh.revision || 1);
+        if (revision !== submittedRevision) {
+          setPollError("別の更新が反映されました。回答内容の確認画面で最新状態を確認してください。");
+          return;
+        }
+        await sSet("resp:" + id, fresh);
+        setCurrent(fresh);
+        setPollError("");
+        const status = fresh.cloudAnalysisStatus || "pending";
+        if (status === "pending" || status === "running") {
+          timer = setTimeout(poll, status === "running" ? 1800 : 3500);
+        }
+      } catch (error) {
+        if (alive) {
+          setPollError("解析状態を確認できませんでした。通信を確認しながら再試行します。");
+          timer = setTimeout(poll, 5000);
+        }
+      }
+    }
+    timer = setTimeout(poll, 900);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, [submitStage, submittedRevision, session && session.token]);
+
+  function reviewFollowUp() {
+    const body = sanitizeFreeText(text, 1500).trim();
+    if (!body) { setErr("二度目の自由記述を入力してください。"); return; }
+    setErr("");
+    setSubmitStage("confirm");
+  }
+
   async function submitFollowUp() {
     if (busyRef.current || !current) return;
     const body = sanitizeFreeText(text, 1500).trim();
@@ -1763,6 +1901,13 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
       const updated = editExisting
         ? await cloudPatchFollowUp(id, revision, body)
         : await cloudCreateFollowUp(id, revision, body);
+      const unchanged = updated.unchanged === true;
+      const publicationStatus = String(updated.publicationStatus || current.publicationStatus || "accepted");
+      const held = publicationStatus === "held_duplicate" || updated.analysisStatus === "held";
+      const provisionalResponse = { ...current, followUpText: body, followUpSubmitted: true };
+      const nextAnalysis = held
+        ? await callAI(provisionalResponse, provisionalResponse.questions || [])
+        : unchanged ? current.analysis : null;
       const next = {
         ...current,
         id: id,
@@ -1772,14 +1917,20 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
         followUpSubmitted: true,
         revision: Number(updated.revision),
         remoteRevision: Number(updated.revision),
-        analysis: null,
-        analysisSource: "cloudflare",
-        cloudAnalysisStatus: "pending",
+        analysis: nextAnalysis,
+        analysisSource: held ? "local-provisional" : "cloudflare",
+        publicationStatus,
+        cloudAnalysisStatus: held ? "held" : unchanged ? (updated.analysisStatus || current.cloudAnalysisStatus) : "pending",
         updatedAt: Number(updated.updatedAt || Date.now())
       };
       await sSet("resp:" + id, next);
-      setCurrent(next); setDone(true); setText("");
-      notify(editExisting
+      setCurrent(next);
+      setSubmittedRevision(Number(updated.revision));
+      setSubmitStage("analysis");
+      setPollError("");
+      notify(unchanged
+        ? "内容に変更がないため、再解析は行いません"
+        : editExisting
         ? "2回目の自由記述を修正しました。再解析を開始します"
         : "二度目の自由記述を保存しました。再解析を開始します");
     } catch (error) {
@@ -1819,7 +1970,61 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
       </div>
     );
   }
-  if (done || (current.followUpSubmitted && !editExisting)) {
+  if (submitStage === "confirm") {
+    return (
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+        <H2 eyebrow="CONFIRM" sub="この時点ではまだ保存・解析されていません">二度目の自由記述を確認</H2>
+        <Card style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 5 }}>1回目の自由記述</div>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 160, overflowY: "auto" }}>{current.free || "（記載なし）"}</div>
+        </Card>
+        <Card style={{ marginBottom: 12, borderColor: C.green }}>
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 5 }}>{editExisting ? "修正後の2回目" : "今回追加する2回目"}</div>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{sanitizeFreeText(text, 1500).trim()}</div>
+        </Card>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>確定すると回答全体を現在の内容で再解析します。</div>
+        {err ? <div role="alert" style={{ color: C.bengara, fontSize: 12, marginBottom: 12 }}>{err}</div> : null}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn onClick={submitFollowUp}>{editExisting ? "修正を確定して再解析" : "内容を確定して再解析"}</Btn>
+          <Btn kind="ghost" onClick={() => { setSubmitStage("input"); setErr(""); }}>戻って修正</Btn>
+        </div>
+      </div>
+    );
+  }
+  if (submitStage === "analysis") {
+    const status = current.cloudAnalysisStatus || "pending";
+    const held = current.publicationStatus === "held_duplicate" || status === "held";
+    const state = held
+      ? { title: "同一内容の確認待ち", detail: "回答は保存済みです。確認が終わるまでAI解析を開始せず、公開集計と意見ノードにも反映しません。", tone: C.karashi }
+      : status === "running"
+      ? { title: "解析中", detail: "AIが現在の回答全体を解析しています。", tone: C.slate }
+      : status === "completed"
+        ? { title: "完了", detail: "解析結果と意見ノードへの反映が完了しました。", tone: C.green }
+        : status === "failed"
+          ? { title: "失敗", detail: "回答は保存されていますが、解析を完了できませんでした。", tone: C.bengara }
+          : { title: "待機中", detail: "回答は保存済みです。解析の開始を待っています。", tone: C.karashi };
+    const active = !held && (status === "pending" || status === "running");
+    return (
+      <div style={{ maxWidth: 620, margin: "0 auto" }}>
+        <H2 eyebrow="ANALYSIS STATUS" sub={"revision " + submittedRevision + " の状態を表示しています"}>二度目の自由記述を保存しました</H2>
+        <Card style={{ borderColor: state.tone }}>
+          <div aria-live="polite" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            {active ? <Spinner /> : null}
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: state.tone }}>{state.title}</div>
+              <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}>{state.detail}</div>
+            </div>
+          </div>
+          {pollError ? <div role="alert" style={{ color: C.bengara, fontSize: 11, marginTop: 12 }}>{pollError}</div> : null}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
+            <Btn onClick={() => goto("mine")}>回答内容と解析結果を確認</Btn>
+            <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+  if (current.followUpSubmitted && !editExisting) {
     return (
       <div style={{ maxWidth: 620, margin: "0 auto" }}>
         <H2 eyebrow="SECOND FREE TEXT" sub="新規提出は一度だけです">二度目の自由記述は提出済みです</H2>
@@ -1850,7 +2055,7 @@ function FollowUpSurvey({ goto, session, onAuthed, notify, editExisting, turnsti
       </div>
       {err ? <div style={{ color: C.bengara, fontSize: 12, marginTop: 8 }}>{err}</div> : null}
       <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
-        <Btn disabled={!text.trim()} onClick={submitFollowUp}>{editExisting ? "修正を保存して再解析" : "二度目の自由記述を送信"}</Btn>
+        <Btn disabled={!text.trim()} onClick={reviewFollowUp}>入力内容を確認</Btn>
         <Btn kind="ghost" onClick={() => goto("home")}>概要へ戻る</Btn>
       </div>
     </div>
@@ -1864,6 +2069,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
   const [demo, setDemo] = useState({});
   const [answers, setAnswers] = useState({});
   const [err, setErr] = useState("");
+  const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
   const [result, setResult] = useState(null);
   const [restored, setRestored] = useState(false);
   const [currentResponse, setCurrentResponse] = useState(null);
@@ -2004,6 +2210,10 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
 
   async function submit() {
     if (busyRef.current) return;
+    if (!analysisConfirmed) {
+      setErr("入力内容とAI解析の実行を確認してください。");
+      return;
+    }
     busyRef.current = true;
     setPhase("analyzing"); setErr("");
     const free = sanitizeFreeText(freeQids.map(id => String(answers[id] || "").trim()).filter(Boolean).join("\n"), 1500);
@@ -2018,25 +2228,38 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     let analysisValueTrace = null;
     let remoteId = null;
     let remoteRevision = null;
+    let publicationStatus = "accepted";
     /* Cloudflare作成結果には認可情報とrevisionが含まれる。匿名manage tokenはprivate scopeへ保存する。 */
     if (cloudApiEnabled()) {
       try {
         const createdRemote = await cloudCreateInitialResponse(base, session && session.token);
         remoteId = createdRemote && createdRemote.id;
         remoteRevision = createdRemote && createdRemote.revision;
+        publicationStatus = createdRemote && createdRemote.publicationStatus || "accepted";
         if (!remoteId) throw new Error("Cloudflare response id was not returned");
-        const remote = await cloudWaitForResponseAnalysis(remoteId);
-        cloudAnalysisStatus = remote.status;
-        cloudAnalysisMode = remote.mode;
-        analysisValueTrace = remote.valueTrace || null;
-        if (remote.status === "completed" && remote.analysis) {
-          analysis = remote.analysis;
-          analysisSource = "cloudflare";
+        if (publicationStatus === "held_duplicate") {
+          analysis = await callAI(base, questions);
+          analysisSource = "local-provisional";
+          cloudAnalysisStatus = "held";
+        } else {
+          const remote = await cloudWaitForResponseAnalysis(remoteId);
+          cloudAnalysisStatus = remote.status;
+          cloudAnalysisMode = remote.mode;
+          analysisValueTrace = remote.valueTrace || null;
+          if (remote.status === "completed" && remote.analysis) {
+            analysis = remote.analysis;
+            analysisSource = "cloudflare";
+          }
         }
       }
       catch (e) {
         if (__apiConfig.required) {
           busyRef.current = false;
+          if (e && (e.code === "ANALYSIS_RATE_LIMITED" || e.code === "RATE_LIMITED")) {
+            setErr(rateLimitMessage(e, "短時間に解析が集中しています"));
+            setPhase("aifail");
+            return;
+          }
           const detail = e && e.code ? " (" + e.code + ")" : "";
           setErr((e && e.status
             ? "回答サーバーが入力を受理できませんでした"
@@ -2068,8 +2291,10 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     }
     const resp = {
       ...base,
+      id: remoteId || base.id,
       analysis,
       analysisSource: analysisSource,
+      publicationStatus: publicationStatus,
       remoteId: remoteId,
       ...(remoteRevision ? { remoteRevision: remoteRevision } : {}),
       ...(remoteId ? { cloudAnalysisStatus: cloudAnalysisStatus || "pending" } : {}),
@@ -2078,7 +2303,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     };
     const okR = await sSet("resp:" + resp.id, resp);
     const cur = (await sGet("agg:summary")) || newAgg();
-    mergeResponse(cur, resp);
+    if (publicationStatus !== "held_duplicate") mergeResponse(cur, resp);
     const okA = await sSet("agg:summary", cur);
     if ((!okR || !okA) && remoteId) {
       try { await cloudDeleteResponse(remoteId); } catch (e) { console.error("cloud compensation delete failed", e); }
@@ -2119,18 +2344,25 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     busyRef.current = true; setErr("");
     try {
       const updated = await cloudPatchFreeText(id, revision, body);
+      const unchanged = updated.unchanged === true;
+      const publicationStatus = String(updated.publicationStatus || currentResponse.publicationStatus || "accepted");
+      const held = publicationStatus === "held_duplicate" || updated.analysisStatus === "held";
+      const provisionalResponse = { ...currentResponse, free: body };
       const next = {
         ...currentResponse, id, remoteId: id,
         free: body,
         revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        analysis: held ? await callAI(provisionalResponse, provisionalResponse.questions || []) : unchanged ? currentResponse.analysis : null,
+        analysisSource: held ? "local-provisional" : "cloudflare",
+        publicationStatus,
+        cloudAnalysisStatus: held ? "held" : unchanged ? (updated.analysisStatus || currentResponse.cloudAnalysisStatus) : "pending",
         updatedAt: Number(updated.updatedAt || Date.now()),
         cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
         cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
       };
       await sSet("resp:" + id, next);
       setCurrentResponse(next); setEditMode(null); setEditText("");
-      notify("自由記述を更新しました。再解析を開始します");
+      notify(unchanged ? "内容に変更がないため、再解析は行いません" : "自由記述を更新しました。再解析を開始します");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
         await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
@@ -2154,17 +2386,24 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
     busyRef.current = true; setErr("");
     try {
       const updated = await cloudPatchInitial(id, revision, payload, firstText);
+      const unchanged = updated.unchanged === true;
+      const publicationStatus = String(updated.publicationStatus || currentResponse.publicationStatus || "accepted");
+      const held = publicationStatus === "held_duplicate" || updated.analysisStatus === "held";
+      const provisionalResponse = { ...currentResponse, answers: payload, free: firstText };
       const next = {
         ...currentResponse, id, remoteId: id, answers: payload, free: firstText,
         revision: Number(updated.revision), remoteRevision: Number(updated.revision),
-        analysis: null, analysisSource: "cloudflare", cloudAnalysisStatus: "pending",
+        analysis: held ? await callAI(provisionalResponse, provisionalResponse.questions || []) : unchanged ? currentResponse.analysis : null,
+        analysisSource: held ? "local-provisional" : "cloudflare",
+        publicationStatus,
+        cloudAnalysisStatus: held ? "held" : unchanged ? (updated.analysisStatus || currentResponse.cloudAnalysisStatus) : "pending",
         updatedAt: Number(updated.updatedAt || Date.now()),
         cloudAnalysisUpdatedAt: Number(updated.updatedAt || Date.now()),
         cloudAnalysisStalled: false, cloudAnalysisRetryable: false, cloudAnalysisErrorCode: ""
       };
       await sSet("resp:" + id, next);
       setCurrentResponse(next); setEditMode(null); setEditText("");
-      notify("初回回答を更新しました。現在の回答全体で再解析を開始します");
+      notify(unchanged ? "内容に変更がないため、再解析は行いません" : "初回回答を更新しました。現在の回答全体で再解析を開始します");
     } catch (error) {
       if (error && error.code === "REVISION_CONFLICT") {
         await handleRevisionConflict("別の更新が先に反映されました。最新の回答を読み直したので、内容を確認して再度編集してください。");
@@ -2417,7 +2656,7 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
           <Btn kind="ghost" onClick={() => (qi === 0 ? setPhase("demo") : setQi(qi - 1))}>戻る</Btn>
           {last ? (
-            <Btn disabled={!canNext} onClick={() => setPhase("confirm")}>入力内容を確認</Btn>
+            <Btn disabled={!canNext} onClick={() => { setAnalysisConfirmed(false); setErr(""); setPhase("confirm"); }}>入力内容を確認</Btn>
           ) : (
             <Btn disabled={!canNext} onClick={() => setQi(qi + 1)}>次へ</Btn>
           )}
@@ -2459,9 +2698,27 @@ function Survey({ questions, policy, notify, onFinished, goto, onDraftChange, se
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
           内容を確定すると回答を保存し、AI解析を開始します。
         </div>
+        <label style={{
+          display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 13px", marginBottom: 14,
+          border: "1px solid " + C.rule, borderRadius: 5, background: C.card, cursor: "pointer"
+        }}>
+          <input
+            type="checkbox"
+            checked={analysisConfirmed}
+            onChange={event => { setAnalysisConfirmed(event.target.checked); setErr(""); }}
+            style={{ width: 18, height: 18, marginTop: 1, accentColor: C.green, flex: "0 0 auto" }}
+          />
+          <span>
+            <span style={{ display: "block", fontSize: 13, fontWeight: 700 }}>入力内容を確認し、AI解析を実行します</span>
+            <span style={{ display: "block", marginTop: 3, fontSize: 11, color: C.sub, lineHeight: 1.6 }}>
+              解析の連続実行は、システム保護のため一時的に制限される場合があります。
+            </span>
+          </span>
+        </label>
+        {err ? <div role="alert" style={{ color: C.bengara, fontSize: 12, marginBottom: 12 }}>{err}</div> : null}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Btn kind="ghost" onClick={() => { setQi(Math.max(0, questions.length - 1)); setPhase("q"); }}>戻って修正</Btn>
-          <Btn onClick={submit}>{cloudApiEnabled() ? "内容を確定してAI解析へ" : "内容を確定して端末内解析へ"}</Btn>
+          <Btn kind="ghost" onClick={() => { setAnalysisConfirmed(false); setQi(Math.max(0, questions.length - 1)); setPhase("q"); }}>戻って修正</Btn>
+          <Btn disabled={!analysisConfirmed} onClick={submit}>{cloudApiEnabled() ? "内容を確定してAI解析へ" : "内容を確定して端末内解析へ"}</Btn>
         </div>
       </div>
     );
@@ -3677,13 +3934,13 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
     try {
       if (editMode === "free") {
         const body = sanitizeFreeText(editText, 1500);
-        await cloudPatchFreeText(id, revision, body);
-        notify("1回目の自由記述を修正しました。再解析を開始します");
+        const updated = await cloudPatchFreeText(id, revision, body);
+        notify(updated.unchanged ? "内容に変更がないため、再解析は行いません" : "1回目の自由記述を修正しました。再解析を開始します");
       } else if (editMode === "followup") {
         const body = sanitizeFreeText(editText, 1500).trim();
         if (!body) { setErr("二度目の自由記述を入力してください。"); return; }
-        await cloudPatchFollowUp(id, revision, body);
-        notify("2回目の自由記述を修正しました。再解析を開始します");
+        const updated = await cloudPatchFollowUp(id, revision, body);
+        notify(updated.unchanged ? "内容に変更がないため、再解析は行いません" : "2回目の自由記述を修正しました。再解析を開始します");
       } else if (editMode === "answers") {
         const responseQuestions = Array.isArray(r.questions) && r.questions.length ? r.questions : questions;
         const editable = responseQuestions.filter(q => q.type !== "free");
@@ -3901,8 +4158,9 @@ function MyResponse({ questions, agg, notify, refreshAgg, goto, back, session, o
               <MeterBar
                 key={row[0]}
                 label={row[0]}
-                note={row[2] === null || row[2] === undefined ? "" : "全体 " + Math.round(row[2])}
+                note={row[2] === null || row[2] === undefined ? "" : "（全体平均 " + Math.round(row[2]) + "）"}
                 value={row[1]}
+                valueLabel="本人"
                 color={row[3]}
               />
             ))}
@@ -4140,7 +4398,7 @@ function loadTurnstileApi() {
   return turnstileApiPromise;
 }
 
-function RegisterTurnstile({ siteKey, resetKey, onToken, onStatus }) {
+function TurnstileChallenge({ siteKey, action, resetKey, onToken, onStatus }) {
   const containerRef = useRef(null);
   useEffect(() => {
     if (!siteKey || !containerRef.current) return undefined;
@@ -4152,7 +4410,7 @@ function RegisterTurnstile({ siteKey, resetKey, onToken, onStatus }) {
       if (!active || !containerRef.current) return;
       widgetId = api.render(containerRef.current, {
         sitekey: siteKey,
-        action: "register",
+        action: action,
         appearance: "interaction-only",
         theme: "light",
         callback(token) { if (active) { onToken(String(token || "")); onStatus(""); } },
@@ -4166,12 +4424,12 @@ function RegisterTurnstile({ siteKey, resetKey, onToken, onStatus }) {
         window.turnstile.remove(widgetId);
       }
     };
-  }, [siteKey, resetKey]);
+  }, [siteKey, action, resetKey]);
   return <div ref={containerRef} aria-label="不正利用防止の確認" style={{ minHeight: 4 }} />;
 }
 
 function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
-  const [mode, setMode] = useState("register"); // register | login
+  const [mode, setMode] = useState("register"); // register | login | recover
   const [name, setName] = useState("");
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
@@ -4180,8 +4438,13 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileStatus, setTurnstileStatus] = useState("");
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [recoveryInput, setRecoveryInput] = useState("");
+  const [issuedRecoveryCode, setIssuedRecoveryCode] = useState("");
+  const [pendingAccount, setPendingAccount] = useState(null);
   const registerSiteKey = String(turnstileConfig && turnstileConfig.registerSiteKey || "");
   const registerTurnstileRequired = turnstileConfig && turnstileConfig.registerRequired === true;
+  const recoverySiteKey = String(turnstileConfig && turnstileConfig.recoverySiteKey || "");
+  const recoveryTurnstileRequired = turnstileConfig && turnstileConfig.recoveryRequired === true;
 
   async function go() {
     if (busy) return;
@@ -4192,12 +4455,37 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
       if (registerTurnstileRequired && !turnstileToken) { setErr("不正利用防止の確認を完了してください"); setBusy(false); return; }
       r = await acctRegister(name, pass, turnstileToken);
       if (registerSiteKey) { setTurnstileToken(""); setTurnstileReset(value => value + 1); }
-    } else {
+    } else if (mode === "login") {
       r = await acctLogin(name, pass);
+    } else {
+      if (pass !== pass2) { setErr("確認用パスワードが一致しません"); setBusy(false); return; }
+      if (recoveryTurnstileRequired && !turnstileToken) { setErr("不正利用防止の確認を完了してください"); setBusy(false); return; }
+      r = await acctRecover(name, recoveryInput, pass, turnstileToken);
+      if (recoverySiteKey) { setTurnstileToken(""); setTurnstileReset(value => value + 1); }
     }
     setBusy(false);
     if (r.error) { setErr(r.error); return; }
+    if (r.recoveryCode) {
+      setPendingAccount(r.acct);
+      setIssuedRecoveryCode(r.recoveryCode);
+      return;
+    }
     onAuthed(r.acct);
+  }
+
+  if (issuedRecoveryCode && pendingAccount) {
+    return (
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>復旧コードを保管してください</div>
+        <div style={{ marginTop: 8, fontSize: 12, color: C.sub, lineHeight: 1.7 }}>
+          パスワードを忘れた場合に使う一度限りのコードです。サーバーには復元不能なhashだけを保存し、この値は再表示できません。
+        </div>
+        <div style={{ marginTop: 12, padding: 12, border: "1px solid " + C.karashi, borderRadius: 4, fontFamily: FONT_MONO, fontSize: 12, overflowWrap: "anywhere", userSelect: "all" }}>
+          {issuedRecoveryCode}
+        </div>
+        <div style={{ marginTop: 14 }}><Btn onClick={() => onAuthed(pendingAccount)}>保管したので進む</Btn></div>
+      </Card>
+    );
   }
 
   return (
@@ -4206,40 +4494,53 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
           <Chip active={mode === "register"} onClick={() => { setMode("register"); setErr(""); setTurnstileToken(""); setTurnstileReset(value => value + 1); }}>はじめて(登録)</Chip>
           <Chip active={mode === "login"} onClick={() => { setMode("login"); setErr(""); setTurnstileToken(""); }}>2回目以降(ログイン)</Chip>
+          <Chip active={mode === "recover"} onClick={() => { setMode("recover"); setErr(""); setTurnstileToken(""); }}>パスワード再設定</Chip>
         </div>
         <Field label="名前(ニックネーム)" sub="2〜20文字。本名や実在の氏名は使わないでください">
           <input value={name} onChange={e => setName(e.target.value)} placeholder="例: 川辺の亀" style={{ ...INPUT_STYLE }} autoComplete="off" />
         </Field>
-        <Field label="パスワード" sub={mode === "register" ? "8文字以上" : ""}>
+        {mode === "recover" ? (
+          <Field label="復旧コード" sub="登録時または再発行時に表示されたコード">
+            <input value={recoveryInput} onChange={e => setRecoveryInput(e.target.value)} style={{ ...INPUT_STYLE, fontFamily: FONT_MONO }} autoComplete="off" />
+          </Field>
+        ) : null}
+        <Field label={mode === "recover" ? "新しいパスワード" : "パスワード"} sub={mode === "login" ? "" : "8文字以上"}>
           <input type="password" value={pass} onChange={e => setPass(e.target.value)} style={{ ...INPUT_STYLE }} />
         </Field>
-        {mode === "register" ? (
+        {mode !== "login" ? (
           <>
-            <Field label="パスワード(確認)">
+            <Field label={mode === "recover" ? "新しいパスワード(確認)" : "パスワード(確認)"}>
               <input type="password" value={pass2} onChange={e => setPass2(e.target.value)} style={{ ...INPUT_STYLE }} />
             </Field>
-            {registerSiteKey ? (
+            {mode === "register" && registerSiteKey ? (
               <div style={{ marginBottom: 12 }}>
-                <RegisterTurnstile siteKey={registerSiteKey} resetKey={turnstileReset} onToken={setTurnstileToken} onStatus={setTurnstileStatus} />
+                <TurnstileChallenge siteKey={registerSiteKey} action="register" resetKey={turnstileReset} onToken={setTurnstileToken} onStatus={setTurnstileStatus} />
                 {turnstileStatus ? <div role="status" style={{ fontSize: 11, color: C.sub, marginTop: 5 }}>{turnstileStatus}</div> : null}
               </div>
-            ) : registerTurnstileRequired ? (
+            ) : mode === "register" && registerTurnstileRequired ? (
+              <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>認証機能が設定されていません。管理者へお知らせください。</div>
+            ) : mode === "recover" && recoverySiteKey ? (
+              <div style={{ marginBottom: 12 }}>
+                <TurnstileChallenge siteKey={recoverySiteKey} action="recover" resetKey={turnstileReset} onToken={setTurnstileToken} onStatus={setTurnstileStatus} />
+                {turnstileStatus ? <div role="status" style={{ fontSize: 11, color: C.sub, marginTop: 5 }}>{turnstileStatus}</div> : null}
+              </div>
+            ) : mode === "recover" && recoveryTurnstileRequired ? (
               <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>認証機能が設定されていません。管理者へお知らせください。</div>
             ) : null}
           </>
         ) : null}
         {err ? <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>{err}</div> : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Btn onClick={go} disabled={busy || !name.trim() || !pass || (mode === "register" && registerTurnstileRequired && !turnstileToken)}>
+          <Btn onClick={go} disabled={busy || !name.trim() || !pass || (mode === "recover" && (!recoveryInput.trim() || (recoveryTurnstileRequired && !turnstileToken))) || (mode === "register" && registerTurnstileRequired && !turnstileToken)}>
             {busy ? "確認しています…" : mode === "register"
               ? "登録して" + (destination || "回答") + "へ進む"
-              : "ログインして" + (destination || "回答") + "へ進む"}
+              : mode === "login" ? "ログインして" + (destination || "回答") + "へ進む" : "パスワードを再設定"}
           </Btn>
           <Btn kind="ghost" onClick={() => goto(guestView || "dash")}>登録せずに閲覧する</Btn>
         </div>
       </Card>
       <div style={{ fontSize: 11, color: C.sub, marginTop: 12, lineHeight: 2 }}>
-        登録するのはニックネームとパスワードだけで、メールアドレス等は不要です。回答はアカウントに紐付き、別の端末でもログインすれば確認・追記・撤回ができます。<br />
+        登録するのはニックネームとパスワードだけで、メールアドレス等は不要です。登録時に一度だけ表示される復旧コードを保管してください。回答はアカウントに紐付き、別の端末でもログインすれば確認・追記・撤回ができます。<br />
         <b style={{ color: C.bengara }}>重要:</b> 本アプリは試作段階で、保存領域の秘匿性に限界があります。<b>他のサービスと同じパスワードは絶対に使わないでください</b>(パスワードは復元不能なハッシュとしてのみ保存します)。
       </div>
     </div>

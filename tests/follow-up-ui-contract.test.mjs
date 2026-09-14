@@ -6,8 +6,17 @@ const ui = readFileSync(new URL("../core/ui.jsx", import.meta.url), "utf8");
 test("second free text is a dedicated route separate from first survey and correction", () => {
   assert.ok(ui.includes('followup: "/survey/follow-up"'));
   assert.ok(ui.includes("function FollowUpSurvey("));
-  assert.ok(ui.includes("二度目の自由記述を送信"));
+  assert.ok(ui.includes("二度目の自由記述を確認"));
+  assert.ok(ui.includes("内容を確定して再解析"));
   assert.ok(ui.includes("回答内容を修正"));
+});
+
+test("second free text shows the submitted revision analysis lifecycle", () => {
+  assert.ok(ui.includes('const [submitStage, setSubmitStage] = useState("input")'));
+  assert.ok(ui.includes('submitStage === "analysis"'));
+  assert.ok(ui.includes('revision !== submittedRevision'));
+  for (const label of ["待機中", "解析中", "完了", "失敗"]) assert.ok(ui.includes(label), label);
+  assert.ok(ui.includes('aria-live="polite"'));
 });
 
 test("generic append UI is removed", () => {

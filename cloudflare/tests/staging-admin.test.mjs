@@ -36,7 +36,8 @@ function createDatabase() {
   for (const name of [
     "0001_initial.sql", "0002_accounts_and_analysis.sql", "0003_staging_kdf_range.sql",
     "0004_response_question_context.sql", "0005_rate_limits.sql",
-    "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql", "0008_questionnaire_seven_structured.sql"
+    "0006_response_access_revision.sql", "0007_response_updated_at.sql", "0008_response_follow_up_text.sql", "0008_questionnaire_seven_structured.sql",
+    "0010_submission_review.sql", "0011_account_recovery.sql"
   ]) {
     database.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   }
@@ -104,6 +105,8 @@ test("staging admin page is staging-only and contains no stored data", async () 
   assert.equal(page.status, 200);
   const html = await page.text();
   assert.match(html, /SEISEKI staging/iu);
+  assert.match(html, /submission-reviews\?status=held_duplicate/iu);
+  assert.match(html, /publicationStatus:\s*"accepted"/iu);
   assert.doesNotMatch(html, /staging-user|private staging response/iu);
 
   const production = await worker.fetch(new Request("http://local/api/staging-admin"), environment(database, {
@@ -134,6 +137,99 @@ test("account list requires the staging secret and omits credentials and respons
   assert.equal(body.accounts[0].response.id, seeded.responseId);
   const serialized = JSON.stringify(body);
   assert.doesNotMatch(serialized, /private staging response|password|salt|hash|token/iu);
+});
+
+test("accepting a held pending response enqueues its current revision exactly once", async () => {
+  const database = createDatabase();
+  const seeded = seedAccount(database);
+  database.prepare("DELETE FROM analysis_runs WHERE response_id = ?").run(seeded.responseId);
+  database.prepare(`
+    UPDATE responses
+    SET publication_status = 'held_duplicate', analysis_status = 'pending', analysis_json = NULL
+    WHERE id = ?
+  `).run(seeded.responseId);
+  const queued = [];
+  const env = environment(database, {
+    AI_ANALYSIS_ENABLED: "true",
+    ANALYSIS_QUEUE: { send: async message => { queued.push(message); } }
+  });
+  const url = `http://local/api/staging-admin/submission-reviews/${seeded.responseId}`;
+  const options = {
+    method: "PATCH",
+    headers: { ...adminHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ publicationStatus: "accepted" })
+  };
+
+  const accepted = await worker.fetch(new Request(url, options), env);
+  assert.equal(accepted.status, 200);
+  const acceptedBody = await accepted.json();
+  assert.equal(acceptedBody.changed, true);
+  assert.equal(acceptedBody.enqueued, true);
+  assert.deepEqual(queued, [{ type: "analyze-response", responseId: seeded.responseId, revision: 2 }]);
+  assert.equal(database.prepare("SELECT publication_status AS status FROM responses WHERE id = ?").get(seeded.responseId).status, "accepted");
+
+  const repeated = await worker.fetch(new Request(url, options), env);
+  assert.equal(repeated.status, 200);
+  assert.equal((await repeated.json()).enqueued, false);
+  assert.equal(queued.length, 1);
+});
+
+test("failed held-response enqueue restores the hold instead of stranding an accepted response", async () => {
+  const database = createDatabase();
+  const seeded = seedAccount(database);
+  database.prepare("DELETE FROM analysis_runs WHERE response_id = ?").run(seeded.responseId);
+  database.prepare(`
+    UPDATE responses
+    SET publication_status = 'held_duplicate', analysis_status = 'pending', analysis_json = NULL
+    WHERE id = ?
+  `).run(seeded.responseId);
+  const env = environment(database, {
+    AI_ANALYSIS_ENABLED: "true",
+    ANALYSIS_QUEUE: { send: async () => { throw new Error("queue unavailable"); } }
+  });
+  const response = await worker.fetch(new Request(`http://local/api/staging-admin/submission-reviews/${seeded.responseId}`, {
+    method: "PATCH",
+    headers: { ...adminHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ publicationStatus: "accepted" })
+  }), env);
+  assert.equal(response.status, 503);
+  assert.equal(database.prepare("SELECT publication_status AS status FROM responses WHERE id = ?").get(seeded.responseId).status, "held_duplicate");
+});
+
+test("staging review endpoints backfill fingerprints and allow explicit adjudication without returning text", async () => {
+  const database = createDatabase();
+  const seeded = seedAccount(database);
+  database.prepare("UPDATE responses SET free_text = ? WHERE id = ?")
+    .run("同じ内容の大量投稿を検知するために十分な長さを持たせたステージング専用の回答本文です。本文は管理APIから返しません。", seeded.responseId);
+  const env = environment(database, { SUBMISSION_FINGERPRINT_HMAC_SECRET: "s".repeat(48) });
+
+  const backfill = await worker.fetch(new Request("http://local/api/staging-admin/submission-reviews/backfill", {
+    method: "POST",
+    headers: { ...adminHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ limit: 20 })
+  }), env);
+  assert.equal(backfill.status, 200);
+  assert.deepEqual(await backfill.json(), { processed: 1, held: 0, remainingMayExist: false });
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM response_text_fingerprints").get().count, 1);
+
+  const list = await worker.fetch(new Request("http://local/api/staging-admin/submission-reviews?status=all", {
+    headers: adminHeaders()
+  }), env);
+  assert.equal(list.status, 200);
+  const listed = await list.json();
+  assert.equal(listed.reviews[0].responseId, seeded.responseId);
+  assert.equal(listed.reviews[0].publicationStatus, "accepted");
+  assert.equal(typeof listed.reviews[0].normalizedLength, "number");
+  assert.doesNotMatch(JSON.stringify(listed), /ステージング専用の回答本文/iu);
+
+  const hold = await worker.fetch(new Request(`http://local/api/staging-admin/submission-reviews/${seeded.responseId}`, {
+    method: "PATCH",
+    headers: { ...adminHeaders(), "content-type": "application/json" },
+    body: JSON.stringify({ publicationStatus: "held_duplicate" })
+  }), env);
+  assert.equal(hold.status, 200);
+  assert.equal((await hold.json()).publicationStatus, "held_duplicate");
+  assert.equal(database.prepare("SELECT publication_status AS status FROM responses WHERE id = ?").get(seeded.responseId).status, "held_duplicate");
 });
 
 test("account deletion requires exact name confirmation and cascades all linked records", async () => {

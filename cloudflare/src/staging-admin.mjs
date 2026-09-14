@@ -1,4 +1,5 @@
 import { RequestError } from "./validation.mjs";
+import { createSubmissionFingerprint, refreshSubmissionReview } from "./submission-review.mjs";
 
 const encoder = new TextEncoder();
 const ADMIN_PREFIX = "/api/staging-admin";
@@ -78,7 +79,7 @@ async function listAccounts(db, url) {
       SELECT a.id, a.name, a.created_at AS createdAt, a.updated_at AS updatedAt,
              ar.response_id AS responseId, r.created_at AS responseCreatedAt,
              r.updated_at AS responseUpdatedAt, r.analysis_status AS analysisStatus,
-             r.revision AS revision,
+             r.revision AS revision, r.publication_status AS publicationStatus,
              (SELECT COUNT(*) FROM opinion_chunks oc WHERE oc.response_id = ar.response_id) AS chunkCount
       FROM accounts a
       LEFT JOIN account_responses ar ON ar.account_id = a.id
@@ -99,11 +100,154 @@ async function listAccounts(db, url) {
         updatedAt: Number(row.responseUpdatedAt),
         analysisStatus: row.analysisStatus,
         revision: Number(row.revision ?? 1),
+        publicationStatus: row.publicationStatus ?? "accepted",
         chunkCount: Number(row.chunkCount ?? 0)
       } : null
     })),
     page: { offset, limit, total: Number(countRow?.total ?? 0) }
   };
+}
+
+async function listSubmissionReviews(db, url) {
+  const limit = boundedInteger(url.searchParams.get("limit"), 50, 1, 100);
+  const offset = boundedInteger(url.searchParams.get("offset"), 0, 0, 100000);
+  const requestedStatus = String(url.searchParams.get("status") ?? "held_duplicate");
+  if (!new Set(["accepted", "held_duplicate", "all"]).has(requestedStatus)) {
+    throw new RequestError(400, "INVALID_PUBLICATION_STATUS", "publication status filter is invalid");
+  }
+  const where = requestedStatus === "all" ? "" : "WHERE r.publication_status = ?";
+  const countStatement = db.prepare(`SELECT COUNT(*) AS total FROM responses r ${where}`);
+  const rowsStatement = db.prepare(`
+    SELECT r.id, r.created_at AS createdAt, r.updated_at AS updatedAt,
+           r.revision, r.analysis_status AS analysisStatus,
+           r.publication_status AS publicationStatus,
+           f.normalized_length AS normalizedLength,
+           a.name AS accountName
+    FROM responses r
+    LEFT JOIN response_text_fingerprints f ON f.response_id = r.id
+    LEFT JOIN account_responses ar ON ar.response_id = r.id
+    LEFT JOIN accounts a ON a.id = ar.account_id
+    ${where}
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT ? OFFSET ?
+  `);
+  const count = requestedStatus === "all"
+    ? await countStatement.first()
+    : await countStatement.bind(requestedStatus).first();
+  const rows = requestedStatus === "all"
+    ? await rowsStatement.bind(limit, offset).all()
+    : await rowsStatement.bind(requestedStatus, limit, offset).all();
+  return {
+    reviews: (rows.results ?? []).map(row => ({
+      responseId: row.id,
+      accountName: row.accountName ?? null,
+      createdAt: Number(row.createdAt),
+      updatedAt: Number(row.updatedAt),
+      revision: Number(row.revision ?? 1),
+      analysisStatus: row.analysisStatus,
+      publicationStatus: row.publicationStatus,
+      normalizedLength: row.normalizedLength == null ? null : Number(row.normalizedLength)
+    })),
+    page: { offset, limit, total: Number(count?.total ?? 0), status: requestedStatus }
+  };
+}
+
+function responseReviewIdFromPath(pathname) {
+  const match = pathname.match(/^\/api\/staging-admin\/submission-reviews\/(r_[A-Za-z0-9_-]{12,62})$/u);
+  return match ? match[1] : null;
+}
+
+async function updateSubmissionReview(db, responseId, request) {
+  const body = await readAdminJson(request);
+  const publicationStatus = String(body?.publicationStatus ?? "");
+  if (!new Set(["accepted", "held_duplicate"]).has(publicationStatus)) {
+    throw new RequestError(400, "INVALID_PUBLICATION_STATUS", "publication status is invalid");
+  }
+  const current = await db.prepare(`
+    SELECT publication_status AS publicationStatus, analysis_status AS analysisStatus, revision
+    FROM responses WHERE id = ?
+  `).bind(responseId).first();
+  if (!current) throw new RequestError(404, "RESPONSE_NOT_FOUND", "response was not found");
+  if (current.publicationStatus === publicationStatus) {
+    return {
+      responseId,
+      publicationStatus,
+      previousPublicationStatus: current.publicationStatus,
+      analysisStatus: current.analysisStatus,
+      revision: Number(current.revision ?? 1),
+      changed: false
+    };
+  }
+  const result = await db.prepare(`
+    UPDATE responses
+    SET publication_status = ?
+    WHERE id = ? AND publication_status = ? AND revision = ?
+  `).bind(publicationStatus, responseId, current.publicationStatus, current.revision).run();
+  if (Number(result?.meta?.changes ?? 0) !== 1) {
+    throw new RequestError(409, "SUBMISSION_REVIEW_CONFLICT", "submission review changed; reload before editing");
+  }
+  return {
+    responseId,
+    publicationStatus,
+    previousPublicationStatus: current.publicationStatus,
+    analysisStatus: current.analysisStatus,
+    revision: Number(current.revision ?? 1),
+    changed: true
+  };
+}
+
+async function applySubmissionReview(env, responseId, request, enqueueAnalysis) {
+  const outcome = await updateSubmissionReview(env.DB, responseId, request);
+  const shouldEnqueue = outcome.changed
+    && outcome.previousPublicationStatus === "held_duplicate"
+    && outcome.publicationStatus === "accepted"
+    && outcome.analysisStatus !== "completed"
+    && String(env.AI_ANALYSIS_ENABLED ?? "").toLowerCase() === "true";
+  if (!shouldEnqueue) return { ...outcome, enqueued: false };
+  if (typeof enqueueAnalysis !== "function") {
+    await env.DB.prepare(`
+      UPDATE responses SET publication_status = 'held_duplicate'
+      WHERE id = ? AND revision = ? AND publication_status = 'accepted'
+    `).bind(responseId, outcome.revision).run();
+    throw new RequestError(503, "ANALYSIS_QUEUE_UNAVAILABLE", "analysis queue is not available");
+  }
+  try {
+    await enqueueAnalysis(responseId, outcome.revision);
+  } catch (error) {
+    await env.DB.prepare(`
+      UPDATE responses SET publication_status = 'held_duplicate'
+      WHERE id = ? AND revision = ? AND publication_status = 'accepted'
+    `).bind(responseId, outcome.revision).run();
+    throw error;
+  }
+  return { ...outcome, analysisStatus: "pending", enqueued: true };
+}
+
+async function backfillSubmissionReviews(env, request) {
+  if ([...String(env.SUBMISSION_FINGERPRINT_HMAC_SECRET ?? "")].length < 32) {
+    throw new RequestError(503, "SUBMISSION_REVIEW_NOT_CONFIGURED", "submission review secret is not configured");
+  }
+  const body = await readAdminJson(request);
+  const limit = boundedInteger(body?.limit, 50, 1, 100);
+  const rows = await env.DB.prepare(`
+    SELECT r.id, r.free_text AS freeText, r.follow_up_text AS followUpText
+    FROM responses r
+    LEFT JOIN response_text_fingerprints f ON f.response_id = r.id
+    WHERE f.response_id IS NULL
+      AND length(trim(coalesce(r.free_text, '') || coalesce(r.follow_up_text, ''))) >= 40
+    ORDER BY r.created_at ASC, r.id ASC
+    LIMIT ?
+  `).bind(limit).all();
+  let processed = 0;
+  let held = 0;
+  for (const row of rows.results ?? []) {
+    const fingerprint = await createSubmissionFingerprint(env, row.freeText, row.followUpText);
+    if (!fingerprint) continue;
+    const review = await refreshSubmissionReview(env.DB, row.id, fingerprint);
+    processed++;
+    if (review.publicationStatus === "held_duplicate") held++;
+  }
+  return { processed, held, remainingMayExist: (rows.results ?? []).length === limit };
 }
 
 function accountIdFromPath(pathname) {
@@ -177,6 +321,7 @@ function adminPage() {
     <div class="toolbar">
       <label>&#31649;&#29702;&#12488;&#12540;&#12463;&#12531;<input id="token" type="password" autocomplete="off" spellcheck="false"></label>
       <button id="load" type="button">&#12450;&#12459;&#12454;&#12531;&#12488;&#19968;&#35239;&#12434;&#21462;&#24471;</button>
+      <button id="reviews" class="secondary" type="button">&#20445;&#30041;&#22238;&#31572;&#12434;&#21462;&#24471;</button>
       <button id="clear" class="secondary" type="button">&#12488;&#12540;&#12463;&#12531;&#12434;&#28040;&#21435;</button>
     </div>
     <div id="status" class="status" role="status"></div>
@@ -186,9 +331,16 @@ function adminPage() {
         <tbody id="accounts"><tr><td class="empty" colspan="5">&#31649;&#29702;&#12488;&#12540;&#12463;&#12531;&#12434;&#20837;&#21147;&#12375;&#12390;&#21462;&#24471;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</td></tr></tbody>
       </table>
     </div>
+    <h2 style="font-size:16px;margin:24px 0 10px">&#20445;&#30041;&#22238;&#31572;</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>&#22238;&#31572;ID</th><th>&#12450;&#12459;&#12454;&#12531;&#12488;</th><th>&#20316;&#25104;&#26085;&#26178;</th><th>&#29366;&#24907;</th><th>&#25805;&#20316;</th></tr></thead>
+        <tbody id="reviewRows"><tr><td class="empty" colspan="5">&#20445;&#30041;&#22238;&#31572;&#12434;&#21462;&#24471;&#12375;&#12390;&#12367;&#12384;&#12373;&#12356;&#12290;</td></tr></tbody>
+      </table>
+    </div>
   </main>
   <script>
-    const tokenInput=document.getElementById("token");const statusNode=document.getElementById("status");const rows=document.getElementById("accounts");
+    const tokenInput=document.getElementById("token");const statusNode=document.getElementById("status");const rows=document.getElementById("accounts");const reviewRows=document.getElementById("reviewRows");
     const headers=()=>({"x-seiseki-admin-token":tokenInput.value});
     const date=value=>value?new Date(value).toLocaleString("ja-JP"):"-";
     function setStatus(value){statusNode.textContent=value}
@@ -203,7 +355,7 @@ function adminPage() {
       for(const account of body.accounts){
         const tr=document.createElement("tr");tr.append(cell(account.name),cell(date(account.createdAt)));
         tr.append(cell(account.response?account.response.id:"\u306a\u3057",account.response?"":"muted"));
-        tr.append(cell(account.response?account.response.analysisStatus+" / revision "+account.response.revision:"-"));
+        tr.append(cell(account.response?account.response.analysisStatus+" / revision "+account.response.revision+" / "+account.response.publicationStatus:"-"));
         const action=document.createElement("td");const button=document.createElement("button");button.type="button";button.className="danger";button.textContent="\u95a2\u9023\u30c7\u30fc\u30bf\u3054\u3068\u524a\u9664";
         button.addEventListener("click",async()=>{
           const confirmation=prompt("\u524a\u9664\u78ba\u8a8d\u306e\u305f\u3081\u30a2\u30ab\u30a6\u30f3\u30c8\u540d\u3092\u6b63\u78ba\u306b\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002","");
@@ -216,7 +368,27 @@ function adminPage() {
       if(!body.accounts.length){const tr=document.createElement("tr");const td=cell("\u30a2\u30ab\u30a6\u30f3\u30c8\u306f\u3042\u308a\u307e\u305b\u3093\u3002","empty");td.colSpan=5;tr.append(td);rows.append(tr)}
       setStatus(body.page.total+"\u4ef6\u4e2d "+body.accounts.length+"\u4ef6\u3092\u8868\u793a");
     }
+    async function loadReviews(){
+      if(!tokenInput.value){setStatus("\u7ba1\u7406\u30c8\u30fc\u30af\u30f3\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002");return}
+      setStatus("\u4fdd\u7559\u56de\u7b54\u3092\u53d6\u5f97\u4e2d...");
+      const response=await fetch("/api/staging-admin/submission-reviews?status=held_duplicate&limit=100",{headers:headers(),cache:"no-store"});
+      if(!response.ok){setStatus(await readError(response));return}
+      const body=await response.json();reviewRows.replaceChildren();
+      for(const review of body.reviews){
+        const tr=document.createElement("tr");tr.append(cell(review.responseId),cell(review.accountName||"\u533f\u540d"),cell(date(review.createdAt)),cell(review.analysisStatus+" / revision "+review.revision));
+        const action=document.createElement("td");const button=document.createElement("button");button.type="button";button.textContent="\u63a1\u7528\u3057\u3066\u89e3\u6790";
+        button.addEventListener("click",async()=>{
+          button.disabled=true;setStatus("\u4fdd\u7559\u3092\u89e3\u9664\u3057\u3066\u3044\u307e\u3059...");
+          const accepted=await fetch("/api/staging-admin/submission-reviews/"+encodeURIComponent(review.responseId),{method:"PATCH",headers:{...headers(),"content-type":"application/json"},body:JSON.stringify({publicationStatus:"accepted"})});
+          if(!accepted.ok){setStatus(await readError(accepted));button.disabled=false;return}
+          const result=await accepted.json();setStatus(result.enqueued?"\u4fdd\u7559\u3092\u89e3\u9664\u3057\u3001AI\u89e3\u6790\u3092\u958b\u59cb\u3057\u307e\u3057\u305f\u3002":"\u4fdd\u7559\u3092\u89e3\u9664\u3057\u307e\u3057\u305f\u3002");await loadReviews();
+        });action.append(button);tr.append(action);reviewRows.append(tr);
+      }
+      if(!body.reviews.length){const tr=document.createElement("tr");const td=cell("\u4fdd\u7559\u4e2d\u306e\u56de\u7b54\u306f\u3042\u308a\u307e\u305b\u3093\u3002","empty");td.colSpan=5;tr.append(td);reviewRows.append(tr)}
+      setStatus(body.page.total+"\u4ef6\u306e\u4fdd\u7559\u56de\u7b54\u3092\u8868\u793a");
+    }
     document.getElementById("load").addEventListener("click",()=>loadAccounts().catch(()=>setStatus("\u901a\u4fe1\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002")));
+    document.getElementById("reviews").addEventListener("click",()=>loadReviews().catch(()=>setStatus("\u901a\u4fe1\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002")));
     document.getElementById("clear").addEventListener("click",()=>{tokenInput.value="";setStatus("\u7ba1\u7406\u30c8\u30fc\u30af\u30f3\u3092\u6d88\u53bb\u3057\u307e\u3057\u305f\u3002");tokenInput.focus()});
   </script>
 </body>
@@ -231,7 +403,7 @@ function adminPage() {
   });
 }
 
-export async function handleStagingAdminRequest(request, env, url) {
+export async function handleStagingAdminRequest(request, env, url, options = {}) {
   if (url.pathname !== ADMIN_PREFIX && !url.pathname.startsWith(`${ADMIN_PREFIX}/`)) return null;
   if (!adminEnabled(env)) throw new RequestError(404, "NOT_FOUND", "route was not found");
   if (request.method === "GET" && (url.pathname === ADMIN_PREFIX || url.pathname === `${ADMIN_PREFIX}/`)) {
@@ -241,6 +413,16 @@ export async function handleStagingAdminRequest(request, env, url) {
   await requireAdmin(request, env);
   if (request.method === "GET" && url.pathname === `${ADMIN_PREFIX}/accounts`) {
     return adminJson(await listAccounts(env.DB, url));
+  }
+  if (request.method === "GET" && url.pathname === `${ADMIN_PREFIX}/submission-reviews`) {
+    return adminJson(await listSubmissionReviews(env.DB, url));
+  }
+  if (request.method === "POST" && url.pathname === `${ADMIN_PREFIX}/submission-reviews/backfill`) {
+    return adminJson(await backfillSubmissionReviews(env, request));
+  }
+  const responseReviewId = responseReviewIdFromPath(url.pathname);
+  if (request.method === "PATCH" && responseReviewId) {
+    return adminJson(await applySubmissionReview(env, responseReviewId, request, options.enqueueAnalysis));
   }
   const accountId = accountIdFromPath(url.pathname);
   if (request.method === "DELETE" && accountId) {

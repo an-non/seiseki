@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fallbackAnalysis, sanitizeAiAnalysis } from "../src/analysis.mjs";
+import { fallbackAnalysis, NODE_TEXT_SAFETY_LIMIT, requestAiAnalysis, sanitizeAiAnalysis } from "../src/analysis.mjs";
 
 function aiResult(overrides = {}) {
   return {
@@ -20,6 +20,30 @@ function aiResult(overrides = {}) {
     ...overrides
   };
 }
+
+function analysisRecord() {
+  return { age: "", gender: "", region: "", occupation: "", party: "", answers: [], questions: [] };
+}
+
+test("Workers AI text-block response wrappers are accepted", async () => {
+  const env = {
+    AI_PROVIDER: "workers-ai",
+    AI_MAX_ATTEMPTS: "1",
+    AI: { run: async () => ({ choices: [{ message: { content: [{ type: "text", text: JSON.stringify(aiResult()) }] } }] }) }
+  };
+  const result = await requestAiAnalysis(env, "fixture", analysisRecord(), "test opinion", "direct");
+  assert.equal(result.analysis.params.valid, 91);
+});
+
+test("Workers AI prose containing an earlier brace does not hide the final JSON object", async () => {
+  const env = {
+    AI_PROVIDER: "workers-ai",
+    AI_MAX_ATTEMPTS: "1",
+    AI: { run: async () => ({ choices: [{ message: { content: `Example {not json}.\n${JSON.stringify(aiResult())}` } }] }) }
+  };
+  const result = await requestAiAnalysis(env, "fixture", analysisRecord(), "test opinion", "direct");
+  assert.equal(result.analysis.params.crit, 84);
+});
 
 test("AI scores and explicit policy-position coordinates are preserved without centering blend", () => {
   const analysis = sanitizeAiAnalysis(aiResult(), "累進課税と防衛力強化を求める。AIの判定値を規則値へ混ぜない。");
@@ -53,6 +77,17 @@ test("valid AI chunks are preserved without deterministic replacement", () => {
   }), "消費税を減税すべきだ。最低賃金を引き上げてほしい。防衛費を増やすべきだ。選択的夫婦別姓を認めてほしい。");
   assert.equal(analysis.chunks.length, 1);
   assert.deepEqual(analysis.chunks.map(chunk => chunk.topic), ["政治・行政"]);
+});
+
+test("AI node text is preserved up to a model-agnostic safety limit", () => {
+  const preserved = "長い意見ノードでも、モデルが返した文章を保存段階で四十八字へ切らず、画面側で折りたたんで参照できるようにする。";
+  const analysis = sanitizeAiAnalysis(aiResult({ chunks: [{ ...aiResult().chunks[0], s: preserved }] }), preserved);
+  assert.equal(analysis.chunks[0].s, preserved);
+
+  const overLimit = "あ".repeat(NODE_TEXT_SAFETY_LIMIT + 20);
+  const capped = sanitizeAiAnalysis(aiResult({ chunks: [{ ...aiResult().chunks[0], s: overLimit }] }), overLimit);
+  assert.equal(Array.from(capped.chunks[0].s).length, NODE_TEXT_SAFETY_LIMIT);
+  assert.equal(capped.chunks[0].s.endsWith("…"), true);
 });
 
 test("an explicit empty AI chunk list is preserved", () => {
