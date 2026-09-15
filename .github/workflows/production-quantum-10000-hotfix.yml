@@ -1,14 +1,10 @@
-name: Deploy SEISEKI quantum 10000-node hotfix
+name: "[retired] Deploy SEISEKI quantum 10000-node hotfix"
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/production-quantum-10000-hotfix.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: seiseki-production-release
@@ -16,6 +12,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

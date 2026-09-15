@@ -1,15 +1,10 @@
-name: Release SEISEKI production DB_API v2
+name: "[retired] Release SEISEKI production DB_API v2"
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/production-release-dbapi-v2.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: seiseki-production-release
@@ -17,6 +12,7 @@ concurrency:
 
 jobs:
   release:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:

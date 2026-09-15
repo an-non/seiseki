@@ -1,14 +1,10 @@
-name: Deploy SEISEKI production dashboard + quantum hotfix
+name: "[retired] Deploy SEISEKI production dashboard + quantum hotfix"
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/production-dashboard-hotfix.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: seiseki-production-release
@@ -16,6 +12,7 @@ concurrency:
 
 jobs:
   hotfix:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:

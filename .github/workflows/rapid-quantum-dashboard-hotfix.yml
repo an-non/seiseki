@@ -1,14 +1,10 @@
-name: Rapid SEISEKI quantum and dashboard hotfix
+name: "[retired] Rapid SEISEKI quantum and dashboard hotfix"
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/rapid-quantum-dashboard-hotfix.yml
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: seiseki-rapid-hotfix
@@ -16,6 +12,7 @@ concurrency:
 
 jobs:
   hotfix:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

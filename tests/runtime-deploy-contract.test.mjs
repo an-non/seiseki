@@ -44,6 +44,29 @@ test("production workflow builds and deploys only guarded production artifacts",
   assert.match(workflow, /test ! -e dist\/quantum-v2\/quantum-node-relations-v2-preview\.html/);
 });
 
+test("superseded production and hotfix workflows remain inert", async () => {
+  const retiredWorkflows = [
+    "cloudflare-production-diagnostic.yml",
+    "production-dashboard-hotfix.yml",
+    "production-quantum-10000-hotfix.yml",
+    "production-release-dbapi-v2.yml",
+    "production-release-dbapi.yml",
+    "quantum-trace-layout-hotfix.yml",
+    "rapid-quantum-dashboard-hotfix-v2.yml",
+    "rapid-quantum-dashboard-hotfix.yml",
+    "safari15-hotfix-v3.yml",
+  ];
+
+  for (const name of retiredWorkflows) {
+    const workflow = await read(`.github/workflows/${name}`);
+    assert.match(workflow, /^name: "\[retired\]/m, name);
+    assert.match(workflow, /workflow_dispatch:/, name);
+    assert.doesNotMatch(workflow, /^  push:/m, name);
+    assert.match(workflow, /permissions:\s+contents: read/, name);
+    assert.match(workflow, /^    if: \$\{\{ false \}\}$/m, name);
+  }
+});
+
 test("production D1 migrations are isolated behind an immutable manual workflow", async () => {
   const workflow = await read(".github/workflows/production-d1-migrate.yml");
   assert.match(workflow, /workflow_dispatch:/);
