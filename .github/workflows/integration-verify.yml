@@ -46,7 +46,8 @@ jobs:
           test -f cloudflare/migrations/0002_accounts_and_analysis.sql
           test -f cloudflare/migrations/0003_staging_kdf_range.sql
           test -f cloudflare/migrations/0004_response_question_context.sql
-          grep -q '"database_id": "00000000-0000-0000-0000-000000000000"' cloudflare/wrangler.jsonc
+          grep -q '"database_name": "seiseki-db"' cloudflare/wrangler.jsonc
+          grep -q '"database_id": "8ad5e023-3588-490c-ba61-3f180f8b2887"' cloudflare/wrangler.jsonc
 
       - name: Verify source safety and generated app sync
         shell: bash
