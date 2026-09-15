@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'quantum: "/app/quantum"' core/ui.jsx
-          grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev' core/ui.jsx
+          grep -q '"/quantum/chunk-network-entanglement-preview.html' core/ui.jsx
           node tests/test.js
           node tests/page-routing.test.mjs
           node tests/balcheck.js app/seiseki.jsx
