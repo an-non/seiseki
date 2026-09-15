@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>声析 現行画面状態フロー</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f5f7f8;
+      --surface: #ffffff;
+      --ink: #172126;
+      --sub: #637078;
+      --rule: #cfd7db;
+      --green: #176b5b;
+      --green-soft: #e6f2ef;
+      --blue: #245a8d;
+      --blue-soft: #e8f0f7;
+      --amber: #8a5a00;
+      --amber-soft: #fff3d9;
+      --red: #9a3d44;
+      --red-soft: #f9e9ea;
+      --shadow: 0 8px 22px rgba(25, 39, 46, .07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Yu Gothic UI", "Hiragino Kaku Gothic ProN", sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    main { width: min(1440px, 100%); margin: 0 auto; padding: 28px; }
+    header { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+    .meta { color: var(--sub); font-size: 12px; text-align: right; }
+    .notice {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 12px 14px;
+      border-left: 4px solid var(--amber);
+      background: var(--amber-soft);
+      margin-bottom: 18px;
+    }
+    .notice strong { white-space: nowrap; }
+    .entry {
+      display: grid;
+      grid-template-columns: minmax(150px, 220px) 44px minmax(180px, 260px) 44px 1fr;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .arrow { color: var(--sub); font-size: 24px; text-align: center; }
+    .node {
+      min-height: 58px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 10px 13px;
+      border: 1px solid var(--rule);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .node b { font-size: 14px; }
+    .node small { color: var(--sub); font-size: 11px; }
+    .node.primary { background: var(--green); border-color: var(--green); color: #fff; }
+    .node.primary small { color: #dceee9; }
+    .nav {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 7px;
+    }
+    .nav .node { min-height: 54px; box-shadow: none; text-align: center; align-items: center; }
+    .lanes { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 14px; align-items: stretch; }
+    .lane {
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      box-shadow: var(--shadow);
+      padding: 15px;
+    }
+    .lane h2 { margin: 0 0 4px; font-size: 16px; letter-spacing: 0; }
+    .lane > p { margin: 0 0 12px; color: var(--sub); font-size: 11px; }
+    .sequence { display: grid; gap: 5px; }
+    .sequence .node { min-height: 48px; box-shadow: none; }
+    .down { text-align: center; color: var(--sub); line-height: 16px; }
+    .browse .node { border-left: 4px solid var(--blue); background: var(--blue-soft); }
+    .admin { border-color: #dfb3b7; background: #fffafb; }
+    .admin .node { border-left: 4px solid var(--red); background: var(--red-soft); }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .chip { padding: 4px 8px; border: 1px solid #d7b1b5; background: #fff; font-size: 11px; }
+    .labs {
+      margin-top: 14px;
+      padding: 15px;
+      border: 2px dashed #8d9aa1;
+      background: #edf1f3;
+    }
+    .labs-head { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; margin-bottom: 10px; }
+    .labs h2 { margin: 0; font-size: 16px; }
+    .labs p { margin: 0; color: var(--sub); font-size: 11px; }
+    .lab-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .lab-grid .node { box-shadow: none; background: #fff; }
+    .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; color: var(--sub); font-size: 11px; }
+    .legend span::before { content: ""; display: inline-block; width: 18px; height: 8px; margin-right: 6px; vertical-align: middle; background: var(--green); }
+    .legend .l-admin::before { background: var(--red-soft); border: 1px solid var(--red); }
+    .legend .l-lab::before { background: transparent; border: 1px dashed #68757c; }
+    footer { margin-top: 16px; color: var(--sub); font-size: 11px; }
+    @media (max-width: 980px) {
+      main { padding: 18px; }
+      header { align-items: start; flex-direction: column; }
+      .meta { text-align: left; }
+      .entry { grid-template-columns: 1fr; }
+      .entry .arrow { transform: rotate(90deg); }
+      .nav { grid-template-columns: repeat(2, 1fr); }
+      .lanes { grid-template-columns: 1fr; }
+      .lab-grid { grid-template-columns: 1fr; }
+    }
+    @media print {
+      @page { size: A3 landscape; margin: 12mm; }
+      body { background: #fff; }
+      main { width: 100%; padding: 0; }
+      .node, .lane { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>声析 現行画面状態フロー</h1>
+        <div>SEISEKI v0.15.2 / 実装準拠</div>
+      </div>
+      <div class="meta">作成日 2026-08-04<br>core/ui.jsx・独立プレビューを対象</div>
+    </header>
+
+    <div class="notice">
+      <strong>現在の前提</strong>
+      <span>これは複数ページ間の遷移ではない。単一ページ内でReactの<code>view</code>状態を切り替えており、URLとブラウザ履歴は変化しない。</span>
+    </div>
+
+    <section class="entry" aria-label="起動と共通ナビゲーション">
+      <div class="node"><b>ブラウザで起動</b><small>local/index.html</small></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>初期データ読込</b><small>設定・集計・下書き・セッション</small></div>
+      <div class="arrow">→</div>
+      <div>
+        <div class="node primary"><b>ホーム</b><small>回答状況・集計概要・意見ツリー入口</small></div>
+        <div class="nav" aria-label="共通ナビゲーション">
+          <div class="node"><b>回答する</b></div>
+          <div class="node"><b>ダッシュボード</b></div>
+          <div class="node"><b>意見ツリー</b></div>
+          <div class="node"><b>意見一覧</b></div>
+          <div class="node"><b>自分の回答</b></div>
+          <div class="node"><b>管理</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lanes" aria-label="主要画面フロー">
+      <article class="lane">
+        <h2>回答フロー</h2>
+        <p>回答にはユーザー登録またはログインが必要。入力中は下書きを個人スコープへ保存する。</p>
+        <div class="sequence">
+          <div class="node"><b>登録 / ログイン</b><small>既存セッションがあれば省略</small></div>
+          <div class="down">↓</div>
+          <div class="node"><b>同意文確認</b><small>同意しない場合はホームへ戻る</small></div>
+          <div class="down">↓</div>
+          <div class="node"><b>回答者属性</b></div>
+          <div class="down">↓</div>
+          <div class="node"><b>設問 Q1 ... Qn</b><small>選択・5段階・自由記述</small></div>
+          <div class="down">↓</div>
+          <div class="node"><b>端末内解析・保存</b></div>
+          <div class="down">↓</div>
+          <div class="node primary"><b>完了・回答ID・解析結果</b><small>ダッシュボードへ進める</small></div>
+        </div>
+      </article>
+
+      <article class="lane browse">
+        <h2>集計・意見の閲覧</h2>
+        <p>閲覧画面は共通ナビから直接切り替える。</p>
+        <div class="sequence">
+          <div class="node"><b>ダッシュボード</b><small>統計・属性・時系列・トピック</small></div>
+          <div class="down">↕</div>
+          <div class="node"><b>意見ツリー</b><small>トピック・対象・ノードを選択</small></div>
+          <div class="down">↓ 絞り込み条件</div>
+          <div class="node"><b>意見一覧</b><small>カテゴリ・対象・語句で絞り込み</small></div>
+        </div>
+        <h2 style="margin-top:18px">自分の回答</h2>
+        <div class="sequence">
+          <div class="node"><b>回答ID照会</b><small>ログイン中は紐づくIDを自動取得</small></div>
+          <div class="down">↓</div>
+          <div class="node"><b>回答・分析・追記を表示</b></div>
+          <div class="down">↓ 任意</div>
+          <div class="node"><b>撤回確認 → 削除</b><small>削除後に集計を再構築</small></div>
+        </div>
+      </article>
+
+      <article class="lane admin">
+        <h2>Admin</h2>
+        <p>現行は同じアプリ内の簡易ロック。独立した認証・権限境界ではない。</p>
+        <div class="sequence">
+          <div class="node"><b>合言葉で解錠</b><small>共有ストレージ上の設定</small></div>
+          <div class="down">↓</div>
+          <div class="node"><b>管理画面</b></div>
+        </div>
+        <div class="chips" aria-label="管理操作">
+          <span class="chip">デモ投入・削除</span>
+          <span class="chip">集計再構築</span>
+          <span class="chip">旧解析補完</span>
+          <span class="chip">JSON入出力</span>
+          <span class="chip">回答ID削除</span>
+          <span class="chip">全回答削除</span>
+          <span class="chip">設問編集</span>
+          <span class="chip">同意文編集</span>
+          <span class="chip">合言葉変更</span>
+        </div>
+        <div class="node" style="margin-top:12px"><b>共有ストレージ</b><small>一般画面と同じデータ境界</small></div>
+      </article>
+    </section>
+
+    <section class="labs" aria-label="独立プレビュー">
+      <div class="labs-head">
+        <h2>独立プレビュー / 未接続</h2>
+        <p>本体UIから正式な遷移はなく、URLを直接開く開発用画面。</p>
+      </div>
+      <div class="lab-grid">
+        <div class="node"><b>2D意見ネットワーク</b><small>chunk-network-preview.html</small></div>
+        <div class="node"><b>3D階層ネットワーク</b><small>chunk-network-3d-preview.html</small></div>
+        <div class="node"><b>量子もつれ観測</b><small>chunk-network-entanglement-preview.html</small></div>
+      </div>
+    </section>
+
+    <div class="legend">
+      <span>主要入口・完了状態</span>
+      <span class="l-admin">簡易ロック内の管理領域</span>
+      <span class="l-lab">本体未接続の開発用画面</span>
+    </div>
+
+    <footer>詳細な状態遷移と既知課題は CURRENT-SCREEN-FLOW.md を参照。</footer>
+  </main>
+</body>
+</html>

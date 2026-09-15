@@ -1,0 +1,132 @@
+name: Phase 5 guarded staging UI deploy 20260828
+
+on:
+  push:
+    branches:
+      - codex/phase5-implementation-20260827
+    paths:
+      - .github/workflows/phase5-staging-ui-deploy-20260828.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-phase5-guarded-staging-ui-deploy
+  cancel-in-progress: false
+
+jobs:
+  guarded-staging-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STAGING_URL: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_RUNTIME_MODE: staging
+    steps:
+      - name: Checkout approved Phase 5 branch
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Read-only staging schema guard
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DB_API }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler d1 execute DB --env staging --remote \
+            --command "SELECT name FROM pragma_table_info('responses') WHERE name IN ('revision','updated_at') ORDER BY name;" \
+            --json > /tmp/phase5-staging-schema.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const result = JSON.parse(fs.readFileSync('/tmp/phase5-staging-schema.json', 'utf8'));
+          const names = result.flatMap(item => item?.results || item?.result || []).map(row => row.name);
+          for (const required of ['revision', 'updated_at']) {
+            if (!names.includes(required)) throw new Error(`staging schema missing ${required}; deploy intentionally blocked and no migration was run`);
+          }
+          console.log('staging schema guard PASS:', names.join(', '));
+          NODE
+
+      - name: Verify source and build contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/phase4-ui-contract.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+
+      - name: Fresh staging build and compact quantum contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local run build:staging
+          test -s local/dist/index.html
+          test -s local/dist/quantum/chunk-network-entanglement-preview.html
+          node tests/phase5-quantum-compact-contract.mjs local/dist/quantum/chunk-network-entanglement-preview.html
+          grep -lq 'seiseki-api-staging' local/dist/assets/*.js
+
+      - name: Deploy Phase 5 to Cloudflare staging
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging 2>&1 | tee /tmp/phase5-staging-deploy.log
+          printf '\n### Phase 5 staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- target: `seiseki-api-staging`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migration: not run\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'Current Version ID|Uploaded' /tmp/phase5-staging-deploy.log | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Live staging verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cb="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/api/health?cb=$cb" > /tmp/phase5-health.json
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/app/quantum?cb=$cb" > /tmp/phase5-app-quantum.html
+          curl -fLsS --retry 5 --retry-delay 2 "$STAGING_URL/quantum/chunk-network-entanglement-preview.html?count=10000&theme=dark&cb=$cb" > /tmp/phase5-quantum.html
+          test -s /tmp/phase5-health.json
+          test -s /tmp/phase5-app-quantum.html
+          test -s /tmp/phase5-quantum.html
+          grep -Fq 'width:min(280px,calc(100% - 300px));' /tmp/phase5-quantum.html
+          grep -Fq 'font:7px/1.3 "IBM Plex Mono",Consolas,monospace;' /tmp/phase5-quantum.html
+          grep -Fq 'width:min(42vw,160px); height:min(15vh,96px); max-height:min(15vh,96px);' /tmp/phase5-quantum.html
+          grep -Fq 'font-size:5.5px; line-height:1.12; opacity:.72; pointer-events:none;' /tmp/phase5-quantum.html
+          grep -Fq 'left:auto; right:4px; bottom:4px; width:min(58vw,220px);' /tmp/phase5-quantum.html
+          grep -Fq '"Zen Kaku Gothic New"' /tmp/phase5-quantum.html
+          grep -Fq '"Shippori Mincho"' /tmp/phase5-quantum.html
+          printf '\n### Live staging verification\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- health: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- `/app/quantum`: HTTP PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- desktop TRACE 280px / 7px: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- mobile TRACE 160px x 96px / 5.5px: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- mobile details 220px / 50px max: PASS\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- restored typography stacks: PASS\n' >> "$GITHUB_STEP_SUMMARY"

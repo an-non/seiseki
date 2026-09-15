@@ -1,0 +1,66 @@
+name: Deploy opinion network preview
+
+on:
+  push:
+    branches:
+      - feature/opinion-network-preview
+    paths:
+      - preview/opinion-network/bootstrap/TRIGGER
+
+permissions:
+  contents: write
+
+jobs:
+  reconstruct-test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout preview branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/opinion-network-preview
+          fetch-depth: 0
+
+      - name: Reconstruct verified preview payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat preview/opinion-network/bootstrap/part-* > /tmp/opinion-network-preview.b64
+          echo "bf2fddf714ad83a9d55ad69a8f96625823279de11e59b3b8dfd6d21e11cb4a7b  /tmp/opinion-network-preview.b64" | sha256sum -c -
+          base64 --decode /tmp/opinion-network-preview.b64 > /tmp/opinion-network-preview.tar.xz
+          echo "f85bac5393daaba21d73d57e2194e8032969b4cbb17090543996fe2bb6a667e0  /tmp/opinion-network-preview.tar.xz" | sha256sum -c -
+          tar -tJf /tmp/opinion-network-preview.tar.xz >/dev/null
+          tar -xJf /tmp/opinion-network-preview.tar.xz -C .
+          node --check preview/opinion-network/public/quantum-entanglement-engine.mjs
+          grep -q "合成検証データ / PROTOTYPE" preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q "文章素材ID" preview/opinion-network/public/chunk-network-entanglement-preview.html
+          grep -q "syncObservationUrl" preview/opinion-network/public/chunk-network-entanglement-preview.html
+
+      - name: Commit reconstructed preview source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- preview/opinion-network/public/chunk-network-entanglement-preview.html
+          git add -- preview/opinion-network/public/quantum-entanglement-engine.mjs
+          git add -- preview/opinion-network/worker.mjs
+          git add -- preview/opinion-network/wrangler.jsonc
+          git rm -r --ignore-unmatch preview/opinion-network/bootstrap
+          git commit -m "Add verified opinion network preview"
+          git push origin HEAD:feature/opinion-network-preview
+
+      - name: Deploy isolated Cloudflare preview
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          workingDirectory: preview/opinion-network
+          command: deploy
+
+      - name: Report preview URL
+        shell: bash
+        run: |
+          echo "Preview URL: ${{ steps.deploy.outputs.deployment-url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.deploy.outputs.deployment-url }}"

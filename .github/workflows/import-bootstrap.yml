@@ -1,0 +1,97 @@
+name: Expand SEISEKI source snapshot
+
+on:
+  push:
+    branches:
+      - import/seiseki-v0.15.0
+    paths:
+      - bootstrap/TRIGGER
+
+permissions:
+  contents: write
+
+jobs:
+  expand-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout import branch
+        uses: actions/checkout@v4
+        with:
+          ref: import/seiseki-v0.15.0
+          fetch-depth: 0
+
+      - name: Skip deletion-trigger rerun
+        id: guard
+        shell: bash
+        run: |
+          if [ ! -f bootstrap/TRIGGER ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Reassemble and verify snapshot
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat bootstrap/part-* > /tmp/seiseki-source-bootstrap.b64
+          echo "d880a544d985bd7f198706907d10040cc928729ad272e76a763515b13fe63ed8  /tmp/seiseki-source-bootstrap.b64" | sha256sum -c -
+          base64 --decode /tmp/seiseki-source-bootstrap.b64 > /tmp/seiseki-source-bootstrap.tar.xz
+          echo "1fa923d97e95643b526277ce647a0d35a8e28c160d062e244eb9a6e04a832677  /tmp/seiseki-source-bootstrap.tar.xz" | sha256sum -c -
+          tar -tJf /tmp/seiseki-source-bootstrap.tar.xz >/dev/null
+
+      - name: Expand source snapshot
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf bootstrap
+          rm -f .github/workflows/import-bootstrap.yml
+          tar -xJf /tmp/seiseki-source-bootstrap.tar.xz -C .
+
+      - name: Verify application baseline
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/balcheck.js app/seiseki.jsx
+
+      - name: Verify Cloudflare baseline
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm run check
+          npm test
+
+      - name: Fresh-build and verify preserved staging assets
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          test -f dist/index.html
+          test -f dist/assets/App-B2f5Hqqm.js
+          test -f dist/assets/index-Ddx_ZOJK.js
+          test -f dist/assets/react-dom-stZKkA6x.js
+          echo "220749617e60385572cb56d247bc89820e657c0cd28e83296e6e67a0980332ff  dist/assets/App-B2f5Hqqm.js" | sha256sum -c -
+          echo "9ba25ab9045cd07048e4012ea4713fc51aa1577b83fc730b386e987cb7f7bb4e  dist/assets/index-Ddx_ZOJK.js" | sha256sum -c -
+          echo "14cabb31e799c8eca546da2a65e48c8fa94646763a7c130fbb8056fd534941bf  dist/assets/react-dom-stZKkA6x.js" | sha256sum -c -
+          echo "70bb520e29fe217f6d7323eacc83fb6270fac9da2cae7ac9ce78de87b2bf6e4c  dist/index.html" | sha256sum -c -
+          rm -rf dist
+
+      - name: Commit expanded source
+        if: steps.guard.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Import verified SEISEKI deploy baseline"
+          git push origin HEAD:import/seiseki-v0.15.0

@@ -1,0 +1,1 @@
+Temporary bootstrap transport for the verified SEISEKI integration source. This directory is removed by the verification workflow after successful extraction, tests, and fresh staging build. No Cloudflare deployment or D1 migration is performed by this bootstrap.

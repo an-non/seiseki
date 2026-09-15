@@ -1,0 +1,136 @@
+name: Apply mobile UI fix and deploy staging
+
+on:
+  push:
+    branches:
+      - feature/quantum-app-integration
+    paths:
+      - scripts/apply-mobile-ui-fix.mjs
+      - local/src/main.jsx
+      - .github/workflows/mobile-ui-staging.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seiseki-mobile-ui-staging
+  cancel-in-progress: false
+
+jobs:
+  patch-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_SEISEKI_API_BASE: https://seiseki-api-staging.tokyo-odh-129.workers.dev
+      VITE_SEISEKI_API_REQUIRED: 'false'
+      VITE_SEISEKI_RUNTIME_MODE: staging
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/quantum-app-integration
+          fetch-depth: 0
+
+      - name: Apply production-prep UI patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-mobile-ui-fix.mjs
+          node scripts/build-app.mjs
+
+      - name: Verify typography quantum and runtime contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'const FONT_BODY = ' core/ui.jsx && grep -Fq '"Zen Kaku Gothic New"' core/ui.jsx
+          grep -Fq 'const FONT_DISP = ' core/ui.jsx && grep -Fq '"Shippori Mincho"' core/ui.jsx
+          grep -Fq 'const FONT_MONO = ' core/ui.jsx && grep -Fq '"IBM Plex Mono"' core/ui.jsx
+          grep -q 'font-synthesis: none' core/ui.jsx
+          ! grep -q 'fonts.googleapis.com' core/ui.jsx
+          grep -q 'rev=trace-layout-v2' core/ui.jsx
+          grep -q 'count=10000&seed=prototype-10000' core/ui.jsx
+          grep -q 'window.SEISEKI_RUNTIME_MODE === "staging"' core/ui.jsx
+          grep -q 'VITE_SEISEKI_RUNTIME_MODE' local/src/main.jsx
+          cmp app/seiseki.jsx local/src/App.jsx
+          grep -q 'seiseki-local-v1' app/seiseki.jsx
+          grep -q 'quantum: "/app/quantum"' app/seiseki.jsx
+
+      - name: Application tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/local-bridge.test.js
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify Cloudflare worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh staging build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          cd ..
+          test -s local/dist/index.html
+          test -f local/dist/model/manifest.json
+          grep -lq 'seiseki-api-staging' local/dist/assets/*.js
+          grep -lq 'trace-layout-v2' local/dist/assets/*.js
+          grep -lq 'count=10000' local/dist/assets/*.js
+          grep -lq 'seiseki-local-v1' local/dist/assets/*.js
+          grep -lq 'staging' local/dist/assets/*.js
+
+      - name: Commit patched source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf local/dist local/node_modules cloudflare/node_modules
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/ui.jsx app/seiseki.jsx local/src/App.jsx
+          if ! git diff --cached --quiet; then
+            git commit -m "Stabilize mobile typography and runtime mode"
+            git push origin HEAD:feature/quantum-app-integration
+          fi
+
+      - name: Inspect current Cloudflare staging deployment
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '\n### Cloudflare staging pre-deploy state\n\n' >> "$GITHUB_STEP_SUMMARY"
+          npx wrangler deployments list --env staging 2>&1 | tee /tmp/staging-before.log
+          sed 's/^/    /' /tmp/staging-before.log >> "$GITHUB_STEP_SUMMARY" || true
+          printf '\nGitHub HEAD before staging write: `%s`\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nTarget: `seiseki-api-staging`; production and D1 migrations are excluded.\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy to Cloudflare staging
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --env staging 2>&1 | tee /tmp/deploy.log
+          printf '\n### Production-prep staging deploy\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- typography: historical body/display/mono roles / no external fonts\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- runtime mode: staging\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- quantum: stable relation rendering / 10000 nodes\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production: untouched\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migrations: not run\n' >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'Current Version ID|Uploaded' /tmp/deploy.log | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true

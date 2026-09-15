@@ -1,0 +1,107 @@
+name: Fix mobile tree fit and dashboard 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-tree-fit-dashboard-20260830
+    paths:
+      - .github/workflows/fix-mobile-tree-fit-dashboard-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-tree-fit-dashboard-20260830
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply minimal responsive hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ui = Path('core/ui.jsx')
+          s = ui.read_text()
+
+          old = '  const gp = groupOpt ? paramView(qa.params[groupOpt]) : null;'
+          new = '  const gp = groupOpt ? paramView((qa.params || {})[groupOpt]) : null;'
+          if old not in s:
+              raise SystemExit('dashboard guard target not found')
+          s = s.replace(old, new, 1)
+
+          old = '  function label(arc, r, minSpan, size, fill) {'
+          new = '  function label(arc, r, minSpan, size, fill) {'
+          if old not in s:
+              raise SystemExit('radial label target not found')
+
+          old_svg = '    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>'
+          new_svg = '    <svg viewBox={"0 0 " + S + " " + S} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", maxWidth: 720, height: "auto", display: "block", margin: "0 auto" }}>'
+          if old_svg not in s:
+              raise SystemExit('radial svg target not found')
+          s = s.replace(old_svg, new_svg, 1)
+
+          s = s.replace('{label(arc, (R0 + R1) / 2, 0.30, 13, "#FFFFFF")}', '{label(arc, (R0 + R1) / 2, 0.30, Math.round(13 * treeScale), "#FFFFFF")}', 1)
+          s = s.replace('{label(arc, (R1 + R2) / 2, 0.20, 12, arc.rest ? C.sub : "#FFFFFF")}', '{label(arc, (R1 + R2) / 2, 0.20, Math.round(12 * treeScale), arc.rest ? C.sub : "#FFFFFF")}', 1)
+          s = s.replace('{label(arc, (R2 + R3) / 2, 0.26, 10, (CAT_STYLE[arc.cat] || {}).fg || C.ink)}', '{label(arc, (R2 + R3) / 2, 0.26, Math.round(10 * treeScale), (CAT_STYLE[arc.cat] || {}).fg || C.ink)}', 1)
+          s = s.replace('<text x={cx} y={cy - 10} textAnchor="middle" fontSize={12}', '<text x={cx} y={cy - 10} textAnchor="middle" fontSize={Math.round(12 * treeScale)}', 1)
+          s = s.replace('<text x={cx} y={cy + 14} textAnchor="middle" fontSize={26}', '<text x={cx} y={cy + 14} textAnchor="middle" fontSize={Math.round(26 * treeScale)}', 1)
+          ui.write_text(s)
+
+          net = Path('core/opinion-network.jsx')
+          s = net.read_text()
+          old = '''  return (\n    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>\n    <svg viewBox={"0 0 " + S + " " + S} style={{ width: S, maxWidth: "none", height: "auto", display: "block", margin: "0 auto" }}>'''
+          new = '''  return (\n    <div style={{ width: "100%", minWidth: 0, overflow: "hidden", paddingBottom: 4 }}>\n    <svg viewBox={"0 0 " + S + " " + S} preserveAspectRatio="xMidYMid meet" style={{ width: "100%", maxWidth: 720, height: "auto", display: "block", margin: "0 auto" }}>'''
+          if old not in s:
+              raise SystemExit('network fit target not found')
+          s = s.replace(old, new, 1)
+          # Keep labels approximately readable after large internal layouts are fitted down.
+          s = s.replace('const textColor = pn => pn.hn > 0.58 ? "#FFFFFF" : C.ink;', 'const textColor = pn => pn.hn > 0.58 ? "#FFFFFF" : C.ink;\n  const displayScale = Math.max(1, S / 680);', 1)
+          s = s.replace('fontSize={12} fontWeight="700"', 'fontSize={Math.round(12 * displayScale)} fontWeight="700"', 1)
+          s = s.replace('fontSize={10} fill={C.sub}', 'fontSize={Math.round(10 * displayScale)} fill={C.sub}', 1)
+          s = s.replace('fontSize={17} fontWeight="700"', 'fontSize={Math.round(17 * displayScale)} fontWeight="700"', 1)
+          net.write_text(s)
+          PY
+
+          node scripts/build-app.mjs
+          git diff --check
+          grep -Fq 'paramView((qa.params || {})[groupOpt])' core/ui.jsx
+          grep -Fq 'preserveAspectRatio="xMidYMid meet" style={{ width: "100%", maxWidth: 720' core/ui.jsx
+          grep -Fq 'const displayScale = Math.max(1, S / 680)' core/opinion-network.jsx
+          grep -Fq 'overflow: "hidden"' core/opinion-network.jsx
+
+      - name: Full regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix local ci --no-audit --no-fund
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/response-ux-analysis-trace-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          node tests/local-bridge.test.js
+          VITE_SEISEKI_API_BASE=https://seiseki-api.tokyo-odh-129.workers.dev VITE_SEISEKI_API_REQUIRED=true VITE_SEISEKI_RUNTIME_MODE=production npm --prefix local run build
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add core/ui.jsx core/opinion-network.jsx app/seiseki.jsx local/src/App.jsx
+          git commit -m 'Fit expanded opinion visuals and guard dashboard params'
+          git push origin HEAD:fix/mobile-tree-fit-dashboard-20260830

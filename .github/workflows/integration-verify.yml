@@ -1,0 +1,97 @@
+name: Verify SEISEKI source and quantum integration
+
+on:
+  push:
+    branches:
+      - feature/quantum-app-integration
+    paths:
+      - ".github/workflows/integration-verify.yml"
+      - "CHANGELOG.md"
+      - "app/**"
+      - "cloudflare/**"
+      - "core/**"
+      - "local/**"
+      - "scripts/build-app.mjs"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seiseki-quantum-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current source
+        uses: actions/checkout@v4
+
+      - name: Verify preserved Cloudflare staging contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f DEPLOYMENT_SAFETY.md
+          test -f cloudflare/wrangler.jsonc
+          test -d preview/opinion-network
+          grep -q '"name": "seiseki-api-staging"' cloudflare/wrangler.jsonc
+          grep -q '"database_name": "seiseki-db-staging"' cloudflare/wrangler.jsonc
+          grep -q '"database_id": "64468050-a8e5-4a5f-86a7-3dfca661df55"' cloudflare/wrangler.jsonc
+          grep -q '"queue": "seiseki-analysis-staging"' cloudflare/wrangler.jsonc
+          grep -q '"AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"' cloudflare/wrangler.jsonc
+          grep -q '"AI_MAX_ATTEMPTS": "2"' cloudflare/wrangler.jsonc
+          test -f cloudflare/migrations/0001_initial.sql
+          test -f cloudflare/migrations/0002_accounts_and_analysis.sql
+          test -f cloudflare/migrations/0003_staging_kdf_range.sql
+          test -f cloudflare/migrations/0004_response_question_context.sql
+          grep -q '"database_id": "00000000-0000-0000-0000-000000000000"' cloudflare/wrangler.jsonc
+
+      - name: Verify source safety and generated app sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .env
+          test ! -e cloudflare/.env.staging
+          test ! -d local/node_modules
+          test ! -d cloudflare/node_modules
+          test ! -d cloudflare/.wrangler
+          test ! -d local/.wrangler
+          node scripts/build-app.mjs
+          git diff --exit-code -- app/seiseki.jsx local/src/App.jsx
+
+      - name: Verify application behavior contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'quantum: "/app/quantum"' core/ui.jsx
+          grep -q 'seiseki-opinion-network-preview.tokyo-odh-129.workers.dev' core/ui.jsx
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          node tests/quantum-entanglement-engine.test.mjs
+
+      - name: Verify Cloudflare worker source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cloudflare
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm test
+
+      - name: Fresh staging build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd local
+          npm ci --no-audit --no-fund
+          npm run build:staging
+          test -s dist/index.html
+          test -d dist/assets
+          printf '### Fresh staging build\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- index sha256: `%s`\n' "$(sha256sum dist/index.html | awk '{print $1}')" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- Cloudflare deploy run: `false`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- D1 migrations run: `false`\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- production touched: `false`\n' >> "$GITHUB_STEP_SUMMARY"

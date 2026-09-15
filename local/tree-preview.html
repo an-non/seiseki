@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>意見ネットワーク プレビュー</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #fafaf9;
+      --ink: #22211c;
+      --sub: #8a8677;
+      --rule: #e6e3da;
+      --bengara: #a3512b;
+      --slate: #3d5573;
+      --green: #175e54;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+    }
+    main { width: min(980px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 52px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+    h1 { margin: 0; font-family: "Shippori Mincho", "Yu Mincho", "Noto Serif JP", serif; font-size: clamp(24px, 4vw, 34px); letter-spacing: 0; }
+    .lead { margin: 7px 0 0; color: var(--sub); font-size: 13px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+    .pill { border: 1px solid var(--rule); padding: 5px 9px; color: var(--sub); font-size: 11px; background: #fff; }
+    .panel { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: #fff; padding: 16px 12px 10px; }
+    .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 13px; margin: 0 8px 10px; color: var(--sub); font-size: 11px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .swatch { width: 12px; height: 12px; border: 1px solid rgba(34, 33, 28, .18); display: inline-block; }
+    .gradient { width: 106px; height: 10px; background: linear-gradient(90deg, #efebe0, #d7bca9, #a3512b); border: 1px solid rgba(34,33,28,.15); }
+    svg { width: 100%; height: auto; display: block; max-height: 76vh; }
+    .node { cursor: pointer; outline: none; }
+    .node:focus circle, .node:hover circle { stroke: var(--green); stroke-width: 4; }
+    .node text { pointer-events: none; }
+    .caption { margin: 10px 8px 0; color: var(--sub); font-size: 11px; line-height: 1.7; }
+    @media (max-width: 640px) {
+      main { width: min(100% - 18px, 980px); padding-top: 24px; }
+      header { display: block; }
+      .meta { justify-content: flex-start; margin-top: 12px; }
+      .panel { padding-inline: 3px; }
+      .legend { margin-inline: 5px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .node { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>意見ネットワーク</h1>
+        <p class="lead">重みの高い意見ほど中心に近く、ノードはわずかに揺らいで表示されます。</p>
+      </div>
+      <div class="meta" aria-label="表示条件">
+        <span class="pill">ノード 全件</span>
+        <span class="pill">リンク 重み付き</span>
+        <span class="pill">動き rAF</span>
+      </div>
+    </header>
+
+    <section class="panel" aria-label="意見ネットワークのプレビュー">
+      <div class="legend" aria-label="凡例">
+        <span class="legend-item"><span class="gradient"></span>重み（低い → 高い）</span>
+        <span class="legend-item"><span class="swatch" style="background:#3d5573"></span>共起リンク</span>
+        <span class="legend-item"><span class="swatch" style="background:#a3512b"></span>全意見ノード</span>
+        <span class="legend-item">感情値はノードの詳細表示</span>
+      </div>
+      <svg id="network" viewBox="0 0 680 680" role="img" aria-label="意見ネットワーク図">
+        <g id="spokes"></g>
+        <g id="links"></g>
+        <g id="nodes"></g>
+        <g id="root">
+          <rect x="302" y="318" width="76" height="44" rx="8" fill="#a3512b" stroke="#fff" stroke-width="2.5"></rect>
+          <text x="340" y="340" text-anchor="middle" dominant-baseline="central" font-size="17" font-weight="700" fill="#fff" font-family="Shippori Mincho, Yu Mincho, Noto Serif JP, serif">全意見</text>
+        </g>
+      </svg>
+      <p class="caption">本ページは独立プレビュー。実画面と同じ重みの距離、名前による決定的な角度ずれ、requestAnimationFrame の微細な動きを使っています。</p>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const names = ["生活費", "雇用", "子育て", "教育", "医療", "介護", "年金", "住宅", "交通", "防災", "環境", "エネルギー", "食料", "農業", "観光", "文化", "行政DX", "税制", "社会保障", "外交", "安全保障", "地域", "人口減少", "働き方", "賃金", "物価", "地域医療", "保育", "研究", "通信", "観光政策", "災害復旧", "水資源", "地域産業", "政治参加", "情報公開"];
+      const root = document.getElementById("root");
+      const spokeLayer = document.getElementById("spokes");
+      const linkLayer = document.getElementById("links");
+      const nodeLayer = document.getElementById("nodes");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const cx = 340, cy = 340;
+
+      function seed(value) {
+        let h = 2166136261;
+        for (const ch of String(value)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+        return (h >>> 0) / 4294967295;
+      }
+      function lerpHex(a, b, t) {
+        const x = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
+        const y = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
+        const u = Math.max(0, Math.min(1, t));
+        return "#" + x.map((v, i) => ("0" + Math.round(v + (y[i] - v) * u).toString(16)).slice(-2)).join("");
+      }
+      function heatColor(t) { return lerpHex("#efebe0", "#7a2e12", t); }
+      function emoColor(v) {
+        if (v > 0.15) return "#175e54";
+        if (v < -0.15) return "#a3512b";
+        return "#9c988b";
+      }
+      function element(tag, attrs) {
+        const el = document.createElementNS(SVG_NS, tag);
+        for (const key of Object.keys(attrs || {})) el.setAttribute(key, attrs[key]);
+        return el;
+      }
+
+      const data = names.map((name, i) => ({
+        name,
+        n: 6 + (i * 7) % 38,
+        heat: ((i * 37) % 100) / 100,
+        emo: seed(name) * 2 - 1
+      }));
+      let hMax = 0, maxN = 1;
+      for (const item of data) { hMax = Math.max(hMax, item.heat); maxN = Math.max(maxN, item.n); }
+      hMax = hMax || 1;
+      const placed = data.map((item, i) => {
+        const hn = Math.min(1, Math.max(0, item.heat / hMax));
+        const r = 274 - hn * (274 - 104);
+        const slot = Math.PI * 2 / data.length;
+        const jitter = (seed(item.name) - 0.5) * Math.min(0.36, slot * 0.82);
+        const angle = -Math.PI / 2 + (i / data.length) * Math.PI * 2 + jitter;
+        return { ...item, hn, r, angle, x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+      });
+      const byName = new Map(placed.map(item => [item.name, item]));
+
+      const spokeRefs = placed.map(item => {
+        const line = element("line", { x1: cx, y1: cy, x2: item.x, y2: item.y, stroke: "#e6e3da", "stroke-opacity": .48, "stroke-width": 1 });
+        spokeLayer.appendChild(line);
+        return { line, item };
+      });
+      const links = [];
+      for (let i = 0; i < placed.length; i++) {
+        const a = placed[i], b = placed[(i * 7 + 5) % placed.length];
+        if (a !== b) links.push({ a, b, n: 1 + Math.floor(seed(a.name + b.name) * 9) });
+        if (i % 2 === 0) {
+          const c = placed[(i + 3) % placed.length];
+          if (a !== c) links.push({ a, b: c, n: 1 + Math.floor(seed(c.name + a.name) * 6) });
+        }
+      }
+      const maxLink = Math.max(1, ...links.map(link => link.n));
+      const linkRefs = links.map(link => {
+        const line = element("line", { x1: link.a.x, y1: link.a.y, x2: link.b.x, y2: link.b.y, stroke: "#3d5573", "stroke-opacity": .52, "stroke-width": .8 + link.n / maxLink * 2.8 });
+        const title = element("title");
+        title.textContent = link.a.name + " と " + link.b.name + " の共起 " + link.n + "件";
+        line.appendChild(title);
+        linkLayer.appendChild(line);
+        return { line, link };
+      });
+      const nodeRefs = placed.map(item => {
+        const group = element("g", { "class": "node", tabindex: 0, transform: "translate(0 0)" });
+        const radius = 13 + Math.sqrt(item.n / maxN) * 25;
+        const circle = element("circle", { cx: item.x, cy: item.y, r: radius, fill: heatColor(item.hn), stroke: "#fff", "stroke-width": 2.5 });
+        const title = element("title");
+        title.textContent = item.name + " / " + item.n + "件 / 重み " + Math.round(item.hn * 100) + " / 感情 " + Math.round((item.emo + 1) * 50);
+        const label = element("text", { x: item.x, y: item.y + radius + 13, "text-anchor": "middle", "font-size": 12, "font-weight": 700, fill: "#22211c", "font-family": "Zen Kaku Gothic New, Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif" });
+        label.textContent = item.name;
+        const count = element("text", { x: item.x, y: item.y + radius + 26, "text-anchor": "middle", "font-size": 10, fill: "#8a8677", "font-family": "IBM Plex Mono, SF Mono, Consolas, monospace" });
+        count.textContent = item.n + "件";
+        group.append(title, circle, label, count);
+        group.addEventListener("click", () => { group.classList.toggle("selected"); });
+        nodeLayer.appendChild(group);
+        return { group, item };
+      });
+      root.parentNode.appendChild(root);
+
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const started = performance.now();
+      function frame(now) {
+        const phase = (now - started) / 1000;
+        const positions = new Map();
+        for (const ref of nodeRefs) {
+          const base = seed(ref.item.name) * Math.PI * 2;
+          const amount = 1.2 + ref.item.hn * 3.8;
+          const dx = Math.cos(phase * .65 + base) * amount;
+          const dy = Math.sin(phase * .82 + base * 1.13) * amount;
+          positions.set(ref.item.name, { x: ref.item.x + dx, y: ref.item.y + dy });
+          ref.group.setAttribute("transform", "translate(" + dx.toFixed(2) + " " + dy.toFixed(2) + ")");
+        }
+        for (const ref of spokeRefs) {
+          const p = positions.get(ref.item.name);
+          ref.line.setAttribute("x2", p.x); ref.line.setAttribute("y2", p.y);
+        }
+        for (const ref of linkRefs) {
+          const a = positions.get(ref.link.a.name), b = positions.get(ref.link.b.name);
+          ref.line.setAttribute("x1", a.x); ref.line.setAttribute("y1", a.y);
+          ref.line.setAttribute("x2", b.x); ref.line.setAttribute("y2", b.y);
+        }
+        if (!reduce) requestAnimationFrame(frame);
+      }
+      frame(started);
+    })();
+  </script>
+</body>
+</html>

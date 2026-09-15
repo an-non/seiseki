@@ -1,0 +1,141 @@
+name: Follow-up free-text implementation 20260828
+
+on:
+  push:
+    branches:
+      - codex/follow-up-free-text-20260828
+    paths:
+      - scripts/apply-follow-up-free-text-20260828.mjs
+      - .github/workflows/follow-up-free-text-implementation-20260828.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/follow-up-free-text-20260828
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cloudflare/package-lock.json
+            local/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix cloudflare ci --ignore-scripts --no-audit --no-fund
+          npm --prefix local ci --no-audit --no-fund
+
+      - name: Apply implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-follow-up-free-text-20260828.mjs
+          node - <<'NODE'
+          const fs = require('fs');
+          const fixes = [
+            ['core/ui.jsx', '        {an ? (        {an ? (', '        {an ? ('],
+            ['core/ui.jsx', '  if (phase === "consent") {  if (phase === "consent") {', '  if (phase === "consent") {'],
+            ['core/ui.jsx', '  async function resetAll() {  async function resetAll() {', '  async function resetAll() {'],
+            ['core/ui.jsx', '      {chunkTotal > 0 ? (      {chunkTotal > 0 ? (', '      {chunkTotal > 0 ? ('],
+            ['core/ui.jsx', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {async function cloudPatchFreeText(id, expectedRevision, freeText) {', 'async function cloudPatchFreeText(id, expectedRevision, freeText) {'],
+            ['cloudflare/src/analysis.mjs', 'function countHits(text, words) {function countHits(text, words) {', 'function countHits(text, words) {']
+          ];
+          for (const [path, duplicated, fixed] of fixes) {
+            const source = fs.readFileSync(path, 'utf8');
+            if (!source.includes(duplicated)) throw new Error('expected duplicated range marker was not found in ' + path + ': ' + duplicated);
+            fs.writeFileSync(path, source.replace(duplicated, fixed), 'utf8');
+          }
+          const testPath = 'cloudflare/tests/follow-up-free-text.test.mjs';
+          let testSource = fs.readFileSync(testPath, 'utf8');
+          const assertions = [
+            [
+              'assert.deepEqual(row, { firstText: "初回本文", secondText: "第二本文", revision: 2 });',
+              'assert.deepEqual([row.firstText, row.secondText, row.revision], ["初回本文", "第二本文", 2]);'
+            ],
+            [
+              'assert.deepEqual(row, { firstText: "初回本文", secondText: "第二本文の修正版", revision: 3 });',
+              'assert.deepEqual([row.firstText, row.secondText, row.revision], ["初回本文", "第二本文の修正版", 3]);'
+            ]
+          ];
+          for (const [from, to] of assertions) {
+            if (!testSource.includes(from)) throw new Error('expected SQLite assertion was not found: ' + from);
+            testSource = testSource.replace(from, to);
+          }
+          fs.writeFileSync(testPath, testSource, 'utf8');
+          NODE
+          node scripts/build-app.mjs
+
+      - name: Backend and UI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test.js
+          node tests/page-routing.test.mjs
+          node tests/phase5-ui-contract.test.mjs
+          node tests/follow-up-ui-contract.test.mjs
+          node tests/balcheck.js app/seiseki.jsx
+          npm --prefix cloudflare run check
+          npm --prefix cloudflare test
+          npm --prefix local run build
+          node tests/local-bridge.test.js
+          cmp app/seiseki.jsx local/src/App.jsx
+          git diff --check
+
+      - name: Diagnose generated UI on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- app/seiseki.jsx 3300-3660 ---'
+          sed -n '3300,3660p' app/seiseki.jsx || true
+          echo '--- app/seiseki.jsx 5000-5240 ---'
+          sed -n '5000,5240p' app/seiseki.jsx || true
+          echo '--- cloudflare test tail context ---'
+          grep -n -A30 -B10 'follow-up' cloudflare/tests/follow-up-free-text.test.mjs || true
+
+      - name: Verify scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only 46fc2abb8a0f8739590c1d66767ed525f5b5db43 -- \
+            ':!scripts/apply-follow-up-free-text-20260828.mjs' \
+            ':!.github/workflows/follow-up-free-text-implementation-20260828.yml' > /tmp/changed.txt
+          cat /tmp/changed.txt
+          ! grep -Eq '(^|/)(chunk-network-entanglement-preview\.html|phase5-browser-e2e-20260827\.yml|phase5-staging-ui-deploy-20260828\.yml)$' /tmp/changed.txt
+
+      - name: Commit tested implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            cloudflare/migrations/0008_response_follow_up_text.sql \
+            cloudflare/src/validation.mjs \
+            cloudflare/src/db.mjs \
+            cloudflare/src/auth.mjs \
+            cloudflare/src/analysis.mjs \
+            cloudflare/src/index.mjs \
+            cloudflare/tests \
+            core/ui.jsx \
+            app/seiseki.jsx \
+            local/src/App.jsx \
+            tests/page-routing.test.mjs \
+            tests/phase5-ui-contract.test.mjs \
+            tests/follow-up-ui-contract.test.mjs
+          if git diff --cached --quiet; then
+            echo "No implementation changes to commit"
+          else
+            git commit -m "Implement second free-text submission and correction flow"
+            git push origin HEAD:codex/follow-up-free-text-20260828
+          fi

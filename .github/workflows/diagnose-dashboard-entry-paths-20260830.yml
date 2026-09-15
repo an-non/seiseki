@@ -1,0 +1,65 @@
+name: Diagnose dashboard entry paths 20260830
+
+on:
+  push:
+    branches:
+      - fix/mobile-tree-fit-dashboard-20260830
+    paths:
+      - .github/workflows/diagnose-dashboard-entry-paths-20260830.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Playwright Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/diag && cd /tmp/diag
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Test legacy stats and SPA navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/diag
+          cat > diag.mjs <<'EOF'
+          import { chromium } from 'playwright';
+          const base='https://seiseki-api.tokyo-odh-129.workers.dev';
+          const browser=await chromium.launch({headless:true});
+          async function inspect(label,url,after){
+            const page=await browser.newPage({viewport:{width:1280,height:900}});
+            const errors=[];
+            page.on('pageerror',e=>errors.push('PAGEERROR '+String(e?.stack||e)));
+            page.on('console',m=>{if(m.type()==='error')errors.push('CONSOLEERROR '+m.text())});
+            const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:60000});
+            await page.waitForTimeout(4000);
+            if(after) await after(page);
+            await page.waitForTimeout(3000);
+            const body=(await page.locator('body').innerText()).replace(/\n/g,' | ');
+            console.log('CASE',label);
+            console.log('HTTP',response?.status());
+            console.log('FINAL_URL',page.url());
+            console.log('HAS_DASHBOARD',body.includes('統計ダッシュボード'));
+            console.log('BODY_HEAD',body.slice(0,1000));
+            console.log('ERRORS',JSON.stringify(errors));
+            await page.close();
+          }
+          await inspect('legacy-stats',base+'/app/stats?rev=legacy-'+Date.now());
+          await inspect('spa-nav',base+'/app?rev=spa-'+Date.now(),async page=>{
+            const link=page.getByText('ダッシュボード',{exact:true}).first();
+            console.log('SPA_LINK_COUNT',await link.count());
+            if(await link.count()) await link.click();
+          });
+          await browser.close();
+          EOF
+          node diag.mjs

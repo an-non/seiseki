@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="ja" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>量子ノード関係 v2 実験観測</title>
+  <style>
+    :root {
+      color-scheme:dark;
+      --paper:#100e1d;
+      --ink:#f5f3ff;
+      --sub:#bdb6d3;
+      --rule:rgba(156,132,219,.32);
+      --panel:rgba(16,14,29,.82);
+      --accent:#58f2ff;
+      --violet:#9b72ff;
+      --gold:#f4ed63;
+    }
+    :root[data-theme="light"] {
+      color-scheme:light;
+      --paper:#ffffff;
+      --ink:#162039;
+      --sub:#58657a;
+      --rule:rgba(53,87,160,.24);
+      --panel:rgba(255,255,255,.88);
+      --accent:#007f9d;
+      --violet:#5b42ca;
+      --gold:#8b6700;
+    }
+    * { box-sizing:border-box; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:var(--paper); color:var(--ink); }
+    body { font-family:"Zen Kaku Gothic New","Yu Gothic","Noto Sans JP",sans-serif; }
+    button { font:inherit; letter-spacing:0; }
+    #scene { position:fixed; inset:0; }
+    canvas { display:block; width:100%; height:100%; }
+    .heading { position:fixed; z-index:5; top:20px; left:24px; pointer-events:none; }
+    h1 { margin:0; font-family:"Shippori Mincho","Yu Mincho",serif; font-size:24px; letter-spacing:0; }
+    .legend { display:flex; gap:14px; margin-top:8px; color:var(--sub); font-size:11px; }
+    .legend span { display:inline-flex; align-items:center; gap:6px; }
+    .swatch { width:8px; height:8px; border-radius:50%; background:currentColor; box-shadow:0 0 9px currentColor; }
+    .source { color:#63e8ff; }
+    .quantum { color:#62f099; }
+    .derived { color:#ff62bd; }
+    .core { color:#f4ed63; }
+    .controls {
+      position:fixed;
+      z-index:6;
+      top:86px;
+      left:24px;
+      display:flex;
+      gap:3px;
+      padding:4px;
+      border:1px solid var(--rule);
+      border-radius:6px;
+      background:var(--panel);
+      backdrop-filter:blur(10px);
+    }
+    .controls button {
+      min-height:34px;
+      padding:0 11px;
+      border:0;
+      border-radius:4px;
+      color:var(--sub);
+      background:transparent;
+      cursor:pointer;
+    }
+    .controls button:hover,
+    .controls button:focus-visible { color:var(--ink); outline:1px solid var(--rule); outline-offset:-1px; }
+    .controls button[aria-pressed="true"] { color:var(--ink); background:rgba(104,89,174,.2); }
+    .controls .observe { color:var(--paper); background:var(--accent); font-weight:700; }
+    :root[data-theme="dark"] .controls .observe { color:#07151b; }
+    .stats {
+      position:fixed;
+      z-index:5;
+      top:22px;
+      right:24px;
+      color:var(--sub);
+      font:11px/1.65 "IBM Plex Mono","Cascadia Mono",monospace;
+      text-align:right;
+      white-space:pre;
+      pointer-events:none;
+    }
+    .details {
+      position:fixed;
+      z-index:5;
+      right:24px;
+      bottom:24px;
+      width:min(350px,calc(100vw - 48px));
+      max-height:250px;
+      overflow:auto;
+      padding:13px 15px;
+      border:1px solid var(--rule);
+      border-radius:6px;
+      background:var(--panel);
+      backdrop-filter:blur(12px);
+    }
+    .details h2 { margin:0 0 7px; font-size:15px; }
+    .details p { margin:0 0 9px; color:var(--sub); font-size:11px; line-height:1.65; }
+    .details dl { display:grid; grid-template-columns:104px 1fr; gap:5px 9px; margin:0; font-size:10px; }
+    .details dt { color:var(--sub); }
+    .details dd { margin:0; overflow-wrap:anywhere; }
+    .trace {
+      position:fixed;
+      z-index:5;
+      left:24px;
+      bottom:24px;
+      width:min(390px,calc(100vw - 48px));
+      max-height:230px;
+      overflow:hidden;
+      color:var(--accent);
+      font:9px/1.5 "IBM Plex Mono","Cascadia Mono",monospace;
+      white-space:pre-wrap;
+      pointer-events:none;
+      text-shadow:0 0 9px color-mix(in srgb,var(--accent) 50%,transparent);
+    }
+    .notice {
+      position:fixed;
+      z-index:7;
+      inset:0;
+      display:none;
+      place-items:center;
+      color:var(--ink);
+      background:var(--paper);
+    }
+    @media (max-width:700px) {
+      .heading { top:14px; left:14px; }
+      h1 { font-size:19px; }
+      .legend { gap:8px; font-size:9px; }
+      .controls { top:72px; left:14px; right:14px; overflow-x:auto; }
+      .controls button { min-width:max-content; padding:0 9px; }
+      .stats {
+        top:122px;
+        right:14px;
+        width:136px;
+        padding:6px 7px;
+        border:1px solid var(--rule);
+        border-radius:5px;
+        background:var(--panel);
+        backdrop-filter:blur(8px);
+        font-size:8px;
+        line-height:1.45;
+      }
+      .details { right:14px; bottom:14px; width:calc(100vw - 28px); max-height:145px; }
+      .trace { display:none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="scene" aria-label="量子ノード関係の三次元表示"></div>
+  <header class="heading">
+    <h1>量子ノード関係 v2 実験観測</h1>
+    <div class="legend" aria-label="凡例">
+      <span class="source"><i class="swatch"></i>意見</span>
+      <span class="quantum"><i class="swatch"></i>量子ノード</span>
+      <span class="derived"><i class="swatch"></i>二次問題</span>
+      <span class="core"><i class="swatch"></i>政治核</span>
+    </div>
+  </header>
+  <nav class="controls" aria-label="観測条件">
+    <button class="observe" id="observe" type="button">再観測</button>
+    <button type="button" data-basis="overall" aria-pressed="true">総合</button>
+    <button type="button" data-basis="urgency" aria-pressed="false">切実度</button>
+    <button type="button" data-basis="motivation" aria-pressed="false">意欲</button>
+    <button type="button" data-basis="validity" aria-pressed="false">妥当性</button>
+    <button type="button" id="theme">白</button>
+  </nav>
+  <div class="stats" id="stats"></div>
+  <pre class="trace" id="trace"></pre>
+  <aside class="details" id="details" aria-live="polite">
+    <h2>観測全体</h2>
+    <p>ノードを選択すると、意味関係と数式の内訳を表示する。</p>
+  </aside>
+  <div class="notice" id="notice">WebGLを利用できない。</div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+    import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+    import {
+      createEntanglementModel,
+      deduplicateNodes,
+      generatePrototypeCandidates,
+      observeAmplitudeEntanglement
+    } from "./quantum-entanglement-engine.mjs";
+    import {
+      buildQuantumNodeProfiles,
+      observeQuantumNodeNetwork
+    } from "./quantum-node-relations-v2.mjs";
+
+    const host = document.getElementById("scene");
+    const details = document.getElementById("details");
+    const stats = document.getElementById("stats");
+    const trace = document.getElementById("trace");
+    const params = new URLSearchParams(location.search);
+    const count = Math.max(500, Math.min(5000, Number(params.get("count")) || 5000));
+    const seed = params.get("seed") || "quantum-node-relations-v2";
+    let basis = ["overall","urgency","motivation","validity"].includes(params.get("basis"))
+      ? params.get("basis") : "overall";
+    let epoch = Number.isInteger(Number(params.get("epoch"))) ? Number(params.get("epoch")) : 0;
+    let theme = params.get("theme") === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = theme;
+
+    const categories = ["暮らし","仕事","教育・福祉","地域基盤","環境","統治"];
+    const topics = Array.from({ length:24 }, (_, index) => ({
+      id:`topic-${String(index).padStart(2,"0")}`,
+      label:`${categories[Math.floor(index / 4)]} ${index % 4 + 1}`,
+      categoryId:`category-${Math.floor(index / 4)}`
+    }));
+    const candidates = generatePrototypeCandidates(topics, {
+      uniqueCount:count,
+      duplicateCount:Math.round(count * .08)
+    });
+    const model = createEntanglementModel(deduplicateNodes(candidates));
+    const groupSource = new Map(model.groups.map(group => [group.id, group]));
+    const basisLabels = { overall:"総合", urgency:"切実度", motivation:"意欲", validity:"妥当性" };
+
+    function hash32(value) {
+      let hash = 2166136261;
+      for (const character of String(value)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+      return hash >>> 0;
+    }
+    function random01(value) {
+      let state = hash32(value) || 0x9e3779b9;
+      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+      return (state >>> 0) / 4294967296;
+    }
+    function fallbackDirection(value) {
+      const longitude = random01(`${value}|longitude`) * Math.PI * 2;
+      const vertical = random01(`${value}|vertical`) * 2 - 1;
+      const radial = Math.sqrt(Math.max(0,1 - vertical * vertical));
+      return new THREE.Vector3(radial * Math.cos(longitude),vertical,radial * Math.sin(longitude));
+    }
+    function directionOf(position,value) {
+      const vector = new THREE.Vector3(position?.x || 0,position?.y || 0,position?.z || 0);
+      return vector.lengthSq() > 1e-8 ? vector.normalize() : fallbackDirection(value);
+    }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g,character => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      })[character]);
+    }
+    function disposeObject(object) {
+      object.traverse(child => {
+        child.geometry?.dispose?.();
+        if (Array.isArray(child.material)) child.material.forEach(material => material.dispose());
+        else child.material?.dispose?.();
+      });
+    }
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(44,innerWidth / innerHeight,.1,800);
+    camera.position.set(0,28,176);
+    const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
+    renderer.setSize(innerWidth,innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    host.appendChild(renderer.domElement);
+    const controls = new OrbitControls(camera,renderer.domElement);
+    controls.enableDamping = true;
+    controls.minDistance = 42;
+    controls.maxDistance = 290;
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene,camera));
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.85,.42,.48);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
+
+    const networkLayer = new THREE.Group();
+    scene.add(networkLayer);
+    const activeLines = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color:0xffffff,transparent:true,opacity:.92,depthWrite:false })
+    );
+    activeLines.renderOrder = 8;
+    scene.add(activeLines);
+    let projection;
+    let network;
+    let groupPositions = new Map();
+    let derivedPositions = new Map();
+    let selectable = [];
+    let selected = null;
+
+    function palette() {
+      return theme === "dark" ? {
+        background:0x100e1d,source:0x54dfff,group:0x51f18b,relation:0x8f6cff,
+        derived:0xff5db5,derivedLine:0x48dbff,core:0xf5ef57
+      } : {
+        background:0xffffff,source:0x0486a4,group:0x00a56a,relation:0x6a4fd2,
+        derived:0xce197e,derivedLine:0x007dba,core:0x8f7100
+      };
+    }
+    function makeLineSegments(segments,color,opacity) {
+      const geometry = new THREE.BufferGeometry().setFromPoints(segments.flat());
+      const material = new THREE.LineBasicMaterial({
+        color,transparent:true,opacity,depthWrite:false,
+        blending:theme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+      });
+      return new THREE.LineSegments(geometry,material);
+    }
+    function rebuild() {
+      const started = performance.now();
+      projection = observeAmplitudeEntanglement(model,{ basis,seed,epoch });
+      const profiles = buildQuantumNodeProfiles(projection.groups,model.nodeById);
+      network = observeQuantumNodeNetwork(profiles,{
+        basis,seed,epoch,maximumRelations:180,maximumDerivedNodes:24
+      });
+      disposeObject(networkLayer);
+      networkLayer.clear();
+      selectable = [];
+      selected = null;
+      activeLines.geometry.dispose();
+      activeLines.geometry = new THREE.BufferGeometry();
+      const colors = palette();
+      scene.background = new THREE.Color(colors.background);
+      scene.fog = new THREE.FogExp2(colors.background,.0055);
+
+      const opinionPositions = new Float32Array(projection.nodes.length * 3);
+      projection.nodes.forEach((node,index) => {
+        const radius = 58 + node.distance * 2.55;
+        const position = directionOf(node.position,node.id).multiplyScalar(radius);
+        opinionPositions.set([position.x,position.y,position.z],index * 3);
+      });
+      const opinionGeometry = new THREE.BufferGeometry();
+      opinionGeometry.setAttribute("position",new THREE.BufferAttribute(opinionPositions,3));
+      const opinions = new THREE.Points(opinionGeometry,new THREE.PointsMaterial({
+        color:colors.source,size:.34,transparent:true,opacity:theme === "dark" ? .48 : .38,
+        depthWrite:false,blending:theme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+      }));
+      networkLayer.add(opinions);
+
+      groupPositions = new Map(projection.groups.map(group => {
+        const radius = 48 + random01(`${group.id}|radius`) * 18;
+        return [group.id,directionOf(group.position,group.id).multiplyScalar(radius)];
+      }));
+      const groupGeometry = new THREE.TorusGeometry(.8,.15,8,24);
+      const groupMaterial = new THREE.MeshBasicMaterial({
+        color:colors.group,transparent:true,opacity:.9,depthWrite:false,
+        blending:theme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+      });
+      const groups = new THREE.InstancedMesh(groupGeometry,groupMaterial,projection.groups.length);
+      const helper = new THREE.Object3D();
+      projection.groups.forEach((group,index) => {
+        helper.position.copy(groupPositions.get(group.id));
+        helper.rotation.set(random01(`${group.id}|rx`)*Math.PI,random01(`${group.id}|ry`)*Math.PI,0);
+        helper.updateMatrix();
+        groups.setMatrixAt(index,helper.matrix);
+      });
+      groups.userData = { type:"group" };
+      selectable.push(groups);
+      networkLayer.add(groups);
+
+      const relationSegments = network.relations.flatMap(relation => [[
+        groupPositions.get(relation.leftId),groupPositions.get(relation.rightId)
+      ]]);
+      networkLayer.add(makeLineSegments(relationSegments,colors.relation,theme === "dark" ? .2 : .16));
+
+      derivedPositions = new Map(network.derivedNodes.map(node => {
+        const left = groupPositions.get(node.sourceQuantumNodeIds[0]);
+        const right = groupPositions.get(node.sourceQuantumNodeIds[1]);
+        const direction = left.clone().add(right);
+        if (direction.lengthSq() < 1e-8) direction.copy(fallbackDirection(node.id));
+        direction.normalize();
+        const radius = 38 - node.coreAffinity * 20;
+        return [node.id,direction.multiplyScalar(radius)];
+      }));
+      const derivedGeometry = new THREE.SphereGeometry(.7,12,10);
+      const derivedMaterial = new THREE.MeshBasicMaterial({
+        color:colors.derived,transparent:true,opacity:.96,
+        blending:theme === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending
+      });
+      const derivedInstances = new THREE.InstancedMesh(derivedGeometry,derivedMaterial,network.derivedNodes.length);
+      network.derivedNodes.forEach((node,index) => {
+        helper.position.copy(derivedPositions.get(node.id));
+        helper.scale.setScalar(.75 + node.evidence * .65);
+        helper.rotation.set(0,0,0);
+        helper.updateMatrix();
+        derivedInstances.setMatrixAt(index,helper.matrix);
+      });
+      derivedInstances.userData = { type:"derived" };
+      selectable.push(derivedInstances);
+      networkLayer.add(derivedInstances);
+
+      const sourceSegments = [];
+      const coreSegments = [];
+      const origin = new THREE.Vector3();
+      network.derivedNodes.forEach(node => {
+        const derived = derivedPositions.get(node.id);
+        node.sourceQuantumNodeIds.forEach(id => sourceSegments.push([derived,groupPositions.get(id)]));
+        coreSegments.push([derived,origin]);
+      });
+      networkLayer.add(makeLineSegments(sourceSegments,colors.derivedLine,theme === "dark" ? .52 : .42));
+      networkLayer.add(makeLineSegments(coreSegments,colors.core,theme === "dark" ? .24 : .2));
+
+      const core = new THREE.Mesh(
+        new THREE.SphereGeometry(1.7,24,18),
+        new THREE.MeshBasicMaterial({ color:colors.core })
+      );
+      core.userData = { type:"core" };
+      selectable.push(core);
+      networkLayer.add(core);
+      bloom.strength = theme === "dark" ? .9 : .42;
+      bloom.threshold = theme === "dark" ? .34 : .86;
+      document.getElementById("theme").textContent = theme === "dark" ? "白" : "黒";
+      stats.textContent = [
+        `入力 ${candidates.length.toLocaleString("ja-JP")}件`,
+        `意見 ${model.nodes.length.toLocaleString("ja-JP")}件`,
+        `量子ノード ${profiles.length}件`,
+        `ノード間関係 ${network.relations.length}本`,
+        `二次問題 ${network.derivedNodes.length}件`,
+        `観測 ${seed}:${epoch}`,
+        `軸 ${basisLabels[basis]}`,
+        `計算 ${(performance.now()-started).toFixed(1)}ms`
+      ].join("\n");
+      renderDetails();
+      trace.textContent = [
+        `$ observe --basis ${basis} --epoch ${epoch}`,
+        `I = P(rho) - P(rhoD)`,
+        `J = P(rho) - P(rho_i x rho_j)`,
+        `R = semantic * (1 - statusInfluence * statusDistance)`,
+        `r = outer - (outer - inner) * coreAffinity`
+      ].join("\n");
+      window.__QUANTUM_NODE_RELATIONS_V2__ = {
+        version:network.version,basis,epoch,
+        opinionCount:model.nodes.length,
+        quantumNodeCount:profiles.length,
+        relationCount:network.relations.length,
+        derivedNodeCount:network.derivedNodes.length,
+        canvasProbe:null
+      };
+    }
+
+    function probeCanvasPixels() {
+      const state = window.__QUANTUM_NODE_RELATIONS_V2__;
+      if (!state || state.canvasProbe) return;
+      const context = renderer.getContext();
+      const width = context.drawingBufferWidth;
+      const height = context.drawingBufferHeight;
+      const pixels = new Uint8Array(width * height * 4);
+      context.readPixels(0,0,width,height,context.RGBA,context.UNSIGNED_BYTE,pixels);
+      const colors = new Set();
+      let varied = 0;
+      const stepX = Math.max(1,Math.floor(width / 32));
+      const stepY = Math.max(1,Math.floor(height / 24));
+      for (let y = 0; y < height; y += stepY) {
+        for (let x = 0; x < width; x += stepX) {
+          const offset = (y * width + x) * 4;
+          const red = pixels[offset];
+          const green = pixels[offset + 1];
+          const blue = pixels[offset + 2];
+          colors.add(`${red},${green},${blue},${pixels[offset + 3]}`);
+          if (Math.max(red,green,blue) - Math.min(red,green,blue) > 8) varied += 1;
+        }
+      }
+      state.canvasProbe = { width,height,sampleColors:colors.size,variedPixels:varied };
+    }
+
+    function selectionPoints(item) {
+      if (!item) return [];
+      if (item.type === "derived") {
+        const node = network.derivedNodes[item.index];
+        const position = derivedPositions.get(node.id);
+        return [
+          ...node.sourceQuantumNodeIds.flatMap(id => [position,groupPositions.get(id)]),
+          position,new THREE.Vector3()
+        ];
+      }
+      if (item.type === "group") {
+        const group = projection.groups[item.index];
+        const here = groupPositions.get(group.id);
+        return network.relations.filter(relation => relation.leftId === group.id || relation.rightId === group.id)
+          .slice(0,30).flatMap(relation => [here,groupPositions.get(relation.leftId === group.id ? relation.rightId : relation.leftId)]);
+      }
+      return network.derivedNodes.flatMap(node => [derivedPositions.get(node.id),new THREE.Vector3()]);
+    }
+    function renderDetails() {
+      const points = selectionPoints(selected);
+      activeLines.geometry.dispose();
+      activeLines.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      if (!selected) {
+        details.innerHTML = `<h2>観測全体</h2><p>量子ノード間の意味関係を観測し、独立した出典から二次問題ノードを一段だけ生成する。</p><dl><dt>AI呼出し</dt><dd>なし</dd><dt>再帰深度</dt><dd>${network.recursiveDepthLimit}</dd><dt>既存A</dt><dd>未変更</dd></dl>`;
+        return;
+      }
+      if (selected.type === "group") {
+        const group = projection.groups[selected.index];
+        const profile = network.profiles[selected.index];
+        const related = network.relations.filter(relation => relation.leftId === group.id || relation.rightId === group.id);
+        details.innerHTML = `<h2>量子ノード ${selected.index + 1}</h2><p>${escapeHtml(group.derivedContent.text)}</p><dl><dt>構成意見</dt><dd>${group.memberIds.length}件</dd><dt>独立出典</dt><dd>${profile.sourceIds.length}件</dd><dt>関係</dt><dd>${related.length}件</dd><dt>観測キー</dt><dd>${escapeHtml(profile.observationKey)}</dd></dl>`;
+        return;
+      }
+      if (selected.type === "derived") {
+        const node = network.derivedNodes[selected.index];
+        details.innerHTML = `<h2>${escapeHtml(node.label)}</h2><p>出典を残した観測上の二次問題候補。正式意見や事実ではない。</p><dl><dt>関係種別</dt><dd>${escapeHtml(node.relationKind)}</dd><dt>根拠性 E</dt><dd>${node.evidence.toFixed(3)}</dd><dt>新規性 N</dt><dd>${node.structuralNovelty.toFixed(3)}</dd><dt>観測依存 Q</dt><dd>${node.observationDependence.toFixed(3)}</dd><dt>政治核親和 A</dt><dd>${node.coreAffinity.toFixed(3)}</dd><dt>位相干渉 I</dt><dd>${node.diagnostics.interferenceDelta.toFixed(6)}</dd><dt>独立差 J</dt><dd>${node.diagnostics.independenceDelta.toFixed(6)}</dd><dt>出典</dt><dd>${node.sourceIds.length}件</dd></dl>`;
+        trace.textContent = [`$ inspect ${node.id}`,`I = ${node.diagnostics.probabilities.pure.toFixed(6)} - ${node.diagnostics.probabilities.dephased.toFixed(6)} = ${node.diagnostics.interferenceDelta.toFixed(6)}`,`J = ${node.diagnostics.probabilities.pure.toFixed(6)} - ${node.diagnostics.probabilities.product.toFixed(6)} = ${node.diagnostics.independenceDelta.toFixed(6)}`,`A = E * L = ${node.evidence.toFixed(6)} * ${node.mainIssueConnection.toFixed(6)} = ${node.coreAffinity.toFixed(6)}`].join("\n");
+        return;
+      }
+      details.innerHTML = `<h2>政治核</h2><p>二次問題ノードは根拠付き接続度に応じて中心へ近づく。干渉の大きさだけでは距離を決めない。</p><dl><dt>接続候補</dt><dd>${network.derivedNodes.length}件</dd><dt>意味</dt><dd>表示上の参照核</dd></dl>`;
+    }
+
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    renderer.domElement.addEventListener("pointerup",event => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.set((event.clientX-rect.left)/rect.width*2-1,-((event.clientY-rect.top)/rect.height)*2+1);
+      raycaster.setFromCamera(pointer,camera);
+      const hit = raycaster.intersectObjects(selectable,false)[0];
+      selected = hit ? { type:hit.object.userData.type,index:hit.instanceId ?? 0 } : null;
+      renderDetails();
+    });
+    document.getElementById("observe").addEventListener("click",() => { epoch += 1; rebuild(); });
+    document.querySelectorAll("[data-basis]").forEach(button => button.addEventListener("click",() => {
+      if (button.dataset.basis === basis) return;
+      basis = button.dataset.basis;
+      document.querySelectorAll("[data-basis]").forEach(item => item.setAttribute("aria-pressed",String(item.dataset.basis === basis)));
+      rebuild();
+    }));
+    document.getElementById("theme").addEventListener("click",() => {
+      theme = theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = theme;
+      rebuild();
+    });
+    addEventListener("resize",() => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
+      composer.setSize(innerWidth,innerHeight);
+    });
+
+    try { rebuild(); }
+    catch (error) {
+      document.getElementById("notice").style.display = "grid";
+      document.getElementById("notice").textContent = `表示を構築できなかった: ${error.message}`;
+      throw error;
+    }
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      composer.render();
+      probeCanvasPixels();
+    });
+  </script>
+</body>
+</html>

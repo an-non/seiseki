@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>意見ネットワーク 階層3D</title>
+  <style>
+    :root {
+      color-scheme:dark;
+      --paper:#03060b;
+      --ink:#eafaff;
+      --sub:#91a4b7;
+      --rule:#1d3850;
+      --cyan:#2eeaff;
+      --violet:#8095ff;
+      --gold:#ffc247;
+      --magenta:#f06bff;
+    }
+    * { box-sizing:border-box; }
+    html, body { width:100%; height:100%; margin:0; overflow:hidden; background:var(--paper); color:var(--ink); }
+    body {
+      font-family:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+      background-image:
+        linear-gradient(rgba(46,234,255,.02) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(113,136,255,.02) 1px,transparent 1px);
+      background-size:32px 32px;
+    }
+    #scene { position:fixed; inset:0; }
+    canvas { display:block; width:100%; height:100%; }
+    header { position:fixed; z-index:4; top:22px; left:26px; pointer-events:none; }
+    h1 {
+      margin:0;
+      color:#f1fdff;
+      font-family:"Shippori Mincho","Yu Mincho","Noto Serif JP",serif;
+      font-size:26px;
+      letter-spacing:0;
+      text-shadow:0 0 18px rgba(46,234,255,.28);
+    }
+    .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; color:var(--sub); font-size:11px; }
+    .legend span { display:inline-flex; align-items:center; gap:6px; }
+    .dot { width:8px; height:8px; border-radius:50%; box-shadow:0 0 8px currentColor; }
+    .dot.level-1 { color:var(--gold); background:currentColor; }
+    .dot.level-2 { color:var(--cyan); background:currentColor; }
+    .dot.level-3 { color:var(--violet); background:currentColor; }
+    .status {
+      position:fixed;
+      z-index:4;
+      top:24px;
+      right:26px;
+      color:var(--sub);
+      font:11px/1.65 "IBM Plex Mono",Consolas,monospace;
+      text-align:right;
+      white-space:pre-line;
+      pointer-events:none;
+    }
+    .details {
+      position:fixed;
+      z-index:5;
+      right:22px;
+      bottom:22px;
+      width:min(340px,calc(100% - 44px));
+      min-height:108px;
+      padding:14px 15px;
+      border:1px solid var(--rule);
+      border-radius:6px;
+      background:rgba(5,10,17,.9);
+      box-shadow:0 0 28px rgba(46,234,255,.08);
+      backdrop-filter:blur(10px);
+    }
+    .details h2 { margin:0 0 7px; color:#f1fdff; font-size:13px; }
+    .details p { margin:0; color:var(--sub); font-size:11px; line-height:1.7; }
+    .details dl { display:grid; grid-template-columns:72px 1fr; gap:4px 8px; margin:10px 0 0; font-size:11px; }
+    .details dt { color:var(--sub); }
+    .details dd { margin:0; }
+    @media (max-width:700px) {
+      header { top:15px; left:16px; right:16px; }
+      h1 { font-size:21px; }
+      .legend { max-width:270px; gap:7px 11px; }
+      .status { top:auto; right:14px; bottom:136px; }
+      .details { right:12px; bottom:12px; width:calc(100% - 24px); min-height:96px; }
+    }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "/node_modules/three/build/three.module.js", "three/addons/": "/node_modules/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <div id="scene" aria-label="政治を中心とする三階層の意見ネットワーク"></div>
+  <header>
+    <h1>意見ネットワーク 階層3D</h1>
+    <div class="legend" aria-label="階層">
+      <span><i class="dot level-1"></i>第一層 大分類</span>
+      <span><i class="dot level-2"></i>第二層 トピック</span>
+      <span><i class="dot level-3"></i>第三層 意見</span>
+    </div>
+  </header>
+  <div class="status" id="status"></div>
+  <aside class="details" id="details" aria-live="polite">
+    <h2>政治</h2>
+    <p>三階層の意見分布</p>
+  </aside>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    const host = document.getElementById("scene");
+    const details = document.getElementById("details");
+    const status = document.getElementById("status");
+    const searchParams = new URLSearchParams(location.search);
+    const requested = Number(searchParams.get("count"));
+    const count = Math.max(240, Math.min(20000, Number.isFinite(requested) && requested > 0 ? requested : 10000));
+    const insideOut = searchParams.get("layout") === "inside-out";
+    const maxVisibleRelatedLinks = 30;
+
+    const categoryDefinitions = [
+      { id:"livelihood", label:"暮らし・社会", color:"#ffc247", topics:["生活費","住宅","社会保障","年金"] },
+      { id:"work", label:"仕事・産業", color:"#ff7fb9", topics:["雇用","働き方","農業","観光"] },
+      { id:"people", label:"教育・福祉", color:"#f06bff", topics:["子育て","教育","医療","介護"] },
+      { id:"infrastructure", label:"地域・基盤", color:"#52e3a4", topics:["交通","防災","地域","人口減少"] },
+      { id:"environment", label:"環境・資源", color:"#5de8ff", topics:["環境","エネルギー","食料","文化"] },
+      { id:"governance", label:"統治・国際", color:"#8095ff", topics:["行政DX","税制","外交","安全保障"] }
+    ];
+    const statements = [
+      "負担を抑える制度が必要",
+      "長期的な支援を優先してほしい",
+      "地域差を小さくするべき",
+      "情報公開を進めてほしい",
+      "現場の意見を制度へ反映したい",
+      "将来世代への影響を検証してほしい"
+    ];
+
+    function seed(value) {
+      let hash = 2166136261;
+      for (const character of String(value)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+      return (hash >>> 0) / 4294967295;
+    }
+    function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, character => ({
+        "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"
+      })[character]);
+    }
+    function randomDirection(id) {
+      const longitude = seed(id + "|longitude") * Math.PI * 2;
+      const vertical = seed(id + "|latitude") * 2 - 1;
+      const radial = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+      return new THREE.Vector3(radial * Math.cos(longitude), vertical, radial * Math.sin(longitude));
+    }
+    function proximityColor(value) {
+      const stops = [new THREE.Color("#a8b4d8"), new THREE.Color("#7188ff"), new THREE.Color("#000080")];
+      const scaled = clamp(value, 0, 1) * 2;
+      return scaled <= 1 ? stops[0].clone().lerp(stops[1], scaled) : stops[1].clone().lerp(stops[2], scaled - 1);
+    }
+    function labelSprite(text, color, scale = 1) {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      canvas.width = 512;
+      canvas.height = 96;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.font = "700 34px sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.shadowColor = color;
+      context.shadowBlur = 14;
+      context.fillStyle = "#f1fdff";
+      context.fillText(text, canvas.width / 2, canvas.height / 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map:texture, transparent:true, depthWrite:false }));
+      sprite.scale.set(6.4 * scale, 1.2 * scale, 1);
+      return sprite;
+    }
+    function lineSegments(points, color, opacity) {
+      return new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({ color, transparent:true, opacity, depthWrite:false })
+      );
+    }
+
+    const categories = categoryDefinitions.map((definition, index) => {
+      const direction = randomDirection("category|" + definition.id);
+      const distance = insideOut
+        ? 33 + seed(definition.id + "|distance") * 4
+        : 9.5 + seed(definition.id + "|distance") * 3.5;
+      return { ...definition, index, level:1, position:direction.multiplyScalar(distance) };
+    });
+    const categoryByTopic = new Map();
+    const topics = [];
+    for (const category of categories) {
+      category.topics.forEach((label, topicIndex) => {
+        const direction = randomDirection("topic|" + label);
+        const position = insideOut
+          ? direction.multiplyScalar(24 + seed(label + "|distance") * 7)
+          : category.position.clone().add(direction.multiplyScalar(4.2 + seed(label + "|offset") * 2.8));
+        const topic = {
+          id:"topic-" + topics.length,
+          label,
+          level:2,
+          category,
+          position
+        };
+        topics.push(topic);
+        categoryByTopic.set(label, category);
+      });
+    }
+    const topicByLabel = new Map(topics.map(topic => [topic.label, topic]));
+
+    const opinionNodes = Array.from({ length:count }, (_, index) => {
+      const topic = topics[index % topics.length];
+      const id = "opinion-" + index;
+      const crit = 24 + Math.round(seed(id + "|crit") * 76);
+      const motiv = 20 + Math.round(seed(id + "|motiv") * 80);
+      const valid = 32 + Math.round(seed(id + "|valid") * 68);
+      const weight = (crit * .5 + motiv * .3 + valid * .2) / 100;
+      const statement = statements[(index * 5 + Math.floor(seed(id) * statements.length)) % statements.length];
+      return {
+        id,
+        index,
+        level:3,
+        topic,
+        category:categoryByTopic.get(topic.label),
+        crit,
+        motiv,
+        valid,
+        weight,
+        statement,
+        text:topic.label + "について" + statement
+      };
+    });
+    const minWeight = Math.min(...opinionNodes.map(node => node.weight));
+    const maxWeight = Math.max(...opinionNodes.map(node => node.weight));
+    const weightSpan = Math.max(1e-9, maxWeight - minWeight);
+    for (const node of opinionNodes) {
+      node.weightView = (node.weight - minWeight) / weightSpan;
+      node.distance = insideOut
+        ? 5.5 + Math.pow(1 - node.weightView, 1.3) * 21.5
+        : 7 + Math.pow(1 - node.weightView, 1.3) * 20;
+      const randomVector = randomDirection(node.id);
+      const direction = insideOut
+        ? randomVector.multiplyScalar(.6).add(node.topic.position.clone().normalize().multiplyScalar(.4)).normalize()
+        : randomVector;
+      node.position = direction.multiplyScalar(node.distance);
+      node.currentPosition = node.position.clone();
+      if (insideOut) {
+        const radial = node.position.clone().normalize();
+        const tangentA = randomDirection(node.id + "|individual-orbit");
+        tangentA.addScaledVector(radial, -tangentA.dot(radial));
+        if (tangentA.lengthSq() < 1e-6) tangentA.set(radial.y, -radial.x, radial.z * .5);
+        tangentA.normalize();
+        node.orbitTangentA = tangentA;
+        node.orbitTangentB = radial.clone().cross(tangentA).normalize();
+        node.orbitPhase = seed(node.id + "|orbit-phase") * Math.PI * 2;
+        node.orbitSpeed = .22 + seed(node.id + "|orbit-speed") * .33;
+        node.orbitAmplitude = .12 + seed(node.id + "|orbit-amplitude") * .38;
+      }
+    }
+    const opinionsByTopic = new Map();
+    const opinionsByStatement = new Map();
+    function addToIndex(index, key, node) {
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(node);
+    }
+    for (const node of opinionNodes) {
+      addToIndex(opinionsByTopic, node.topic.label, node);
+      addToIndex(opinionsByStatement, node.statement, node);
+    }
+    function evaluateOpinionRelation(left, right) {
+      const exactText = left.text === right.text;
+      const sameStatement = left.statement === right.statement;
+      const sameTopic = left.topic === right.topic;
+      const sameCategory = left.category === right.category;
+      const parameterSimilarity = 1 - (
+        Math.abs(left.crit - right.crit)
+        + Math.abs(left.motiv - right.motiv)
+        + Math.abs(left.valid - right.valid)
+      ) / 300;
+      let score = exactText ? .72 : sameStatement ? .48 : 0;
+      if (sameTopic) score += .14;
+      if (sameCategory) score += .08;
+      if (parameterSimilarity >= .82) score += .06 * parameterSimilarity;
+      if (score < .2) return null;
+      const primary = exactText || sameStatement ? "content" : sameTopic ? "topic" : sameCategory ? "category" : "fact";
+      return { left, right, score, primary };
+    }
+    function relatedOpinionsFor(node) {
+      const candidates = new Set([
+        ...(opinionsByTopic.get(node.topic.label) || []),
+        ...(opinionsByStatement.get(node.statement) || [])
+      ]);
+      candidates.delete(node);
+      return [...candidates]
+        .map(candidate => evaluateOpinionRelation(node, candidate))
+        .filter(Boolean)
+        .sort((left, right) => right.score - left.score || left.right.id.localeCompare(right.right.id))
+        .slice(0, maxVisibleRelatedLinks);
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#03060b");
+    scene.fog = new THREE.FogExp2("#03060b", .012);
+    const camera = new THREE.PerspectiveCamera(43, innerWidth / innerHeight, .1, 180);
+    camera.position.set(0, insideOut ? 14 : 8, insideOut ? 84 : 48);
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference:"high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    host.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = .06;
+    controls.minDistance = 16;
+    controls.maxDistance = 90;
+    controls.autoRotate = !insideOut;
+    controls.autoRotateSpeed = .16;
+
+    scene.add(new THREE.HemisphereLight("#dffcff", "#11132b", 2.2));
+    const keyLight = new THREE.DirectionalLight("#ffffff", 2.5);
+    keyLight.position.set(10, 16, 12);
+    scene.add(keyLight);
+
+    const root = new THREE.Mesh(
+      new THREE.SphereGeometry(1.35, 32, 24),
+      new THREE.MeshStandardMaterial({
+        color:"#000080",
+        emissive:"#2eeaff",
+        emissiveIntensity:.42,
+        roughness:.28,
+        metalness:.12
+      })
+    );
+    root.userData = { level:0, label:"政治" };
+    if (insideOut) {
+      root.material.depthTest = false;
+      root.renderOrder = 20;
+    }
+    scene.add(root);
+    const rootLabel = labelSprite("政治", "#2eeaff", 1.1);
+    rootLabel.position.set(0, 2.05, 0);
+    if (insideOut) {
+      rootLabel.material.depthTest = false;
+      rootLabel.renderOrder = 21;
+    }
+    scene.add(rootLabel);
+
+    const categoryMeshes = categories.map(category => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(.72, 18, 12),
+        new THREE.MeshStandardMaterial({
+          color:category.color,
+          emissive:category.color,
+          emissiveIntensity:insideOut ? .68 : .22,
+          transparent:insideOut,
+          opacity:insideOut ? .62 : 1,
+          depthWrite:!insideOut,
+          roughness:.32
+        })
+      );
+      mesh.position.copy(category.position);
+      mesh.userData = category;
+      scene.add(mesh);
+      const label = labelSprite(category.label, category.color, .82);
+      label.position.copy(category.position).add(new THREE.Vector3(0, 1.12, 0));
+      scene.add(label);
+      return mesh;
+    });
+
+    const topicLabels = [];
+    const topicMeshes = topics.map(topic => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(.42, 14, 10),
+        new THREE.MeshStandardMaterial({
+          color:"#2eeaff",
+          emissive:insideOut ? "#2eeaff" : "#16798e",
+          emissiveIntensity:insideOut ? .82 : .3,
+          transparent:insideOut,
+          opacity:insideOut ? .5 : 1,
+          depthWrite:!insideOut,
+          roughness:.36
+        })
+      );
+      mesh.position.copy(topic.position);
+      mesh.userData = topic;
+      scene.add(mesh);
+      const label = labelSprite(topic.label, "#2eeaff", .58);
+      label.position.copy(topic.position).add(new THREE.Vector3(0, .72, 0));
+      scene.add(label);
+      topicLabels.push(label);
+      return mesh;
+    });
+
+    const opinionGeometry = new THREE.SphereGeometry(.7, 7, 5);
+    const opinionMaterial = new THREE.MeshStandardMaterial({
+      color:"#ffffff",
+      transparent:true,
+      opacity:insideOut ? .46 : .72,
+      depthWrite:!insideOut,
+      roughness:.45,
+      metalness:.03
+    });
+    const opinionInstances = new THREE.InstancedMesh(opinionGeometry, opinionMaterial, opinionNodes.length);
+    opinionInstances.instanceMatrix.setUsage(insideOut ? THREE.DynamicDrawUsage : THREE.StaticDrawUsage);
+    const opinionScales = [];
+    const matrixHelper = new THREE.Object3D();
+    opinionNodes.forEach((node, index) => {
+      const scale = .13 + Math.sqrt(node.crit / 100) * .13;
+      opinionScales.push(scale);
+      matrixHelper.position.copy(node.currentPosition);
+      matrixHelper.scale.setScalar(scale);
+      matrixHelper.updateMatrix();
+      opinionInstances.setMatrixAt(index, matrixHelper.matrix);
+      opinionInstances.setColorAt(index, proximityColor(node.weightView));
+    });
+    opinionInstances.instanceMatrix.needsUpdate = true;
+    opinionInstances.instanceColor.needsUpdate = true;
+    scene.add(opinionInstances);
+
+    const categoryTopicPoints = topics.flatMap(topic => [topic.category.position, topic.position]);
+    const categoryTopicLines = lineSegments(categoryTopicPoints, "#ffc247", insideOut ? .14 : .34);
+    if (insideOut) {
+      categoryTopicLines.material.blending = THREE.AdditiveBlending;
+      categoryTopicLines.material.depthWrite = false;
+    }
+    scene.add(categoryTopicLines);
+    const topicOpinionPoints = opinionNodes.flatMap(node => [node.topic.position, node.position]);
+    const topicOpinionLines = lineSegments(topicOpinionPoints, "#2eeaff", insideOut ? .008 : .055);
+    scene.add(topicOpinionLines);
+    const orbitGroup = new THREE.Group();
+    orbitGroup.name = "second-third-orbit";
+    scene.add(orbitGroup);
+    if (insideOut) {
+      for (const object of [...topicMeshes, ...topicLabels, opinionInstances, topicOpinionLines]) orbitGroup.add(object);
+    }
+    const categoryTopicPositionAttribute = categoryTopicLines.geometry.getAttribute("position");
+    categoryTopicPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+    const topicOpinionPositionAttribute = topicOpinionLines.geometry.getAttribute("position");
+    if (insideOut) topicOpinionPositionAttribute.setUsage(THREE.DynamicDrawUsage);
+    const orbitWorldPoint = new THREE.Vector3();
+    const individualMotionInterval = count > 10000 ? .12 : .085;
+    let lastIndividualMotionUpdate = Number.NEGATIVE_INFINITY;
+    function orbitalWorldPosition(localPosition) {
+      if (!insideOut) return localPosition.clone();
+      return orbitGroup.localToWorld(localPosition.clone());
+    }
+    function updateCategoryTopicLinePositions() {
+      if (!insideOut) return;
+      orbitGroup.updateMatrixWorld(true);
+      topics.forEach((topic, index) => {
+        topicMeshes[index].getWorldPosition(orbitWorldPoint);
+        categoryTopicPositionAttribute.setXYZ(index * 2, topic.category.position.x, topic.category.position.y, topic.category.position.z);
+        categoryTopicPositionAttribute.setXYZ(index * 2 + 1, orbitWorldPoint.x, orbitWorldPoint.y, orbitWorldPoint.z);
+      });
+      categoryTopicPositionAttribute.needsUpdate = true;
+    }
+    function updateIndividualOpinionMotion(elapsed) {
+      if (!insideOut || elapsed - lastIndividualMotionUpdate < individualMotionInterval) return;
+      lastIndividualMotionUpdate = elapsed;
+      opinionNodes.forEach((node, index) => {
+        const phase = elapsed * node.orbitSpeed + node.orbitPhase;
+        node.currentPosition.copy(node.position)
+          .addScaledVector(node.orbitTangentA, Math.sin(phase) * node.orbitAmplitude)
+          .addScaledVector(node.orbitTangentB, Math.cos(phase * .73) * node.orbitAmplitude * .68);
+        matrixHelper.position.copy(node.currentPosition);
+        matrixHelper.scale.setScalar(opinionScales[index]);
+        matrixHelper.updateMatrix();
+        opinionInstances.setMatrixAt(index, matrixHelper.matrix);
+        topicOpinionPositionAttribute.setXYZ(
+          index * 2 + 1,
+          node.currentPosition.x,
+          node.currentPosition.y,
+          node.currentPosition.z
+        );
+      });
+      opinionInstances.instanceMatrix.needsUpdate = true;
+      topicOpinionPositionAttribute.needsUpdate = true;
+    }
+    const rootOpinionPoints = opinionNodes.flatMap(node => [new THREE.Vector3(), node.position]);
+    if (!insideOut) scene.add(lineSegments(rootOpinionPoints, "#7188ff", .026));
+
+    const highlight = new THREE.Mesh(
+      new THREE.SphereGeometry(.7, 16, 12),
+      new THREE.MeshStandardMaterial({
+        color:"#eaffff",
+        emissive:"#2eeaff",
+        emissiveIntensity:1,
+        roughness:.18
+      })
+    );
+    highlight.visible = false;
+    scene.add(highlight);
+
+    const activeLinks = lineSegments([], "#f7ffff", .88);
+    if (insideOut) {
+      activeLinks.material.blending = THREE.AdditiveBlending;
+      activeLinks.material.depthWrite = false;
+    }
+    scene.add(activeLinks);
+    const activeSecondLayerFan = lineSegments([], "#2eeaff", .045);
+    activeSecondLayerFan.material.blending = THREE.AdditiveBlending;
+    activeSecondLayerFan.material.depthWrite = false;
+    scene.add(activeSecondLayerFan);
+    const relationLineColors = {
+      content:"#17e6d1",
+      topic:"#7188ff",
+      category:"#f06bff",
+      fact:"#8ea1b8"
+    };
+    const activeRelationLines = new Map(Object.entries(relationLineColors).map(([kind, color]) => {
+      const lines = lineSegments([], color, .9);
+      scene.add(lines);
+      return [kind, lines];
+    }));
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2(2, 2);
+    const hierarchyMeshes = [root, ...categoryMeshes, ...topicMeshes];
+    let hovered = null;
+    let selected = null;
+    let renderedSelectionKey = "";
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const motionEnabled = insideOut && !reduceMotion;
+    let pageVisible = !document.hidden;
+    let lastOrbitLinkUpdate = Number.NEGATIVE_INFINITY;
+    document.addEventListener("visibilitychange", () => {
+      pageVisible = !document.hidden;
+    });
+
+    function setPointer(event) {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.x = (event.clientX - bounds.left) / bounds.width * 2 - 1;
+      pointer.y = -(event.clientY - bounds.top) / bounds.height * 2 + 1;
+    }
+    function hitFromPointer() {
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects([opinionInstances, ...hierarchyMeshes], false);
+      const hit = hits[0];
+      if (!hit) return null;
+      if (hit.object === opinionInstances && Number.isInteger(hit.instanceId)) {
+        return { type:"opinion", node:opinionNodes[hit.instanceId], index:hit.instanceId };
+      }
+      return { type:"hierarchy", node:hit.object.userData, mesh:hit.object };
+    }
+    function selectionKey(item) {
+      if (!item) return "";
+      return item.type === "opinion" ? "opinion-" + item.index : "level-" + item.node.level + "-" + item.node.id;
+    }
+    function activePointsFor(item) {
+      if (!item) return [];
+      const node = item.node;
+      if (node.level === 0) return [];
+      if (node.level === 1) {
+        if (insideOut) return [];
+        return topics.filter(topic => topic.category === node).flatMap(topic => [
+          node.position,
+          orbitalWorldPosition(topic.position)
+        ]);
+      }
+      if (node.level === 2) {
+        const topicPosition = orbitalWorldPosition(node.position);
+        if (insideOut) return [node.category.position, topicPosition];
+        return opinionNodes.filter(opinion => opinion.topic === node).flatMap(opinion => [
+          topicPosition,
+          orbitalWorldPosition(opinion.currentPosition)
+        ]);
+      }
+      if (insideOut) {
+        const opinionPosition = orbitalWorldPosition(node.currentPosition);
+        return [
+          new THREE.Vector3(), opinionPosition,
+          orbitalWorldPosition(node.topic.position), opinionPosition
+        ];
+      }
+      return [
+        new THREE.Vector3(), node.position,
+        node.topic.position, node.position,
+        node.category.position, node.topic.position
+      ];
+    }
+    function secondLayerFanPointsFor(item) {
+      if (!insideOut || item?.node.level !== 2) return [];
+      const topicPosition = orbitalWorldPosition(item.node.position);
+      return opinionNodes
+        .filter(opinion => opinion.topic === item.node)
+        .flatMap(opinion => [topicPosition, orbitalWorldPosition(opinion.currentPosition)]);
+    }
+    function updateActiveRelationLines(item) {
+      const relations = insideOut && item?.node.level === 3 ? relatedOpinionsFor(item.node) : [];
+      for (const [kind, lines] of activeRelationLines) {
+        const points = relations
+          .filter(relation => relation.primary === kind)
+          .flatMap(relation => [
+            orbitalWorldPosition(relation.left.currentPosition),
+            orbitalWorldPosition(relation.right.currentPosition)
+          ]);
+        lines.geometry.dispose();
+        lines.geometry = new THREE.BufferGeometry().setFromPoints(points);
+      }
+      return relations.length;
+    }
+    function renderDetails(item) {
+      if (!item) return;
+      const node = item.node;
+      if (node.level === 0) {
+        details.innerHTML = "<h2>政治</h2><p>三階層の意見分布</p>";
+      } else if (node.level === 1) {
+        details.innerHTML = "<h2>第一層　" + escapeHtml(node.label) + "</h2><p>大分類</p><dl><dt>派生</dt><dd>" + node.topics.length + "トピック</dd></dl>";
+      } else if (node.level === 2) {
+        const childCount = opinionNodes.filter(opinion => opinion.topic === node).length;
+        details.innerHTML = "<h2>第二層　" + escapeHtml(node.label) + "</h2><p>" + escapeHtml(node.category.label) + "</p><dl><dt>派生</dt><dd>" + childCount + "意見</dd></dl>";
+      } else {
+        const relationCount = insideOut ? relatedOpinionsFor(node).length : 0;
+        const relationRow = insideOut ? "<dt>表示関係</dt><dd>" + relationCount + " / " + maxVisibleRelatedLinks + "件</dd>" : "";
+        details.innerHTML = "<h2>第三層　" + escapeHtml(node.topic.label) + "</h2><p>" + escapeHtml(node.text) + "</p><dl><dt>切実度</dt><dd>" + node.crit + " / 100</dd><dt>意欲</dt><dd>" + node.motiv + " / 100</dd><dt>妥当性</dt><dd>" + node.valid + " / 100</dd><dt>中心距離</dt><dd>" + node.distance.toFixed(1) + "</dd>" + relationRow + "</dl>";
+      }
+    }
+    renderer.domElement.addEventListener("pointermove", setPointer);
+    renderer.domElement.addEventListener("pointerleave", () => pointer.set(2, 2));
+    renderer.domElement.addEventListener("click", () => {
+      if (!hovered) return;
+      selected = hovered;
+      renderDetails(selected);
+    });
+    const selectionParam = searchParams.get("select");
+    const requestedSelection = selectionParam === null ? Number.NaN : Number(selectionParam);
+    if (insideOut && selectionParam?.startsWith("category:")) {
+      const index = Number(selectionParam.split(":")[1]);
+      if (Number.isInteger(index) && categoryMeshes[index]) {
+        selected = { type:"hierarchy", node:categories[index], mesh:categoryMeshes[index] };
+      }
+    } else if (insideOut && selectionParam?.startsWith("topic:")) {
+      const index = Number(selectionParam.split(":")[1]);
+      if (Number.isInteger(index) && topicMeshes[index]) {
+        selected = { type:"hierarchy", node:topics[index], mesh:topicMeshes[index] };
+      }
+    } else if (insideOut && Number.isInteger(requestedSelection) && requestedSelection >= 0 && requestedSelection < opinionNodes.length) {
+      selected = { type:"opinion", node:opinionNodes[requestedSelection], index:requestedSelection };
+    }
+    if (selected) {
+      renderDetails(selected);
+    }
+
+    function updateFocus(elapsed) {
+      hovered = hitFromPointer();
+      const active = hovered || selected;
+      renderer.domElement.style.cursor = hovered ? "pointer" : "grab";
+      highlight.visible = Boolean(active);
+      if (active?.type === "opinion") {
+        highlight.position.copy(orbitalWorldPosition(active.node.currentPosition));
+        highlight.scale.setScalar(opinionScales[active.index] * 2.5);
+      } else if (active?.mesh) {
+        active.mesh.getWorldPosition(highlight.position);
+        const scale = active.node.level === 0 ? 1.65 : active.node.level === 1 ? .95 : .62;
+        highlight.scale.setScalar(scale);
+      }
+      const key = selectionKey(selected);
+      const movingSelectionNeedsRefresh = motionEnabled && selected && elapsed - lastOrbitLinkUpdate >= .08;
+      if (key !== renderedSelectionKey || movingSelectionNeedsRefresh) {
+        renderedSelectionKey = key;
+        lastOrbitLinkUpdate = elapsed;
+        if (insideOut) {
+          const levelColor = selected?.node.level === 1
+            ? "#ffc247"
+            : selected?.node.level === 2 ? "#ffc247" : "#8095ff";
+          activeLinks.material.color.set(levelColor);
+        }
+        activeLinks.geometry.dispose();
+        activeLinks.geometry = new THREE.BufferGeometry().setFromPoints(activePointsFor(selected));
+        activeSecondLayerFan.geometry.dispose();
+        activeSecondLayerFan.geometry = new THREE.BufferGeometry().setFromPoints(secondLayerFanPointsFor(selected));
+        updateActiveRelationLines(selected);
+      }
+    }
+
+    const animationStartedAt = performance.now();
+    const orbitPhaseX = seed("orbit|phase-x") * Math.PI * 2;
+    const orbitPhaseZ = seed("orbit|phase-z") * Math.PI * 2;
+    function animate(now = performance.now()) {
+      requestAnimationFrame(animate);
+      const elapsed = (now - animationStartedAt) / 1000;
+      root.rotation.y = elapsed * .2;
+      if (motionEnabled && pageVisible) {
+        updateIndividualOpinionMotion(elapsed);
+        orbitGroup.rotation.x = Math.sin(elapsed * .071 + orbitPhaseX) * .14;
+        orbitGroup.rotation.y = elapsed * .028;
+        orbitGroup.rotation.z = Math.sin(elapsed * .053 + orbitPhaseZ) * .1;
+      }
+      updateCategoryTopicLinePositions();
+      updateFocus(elapsed);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    if (insideOut) document.querySelector("h1").textContent = "意見ネットワーク 内向階層3D";
+    status.textContent =
+      "第一層  " + categories.length + "件\n" +
+      "第二層  " + topics.length + "件\n" +
+      "第三層  " + opinionNodes.length + "件\n" +
+      "階層線  " + (topics.length + opinionNodes.length) + "本\n" +
+      (insideOut
+        ? "政治線  選択時\n関係線  最大" + maxVisibleRelatedLinks + "本"
+        : "政治線  " + opinionNodes.length + "本");
+    animate();
+  </script>
+</body>
+</html>
