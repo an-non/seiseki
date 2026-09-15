@@ -1,4 +1,13 @@
-const base = String(process.env.STAGING_BASE || "https://seiseki-api-staging.tokyo-odh-129.workers.dev").replace(/\/+$/u, "");
+const stagingBase = "https://seiseki-api-staging.tokyo-odh-129.workers.dev";
+const productionBase = "https://seiseki-api.tokyo-odh-129.workers.dev";
+const base = String(process.env.STAGING_BASE || stagingBase).replace(/\/+$/u, "");
+const isProduction = base === productionBase;
+if (base !== stagingBase && !isProduction) {
+  throw new Error(`unsupported E2E target: ${base}`);
+}
+if (isProduction && process.env.SEISEKI_PRODUCTION_E2E_CONFIRM !== "write-and-cleanup-production") {
+  throw new Error("production E2E requires SEISEKI_PRODUCTION_E2E_CONFIRM=write-and-cleanup-production");
+}
 const password = "E2e-current-response-20260828!";
 const accountName = `cur${Date.now().toString(36)}`.slice(0, 20);
 let token = "";
@@ -105,9 +114,11 @@ try {
     log("route", { route, status: response.status, bytes: html.length });
   }
 
-  const adminPage = await fetch(base + "/api/staging-admin", { redirect: "follow" });
-  if (adminPage.status !== 200) throw new Error(`staging admin page returned ${adminPage.status}`);
-  log("staging-admin-page", { status: adminPage.status });
+  if (!isProduction) {
+    const adminPage = await fetch(base + "/api/staging-admin", { redirect: "follow" });
+    if (adminPage.status !== 200) throw new Error(`staging admin page returned ${adminPage.status}`);
+    log("staging-admin-page", { status: adminPage.status });
+  }
 
   const config = await request("/api/config", { auth: "" });
   const questions = config.payload?.questions || [];
@@ -125,7 +136,8 @@ try {
   if (!token) throw new Error("registration returned no token");
   log("register", { ok: true });
 
-  const firstText = "staging current response E2E first text";
+  const environmentName = isProduction ? "production" : "staging";
+  const firstText = `${environmentName} current response E2E first text`;
   const created = await request("/api/responses", {
     method: "POST", expected: 201,
     body: {
@@ -141,14 +153,14 @@ try {
   log("initial-created", { revision: 1 });
   await current(1, firstText, "", initialAnswers, false);
 
-  const secondText = "staging current response E2E second text";
+  const secondText = `${environmentName} current response E2E second text`;
   const second = await request(`/api/responses/${responseId}/follow-up`, { method: "POST", expected: 201, body: { expectedRevision: 1, followUpText: secondText } });
   if (Number(second.payload?.revision) !== 2) throw new Error("follow-up did not advance to revision 2");
   await current(2, firstText, secondText, initialAnswers, true);
   await waitForAnalysis(responseId, 2);
   log("second-created-and-analyzed", { revision: 2 });
 
-  const correctedFirst = "staging current response E2E corrected first text";
+  const correctedFirst = `${environmentName} current response E2E corrected first text`;
   const initialUpdate = await request(`/api/responses/${responseId}/initial`, {
     method: "PATCH", expected: 200,
     body: { expectedRevision: 2, answers: correctedAnswers, freeText: correctedFirst }

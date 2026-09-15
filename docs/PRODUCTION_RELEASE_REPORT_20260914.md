@@ -60,3 +60,22 @@ task; it does not affect the active Worker runtime.
 
 No production test response was submitted and no existing production row was
 deleted during release verification.
+
+## 2026-09-15 production write E2E
+
+The previously deferred production write path was verified with one temporary
+account. The E2E completed registration, the initial response, follow-up
+analysis, initial-response correction, stale revision rejection, follow-up
+withdrawal, and revision 4 reanalysis. It then deleted the temporary account.
+
+- Seven structured questions were returned by production config.
+- Revisions 2, 3, and 4 reached the expected current-response states.
+- A stale revision update returned the expected conflict response.
+- The retired answers-only endpoint returned HTTP 410.
+- The public aggregate changed from `2` to `3` while the response was active.
+- Account deletion returned HTTP 204.
+- The public aggregate returned from `3` to the original value `2` after cleanup.
+
+The reusable E2E script now refuses unknown hosts and requires
+`SEISEKI_PRODUCTION_E2E_CONFIRM=write-and-cleanup-production` before any
+production request is sent. The staging-admin route check remains staging-only.
