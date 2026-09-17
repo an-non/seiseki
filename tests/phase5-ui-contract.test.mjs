@@ -10,6 +10,14 @@ test("opinion cards collapse long node text without discarding the stored value"
   assert.ok(ui.includes('expanded ? "折りたたむ" : "全文を表示"'));
   assert.ok(ui.includes("aria-expanded={expanded}"));
 });
+test("tree selections fetch exact public opinions beyond the recent aggregate window", () => {
+  assert.ok(ui.includes('cloudApiRequest("/api/public-opinions?" + query.join("&"))'));
+  assert.ok(ui.includes('setOpFilter({ topic: c.name })'));
+  assert.ok(ui.includes('setOpFilter({ sup: sel.sup || "", cat: sel.cat || "", topic: sel.topic || "" })'));
+  assert.ok(ui.includes('setOpFilter({ tt: tt, tn: tn === "(対象名なし)" ? "" : tn })'));
+  assert.ok(ui.includes('(!topic || o.topic === topic)'));
+  assert.ok(ui.includes('(!tn || String(o.tn || "") === tn)'));
+});
 test("Phase 5 typography restores historical body/display/mono roles without external font loading", () => { assert.ok(ui.includes('const FONT_BODY = \'"Zen Kaku Gothic New"')); assert.ok(ui.includes('const FONT_DISP = \'"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif\';')); assert.ok(ui.includes('const FONT_MONO = \'"IBM Plex Mono"')); assert.ok(!ui.includes("fonts.googleapis.com")); });
 test("initial submission requires an explicit review step before storage and analysis", () => {
   assert.ok(ui.includes('if (phase === "confirm")'));
