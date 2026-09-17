@@ -12,6 +12,15 @@ function t(name, fn) {
   catch (e) { fail++; console.log("  NG  " + name + " -> " + e.message); }
 }
 
+console.log("[0] default questionnaire");
+t("ローカル既定設問はサーバーと同じ7件＋自由記述", () => {
+  assert.deepStrictEqual(DEFAULT_QUESTIONS.map(question => question.id), [
+    "q_support", "q_priority", "q_econ", "q_information", "q_social", "q_life", "q_participation", "q_free"
+  ]);
+  assert.strictEqual(DEFAULT_QUESTIONS.filter(question => question.type !== "free").length, 7);
+  assert.strictEqual(DEFAULT_QUESTIONS.filter(question => question.type === "free").length, 1);
+});
+
 console.log("[1] parseAIJson");
 t("コードフェンス付きJSONをパース", () => {
   const r = parseAIJson('```json\n{"a":1}\n```');

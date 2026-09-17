@@ -197,6 +197,61 @@ test("registration Turnstile validates token action and hostname before account 
   }
 });
 
+test("staging accepts an official Turnstile testing result without an action field", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    SEISEKI_ENV: "staging",
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "official-test-secret"
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    success: true,
+    hostname: "example.com",
+    metadata: { result_with_testing_key: true }
+  });
+  try {
+    const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "公式試験鍵", password: "correct-horse-1", turnstileToken: "XXXX.DUMMY.TOKEN.XXXX" })
+    }), env);
+    assert.equal(response.status, 201);
+  } finally {
+    globalThis.fetch = originalFetch;
+    database.close();
+  }
+});
+
+test("production does not bypass Turnstile action checks for testing metadata", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    SEISEKI_ENV: "production",
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "unexpected-test-secret"
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    success: true,
+    hostname: "example.com",
+    metadata: { result_with_testing_key: true }
+  });
+  try {
+    const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "本番試験鍵拒否", password: "correct-horse-1", turnstileToken: "XXXX.DUMMY.TOKEN.XXXX" })
+    }), env);
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, "TURNSTILE_ACTION_MISMATCH");
+  } finally {
+    globalThis.fetch = originalFetch;
+    database.close();
+  }
+});
+
 test("password recovery Turnstile validates the recover action before changing credentials", async () => {
   const database = createDatabase();
   const env = {

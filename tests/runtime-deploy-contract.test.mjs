@@ -44,6 +44,21 @@ test("production workflow builds and deploys only guarded production artifacts",
   assert.match(workflow, /test ! -e dist\/quantum-v2\/quantum-node-relations-v2-preview\.html/);
 });
 
+test("Turnstile testing keys are restricted to staging configuration", async () => {
+  const config = JSON.parse(await read("cloudflare/wrangler.jsonc"));
+  const testSiteKey = "1x00000000000000000000AA";
+
+  assert.equal(config.vars.TURNSTILE_REGISTER_REQUIRED, "false");
+  assert.equal(config.vars.TURNSTILE_RECOVERY_REQUIRED, "false");
+  assert.notEqual(config.vars.TURNSTILE_REGISTER_SITE_KEY, testSiteKey);
+  assert.notEqual(config.vars.TURNSTILE_RECOVERY_SITE_KEY, testSiteKey);
+  assert.equal(config.env.staging.vars.TURNSTILE_REGISTER_REQUIRED, "true");
+  assert.equal(config.env.staging.vars.TURNSTILE_REGISTER_SITE_KEY, testSiteKey);
+  assert.equal(config.env.staging.vars.TURNSTILE_RECOVERY_REQUIRED, "true");
+  assert.equal(config.env.staging.vars.TURNSTILE_RECOVERY_SITE_KEY, testSiteKey);
+  assert.equal(JSON.stringify(config).includes("1x0000000000000000000000000000000AA"), false);
+});
+
 test("production access preflight is immutable and read-only", async () => {
   const workflow = await read(".github/workflows/production-preflight.yml");
   assert.match(workflow, /workflow_dispatch:/);

@@ -168,6 +168,7 @@ async function verifyTurnstile(body, request, options = {}) {
   const secret = String(options.secret || "").trim();
   const expectedHostname = String(options.hostname || "").trim();
   const expectedAction = String(options.action || "").trim();
+  const allowTestingKey = options.allowTestingKey === true;
   const token = String(body?.turnstileToken ?? "").trim();
 
   if (token.length > 2048) {
@@ -199,10 +200,11 @@ async function verifyTurnstile(body, request, options = {}) {
   });
   const result = await response.json();
   if (!result.success) throw new RequestError(403, "TURNSTILE_FAILED", "Turnstile verification failed");
+  const testingResult = allowTestingKey && result?.metadata?.result_with_testing_key === true;
   if (expectedHostname && result.hostname !== expectedHostname) {
     throw new RequestError(403, "TURNSTILE_HOSTNAME_MISMATCH", "Turnstile hostname did not match");
   }
-  if (expectedAction && result.action !== expectedAction) {
+  if (expectedAction && result.action !== expectedAction && !testingResult) {
     throw new RequestError(403, "TURNSTILE_ACTION_MISMATCH", "Turnstile action did not match");
   }
 }
@@ -382,7 +384,8 @@ async function handleRequest(request, env, ctx) {
       required: env.TURNSTILE_REGISTER_REQUIRED,
       secret: env.TURNSTILE_REGISTER_SECRET,
       hostname: env.TURNSTILE_REGISTER_HOSTNAME,
-      action: "register"
+      action: "register",
+      allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
     return json(await registerAccount(env.DB, body, env.PASSWORD_ITERATIONS), 201);
   }
@@ -400,7 +403,8 @@ async function handleRequest(request, env, ctx) {
       required: env.TURNSTILE_RECOVERY_REQUIRED,
       secret: env.TURNSTILE_RECOVERY_SECRET,
       hostname: env.TURNSTILE_RECOVERY_HOSTNAME,
-      action: "recover"
+      action: "recover",
+      allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
     return json(await resetPasswordWithRecoveryCode(env.DB, body, env.PASSWORD_ITERATIONS));
   }
