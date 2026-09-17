@@ -520,3 +520,18 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
 (`app/`、`core/`、`local/`、`cloudflare/`)に差分がない。そのため同一runtimeの
 再deployは行わず、`/api/health`、`/api/config`、`/app`のHTTP 200と
 `database=d1`を再確認してproduction作業を完了した。
+
+## 22. staging Turnstile配線確認・設問同期（2026-09-17）
+
+- feature branchは`codex/turnstile-question-sync-20260917`。初回実装commitは
+  `1459670`。GitHub Integration Verify Run `35174118548`は成功した。
+- ローカル既定設問を、サーバー側の7件の構造化設問と自由記述1件へ同期した。
+- stagingに限り、Cloudflare公式の常時成功テストsite key/secretを登録・復旧へ
+  設定した。productionはTurnstile必須化OFFのままで、テスト鍵も含めていない。
+- staging Worker version `9d5884d7-8342-4351-a842-55c588224236`へ配備した。
+- `npm run e2e:turnstile:staging`で、staging設定取得、登録201、復旧200、
+  新パスワードでのログイン200、試験アカウント削除204、削除後ログイン401を確認した。
+  試験アカウントは削除済みで、session tokenとrecovery codeは出力していない。
+- この確認はbot防御効果の証明ではなく、Turnstileの画面/API配線を再現可能に確認する
+  ためのもの。production有効化には、Turnstile Edit/Admin権限で実widgetを発行し、
+  production用site key/secretを別途設定したうえで、別承認のreleaseが必要。

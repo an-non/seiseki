@@ -9,6 +9,7 @@
     "diagnose:analysis-output": "node scripts/measure-analysis-output.mjs",
     "diagnose:groq": "node scripts/run-groq-legacy-comparison.mjs",
     "diagnose:workers-ai": "node scripts/workers-ai-comparison/run.mjs",
+    "e2e:turnstile:staging": "node scripts/live-turnstile-staging-e2e.mjs",
     "assets:check:staging": "node scripts/assert-runtime-assets.mjs staging",
     "assets:check:production": "node scripts/assert-runtime-assets.mjs production",
     "deploy:staging": "node scripts/deploy-runtime.mjs staging",
