@@ -1,4 +1,10 @@
-const BASE_URL = "https://seiseki-api-staging.tokyo-odh-129.workers.dev";
+const TARGETS = Object.freeze({
+  staging: "https://seiseki-api-staging.tokyo-odh-129.workers.dev",
+  production: "https://seiseki-api.tokyo-odh-129.workers.dev"
+});
+const target = String(process.argv[2] || "staging");
+const BASE_URL = TARGETS[target];
+if (!BASE_URL) throw new Error("target must be staging or production");
 
 const runId = Date.now().toString(36);
 const name = `fp-${runId}`;
@@ -107,7 +113,7 @@ try {
   expectStatus("deleted-account-login", afterDelete, 401);
 
   console.log(JSON.stringify({
-    status: "form_proof_staging_e2e_passed",
+    status: `form_proof_${target}_e2e_passed`,
     register: 201,
     replay: 409,
     honeypot: 400,
@@ -116,7 +122,7 @@ try {
     deletedAccountLogin: 401
   }));
 } catch (error) {
-  console.error(JSON.stringify({ status: "form_proof_staging_e2e_failed", runId }));
+  console.error(JSON.stringify({ status: `form_proof_${target}_e2e_failed`, runId }));
   throw error;
 } finally {
   await cleanup();

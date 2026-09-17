@@ -535,3 +535,24 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
 - この確認はbot防御効果の証明ではなく、Turnstileの画面/API配線を再現可能に確認する
   ためのもの。production有効化には、Turnstile Edit/Admin権限で実widgetを発行し、
   production用site key/secretを別途設定したうえで、別承認のreleaseが必要。
+
+## 23. 権限不要のフォーム不正利用対策（2026-09-17）
+
+- Turnstile widget作成権限を取得できないため、section 22のstagingテスト鍵による配線確認を
+  本番化せず、Turnstileはstaging・productionとも必須化OFFへ戻した。
+- 代替として、登録・パスワード復旧へ次の三層を実装した。
+  1. 人間には表示されないhoneypot入力欄。
+  2. Workerが既存HMAC secretで発行する、15分有効・発行後800ms待機・用途限定の署名証明。
+  3. D1の既存`rate_limit_buckets`による証明の一回限り消費と接続元レート制限。
+- 新規migrationと新規secretは追加していない。既存`RATE_LIMIT_FINGERPRINT_SECRET`を
+  domain separation付きで使用し、生の接続元識別子や証明tokenはD1へ保存しない。
+- feature commit `7509634`をPull Request #5でmainへ統合した。main release SHAは
+  `0be467cea96a3729f4fd139c21f374363f4792ca`。
+- staging Worker version `c44e3b00-e088-4787-9374-9f0c934a601c`へ配備した。
+  staging live E2Eは登録201、再利用拒否409、honeypot拒否400、復旧200、削除204、
+  削除後ログイン拒否401に成功した。
+- production read-only preflight Run `35187781208`、production release Run
+  `35187832728`はいずれも全step成功した。同じlive E2Eをproductionでも実行し、
+  stagingと同じ状態遷移を確認した。両環境の試験アカウントは削除済み。
+- これは単純な自動入力・即時送信・証明再利用・短時間の大量試行を抑える多層防御であり、
+  Turnstileと同等のbot判定ではない。高度なbotによる通常ブラウザ操作を完全には識別できない。
