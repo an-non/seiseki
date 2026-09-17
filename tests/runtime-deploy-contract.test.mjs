@@ -44,6 +44,25 @@ test("production workflow builds and deploys only guarded production artifacts",
   assert.match(workflow, /test ! -e dist\/quantum-v2\/quantum-node-relations-v2-preview\.html/);
 });
 
+test("production access preflight is immutable and read-only", async () => {
+  const workflow = await read(".github/workflows/production-preflight.yml");
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /release_sha:/);
+  assert.match(workflow, /preflight-production/);
+  assert.match(workflow, /permissions:\s+contents: read/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /d1 list --json/);
+  assert.match(workflow, /queues list/);
+  assert.match(workflow, /secret list/);
+  assert.match(workflow, /d1 migrations list seiseki-db --remote/);
+  assert.match(workflow, /deployments list/);
+  assert.doesNotMatch(workflow, /^  push:/m);
+  assert.doesNotMatch(workflow, /git push/);
+  assert.doesNotMatch(workflow, /^\s*npx wrangler deploy(?:\s|$)/m);
+  assert.doesNotMatch(workflow, /d1 migrations apply/);
+  assert.doesNotMatch(workflow, /d1 execute/);
+});
+
 test("superseded production and hotfix workflows remain inert", async () => {
   const retiredWorkflows = [
     "cloudflare-production-diagnostic.yml",

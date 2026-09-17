@@ -474,3 +474,43 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
   `opinion_chunks`はいずれも対象IDが0件で、D1のカスケード削除を確認した。
 - production Worker、production D1、受領ローカルモデル、UI、fallback・再解析仕様は
   変更していない。
+
+## 21. Production release・main統合（2026-09-17更新）
+
+- 2026-09-14、commit `e40acc168839f0ba1820489c6bc61518a4263540`を
+  productionへ配備した。Worker versionは
+  `525586ec-dfa1-4b33-b327-ac94911ec133`。D1 migration
+  `0009_analysis_cache.sql`から`0012_short_submission_fingerprints.sql`までを
+  適用し、適用後のpending migrationは0件だった。
+- productionで必要なHMAC secret 3件、Queue、DLQを確認した。秘密値はログ、
+  リポジトリ、継続性記録へ保存していない。
+- 2026-09-15、production書込みE2Eを一時アカウント1件で実行した。初回回答、
+  追記解析、初回回答修正、stale revision拒否、追記撤回、revision 4再解析、
+  アカウント削除、公開集計の復元まで成功した。試験データは削除済み。
+- production release candidateをGitHub `main`へ統合した。main HEADは
+  `05c8cbf3d00ad6d03e066e0eeb87b694f902dc8d`。mainを参照した統合Workflow
+  Run `34944933131`は全step成功した。
+- 配備済み`e40acc1`とmain `05c8cbf`の`app/`、`core/`、`local/`、
+  `cloudflare/`には差分がない。現productionの機能実体はmainと一致し、
+  main SHAからの再配備は来歴を揃える目的に限られる。
+- production公開URLは2026-09-17の再確認で`/api/health`、`/api/config`、
+  `/app`がHTTP 200。healthは`status=ok`、`database=d1`を返した。
+- GitHub Actions Run `34820641724`は、GitHub側Cloudflare API tokenが対象
+  アカウントを認証できず、production基盤の読取り確認で停止した。ローカル認証での
+  releaseは成功したが、GitHub Actions経路のtoken修復は未完了。
+- `.github/workflows/production-preflight.yml`は、任意branchへのpush、生成物の
+  commit、deploy、migration、D1書込みを廃止した。承認SHAをcheckoutし、D1、
+  Queue/DLQ、必要secret名、pending migration、deployment一覧だけを検証する
+  読取り専用Workflowとして扱う。
+
+### Production運用の再開順序
+
+1. 読取り専用production preflightを承認SHAで実行する。
+2. Cloudflare認証で失敗した場合、GitHub Actionsの`CLOUDFLARE_API_TOKEN`を
+   リポジトリ管理画面で更新する。秘密値を会話やログへ貼らない。
+3. 同じpreflightを再実行し、D1、Queue/DLQ、secret名、migration、deploymentを
+   変更なしで確認する。
+4. production runtime差分がある場合だけ、`production-release.yml`へ40文字の
+   承認SHAと`deploy-production`を渡す。D1 migrationは別Workflowで扱う。
+5. release後はread-only smokeを確認し、必要な場合だけ架空データを用いた
+   write E2Eを別承認で行う。
