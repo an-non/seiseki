@@ -34,6 +34,28 @@ const DEFAULT_QUESTIONS = [
     options: ["1", "2", "3", "4", "5"]
   },
   {
+    id: "q_information", type: "single",
+    text: "政策や制度について判断するために必要な情報を、十分に得られていると思いますか？",
+    options: ["十分に得られている", "どちらかといえば得られている", "どちらかといえば不足している", "不足している", "わからない"]
+  },
+  {
+    id: "q_social", type: "scale",
+    text: "公共政策で価値が衝突するとき、あなたの考えに近いのはどちらですか？",
+    left: "個人の選択と自由を優先すべき",
+    right: "社会全体の安全と秩序を優先すべき",
+    options: ["1", "2", "3", "4", "5"]
+  },
+  {
+    id: "q_life", type: "single",
+    text: "現在の制度や政策は、あなたが日常生活で感じる課題に対応していると思いますか？",
+    options: ["対応している", "どちらかといえば対応している", "どちらかといえば対応していない", "対応していない", "わからない"]
+  },
+  {
+    id: "q_participation", type: "single",
+    text: "政策の決定過程に、国民の意見が十分に反映されていると思いますか？",
+    options: ["十分に反映されている", "どちらかといえば反映されている", "どちらかといえば反映されていない", "反映されていない", "わからない"]
+  },
+  {
     id: "q_free", type: "free",
     text: "政治・行政に対する意見・提言・不満があれば自由にお書きください。",
     placeholder: "例: ◯◯省の△△制度について…、地元の□□に関して…(任意・複数の話題可)"
@@ -1927,7 +1949,8 @@ async function cloudLoadConfig() {
     registerSiteKey: String(rawTurnstile && rawTurnstile.registerSiteKey || "").trim().slice(0, 200),
     registerRequired: rawTurnstile && rawTurnstile.registerRequired === true,
     recoverySiteKey: String(rawTurnstile && rawTurnstile.recoverySiteKey || "").trim().slice(0, 200),
-    recoveryRequired: rawTurnstile && rawTurnstile.recoveryRequired === true
+    recoveryRequired: rawTurnstile && rawTurnstile.recoveryRequired === true,
+    formProofRequired: payload && payload.formProofRequired === true
   };
   return questions ? { questions: questions, turnstile: turnstile } : null;
 }
@@ -2038,6 +2061,11 @@ async function cloudAccountCall(path, method, body, token) {
   return cloudApiRequest(path, options);
 }
 
+async function cloudIssueFormProof(action) {
+  if (!cloudApiEnabled()) return null;
+  return cloudApiRequest("/api/form-proof?action=" + encodeURIComponent(String(action || "")));
+}
+
 async function cloudLoadOwnResponse(id, token) {
   if (!cloudApiEnabled() || !id || !token) return null;
   const payload = await cloudAccountCall("/api/accounts/me/responses", "GET", undefined, token);
@@ -2091,6 +2119,8 @@ function cloudRegistrationError(error) {
   if (code === "TURNSTILE_REQUIRED") return "不正利用防止の確認を完了してください";
   if (code === "TURNSTILE_FAILED" || code === "TURNSTILE_ACTION_MISMATCH" || code === "TURNSTILE_HOSTNAME_MISMATCH") return "不正利用防止の確認に失敗しました。もう一度お試しください";
   if (code === "TURNSTILE_NOT_CONFIGURED") return "不正利用防止の認証設定が完了していません";
+  if (code === "FORM_PROOF_NOT_CONFIGURED") return "送信確認の設定が完了していません";
+  if (code.startsWith("FORM_PROOF_") || code === "FORM_REJECTED") return "送信確認を更新しました。もう一度お試しください";
   if (Number(error && error.status) === 429) return rateLimitMessage(error, "登録が混み合っています");
   if (code) return "登録に失敗しました (" + code + ")";
   if (error && error.name === "AbortError") return "登録APIが時間内に応答しませんでした";
@@ -2211,7 +2241,7 @@ async function acctGet(name, strictRemote) {
   }
   return await sGet(await acctStorageKey(nm));
 }
-async function acctRegister(name, pass, turnstileToken) {
+async function acctRegister(name, pass, turnstileToken, formProof, companyWebsite) {
   const nm = normAcctName(name);
   if (nm.length < 2) return { error: "名前は2〜20文字で入力してください(本名は使わないでください)" };
   if (String(pass).length < 8) return { error: "パスワードは8文字以上にしてください" };
@@ -2220,7 +2250,9 @@ async function acctRegister(name, pass, turnstileToken) {
       const result = await cloudAccountCall("/api/accounts/register", "POST", {
         name: nm,
         password: String(pass),
-        turnstileToken: String(turnstileToken || "")
+        turnstileToken: String(turnstileToken || ""),
+        formProof: String(formProof || ""),
+        companyWebsite: String(companyWebsite || "")
       });
       return { acct: cloudAccountRecord(result), recoveryCode: String(result && result.recoveryCode || "") };
     } catch (e) {
@@ -2257,12 +2289,14 @@ function rateLimitMessage(error, prefix) {
   if (seconds < 60) return prefix + "。約" + seconds + "秒後にもう一度お試しください";
   return prefix + "。約" + Math.ceil(seconds / 60) + "分後にもう一度お試しください";
 }
-async function acctRecover(name, recoveryCode, newPassword, turnstileToken) {
+async function acctRecover(name, recoveryCode, newPassword, turnstileToken, formProof, companyWebsite) {
   if (!cloudApiEnabled()) return { error: "パスワード再設定はオンライン版でのみ利用できます" };
   try {
     const result = await cloudAccountCall("/api/accounts/recover", "POST", {
       name: normAcctName(name), recoveryCode: String(recoveryCode || "").trim(), newPassword: String(newPassword),
-      turnstileToken: String(turnstileToken || "")
+      turnstileToken: String(turnstileToken || ""),
+      formProof: String(formProof || ""),
+      companyWebsite: String(companyWebsite || "")
     });
     return { acct: cloudAccountRecord(result), recoveryCode: String(result && result.recoveryCode || "") };
   } catch (e) {
@@ -2271,6 +2305,8 @@ async function acctRecover(name, recoveryCode, newPassword, turnstileToken) {
     if (e && e.code === "TURNSTILE_REQUIRED") return { error: "不正利用防止の確認を完了してください" };
     if (e && (e.code === "TURNSTILE_FAILED" || e.code === "TURNSTILE_ACTION_MISMATCH" || e.code === "TURNSTILE_HOSTNAME_MISMATCH")) return { error: "不正利用防止の確認に失敗しました。もう一度お試しください" };
     if (e && e.code === "TURNSTILE_NOT_CONFIGURED") return { error: "不正利用防止の認証設定が完了していません" };
+    if (e && e.code === "FORM_PROOF_NOT_CONFIGURED") return { error: "送信確認の設定が完了していません" };
+    if (e && (String(e.code || "").startsWith("FORM_PROOF_") || e.code === "FORM_REJECTED")) return { error: "送信確認を更新しました。もう一度お試しください" };
     return { error: "パスワードを再設定できませんでした" };
   }
 }
@@ -6088,10 +6124,38 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
   const [recoveryInput, setRecoveryInput] = useState("");
   const [issuedRecoveryCode, setIssuedRecoveryCode] = useState("");
   const [pendingAccount, setPendingAccount] = useState(null);
+  const [formProof, setFormProof] = useState("");
+  const [formProofReset, setFormProofReset] = useState(0);
+  const [formProofError, setFormProofError] = useState("");
+  const [companyWebsite, setCompanyWebsite] = useState("");
   const registerSiteKey = String(turnstileConfig && turnstileConfig.registerSiteKey || "");
   const registerTurnstileRequired = turnstileConfig && turnstileConfig.registerRequired === true;
   const recoverySiteKey = String(turnstileConfig && turnstileConfig.recoverySiteKey || "");
   const recoveryTurnstileRequired = turnstileConfig && turnstileConfig.recoveryRequired === true;
+  const formProofRequired = turnstileConfig && turnstileConfig.formProofRequired === true;
+
+  useEffect(() => {
+    if (!formProofRequired || mode === "login") {
+      setFormProof("");
+      setFormProofError("");
+      return undefined;
+    }
+    let active = true;
+    let readyTimer = null;
+    const action = mode === "recover" ? "recover" : "register";
+    setFormProof("");
+    setFormProofError("");
+    cloudIssueFormProof(action).then(result => {
+      if (!active) return;
+      const token = String(result && result.token || "");
+      if (!token) throw new Error("form proof was missing");
+      const waitMs = Math.max(0, Number(result && result.readyAt || 0) - Date.now());
+      readyTimer = setTimeout(() => { if (active) setFormProof(token); }, waitMs);
+    }).catch(() => {
+      if (active) setFormProofError("送信準備を完了できませんでした。通信状態を確認して再読み込みしてください。");
+    });
+    return () => { active = false; if (readyTimer !== null) clearTimeout(readyTimer); };
+  }, [mode, formProofRequired, formProofReset]);
 
   async function go() {
     if (busy) return;
@@ -6100,15 +6164,17 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
     if (mode === "register") {
       if (pass !== pass2) { setErr("確認用パスワードが一致しません"); setBusy(false); return; }
       if (registerTurnstileRequired && !turnstileToken) { setErr("不正利用防止の確認を完了してください"); setBusy(false); return; }
-      r = await acctRegister(name, pass, turnstileToken);
+      r = await acctRegister(name, pass, turnstileToken, formProof, companyWebsite);
       if (registerSiteKey) { setTurnstileToken(""); setTurnstileReset(value => value + 1); }
+      if (formProofRequired) setFormProofReset(value => value + 1);
     } else if (mode === "login") {
       r = await acctLogin(name, pass);
     } else {
       if (pass !== pass2) { setErr("確認用パスワードが一致しません"); setBusy(false); return; }
       if (recoveryTurnstileRequired && !turnstileToken) { setErr("不正利用防止の確認を完了してください"); setBusy(false); return; }
-      r = await acctRecover(name, recoveryInput, pass, turnstileToken);
+      r = await acctRecover(name, recoveryInput, pass, turnstileToken, formProof, companyWebsite);
       if (recoverySiteKey) { setTurnstileToken(""); setTurnstileReset(value => value + 1); }
+      if (formProofRequired) setFormProofReset(value => value + 1);
     }
     setBusy(false);
     if (r.error) { setErr(r.error); return; }
@@ -6156,6 +6222,9 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
         </Field>
         {mode !== "login" ? (
           <>
+            <div aria-hidden="true" style={{ position: "absolute", left: "-10000px", width: 1, height: 1, overflow: "hidden" }}>
+              <label>会社ウェブサイト<input name="companyWebsite" value={companyWebsite} onChange={e => setCompanyWebsite(e.target.value)} tabIndex={-1} autoComplete="off" /></label>
+            </div>
             <Field label={mode === "recover" ? "新しいパスワード(確認)" : "パスワード(確認)"}>
               <input type="password" value={pass2} onChange={e => setPass2(e.target.value)} style={{ ...INPUT_STYLE }} />
             </Field>
@@ -6176,9 +6245,10 @@ function AuthGate({ onAuthed, goto, destination, guestView, turnstileConfig }) {
             ) : null}
           </>
         ) : null}
+        {formProofError ? <div role="status" style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>{formProofError}</div> : null}
         {err ? <div style={{ fontSize: 12, color: C.bengara, marginBottom: 10 }}>{err}</div> : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Btn onClick={go} disabled={busy || !name.trim() || !pass || (mode === "recover" && (!recoveryInput.trim() || (recoveryTurnstileRequired && !turnstileToken))) || (mode === "register" && registerTurnstileRequired && !turnstileToken)}>
+          <Btn onClick={go} disabled={busy || !name.trim() || !pass || (formProofRequired && mode !== "login" && !formProof) || (mode === "recover" && (!recoveryInput.trim() || (recoveryTurnstileRequired && !turnstileToken))) || (mode === "register" && registerTurnstileRequired && !turnstileToken)}>
             {busy ? "確認しています…" : mode === "register"
               ? "登録して" + (destination || "回答") + "へ進む"
               : mode === "login" ? "ログインして" + (destination || "回答") + "へ進む" : "パスワードを再設定"}

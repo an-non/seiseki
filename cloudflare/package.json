@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.mjs && node --check src/db.mjs && node --check src/config.mjs && node --check src/analysis.mjs && node --check src/analysis-cache.mjs && node --check src/submission-review.mjs && node --check src/auth.mjs && node --check src/validation.mjs && node --check src/rate-limit.mjs && node --check scripts/workers-ai-comparison/worker.mjs && node --check scripts/workers-ai-comparison/run.mjs",
+    "check": "node --check src/index.mjs && node --check src/db.mjs && node --check src/config.mjs && node --check src/analysis.mjs && node --check src/analysis-cache.mjs && node --check src/submission-review.mjs && node --check src/auth.mjs && node --check src/validation.mjs && node --check src/rate-limit.mjs && node --check src/form-proof.mjs && node --check scripts/workers-ai-comparison/worker.mjs && node --check scripts/workers-ai-comparison/run.mjs",
     "test": "node --test tests/*.test.mjs",
     "diagnose:analysis-output": "node scripts/measure-analysis-output.mjs",
     "diagnose:groq": "node scripts/run-groq-legacy-comparison.mjs",
     "diagnose:workers-ai": "node scripts/workers-ai-comparison/run.mjs",
+    "e2e:form-proof:staging": "node scripts/live-form-proof-staging-e2e.mjs",
     "assets:check:staging": "node scripts/assert-runtime-assets.mjs staging",
     "assets:check:production": "node scripts/assert-runtime-assets.mjs production",
     "deploy:staging": "node scripts/deploy-runtime.mjs staging",

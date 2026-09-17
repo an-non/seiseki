@@ -115,6 +115,14 @@ export async function enforceRateLimit(db, request, policy, extraSubject = "", f
 }
 
 export const RATE_LIMIT_POLICIES = Object.freeze({
+  formProofIssue: Object.freeze({
+    name: "form-proof-issue",
+    network: Object.freeze([
+      Object.freeze({ label: "minute", limit: 20, windowMs: 60 * 1000 }),
+      Object.freeze({ label: "hour", limit: 120, windowMs: 60 * 60 * 1000 })
+    ]),
+    subject: Object.freeze([])
+  }),
   login: Object.freeze({
     name: "login",
     network: Object.freeze([

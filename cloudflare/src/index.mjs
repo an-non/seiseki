@@ -45,6 +45,7 @@ import { enforcePlatformRateLimit, enforceRateLimit, RateLimitError, RATE_LIMIT_
 import { getPublicAggregate } from "./public-aggregate.mjs";
 import { handleStagingAdminRequest } from "./staging-admin.mjs";
 import { createSubmissionFingerprint, refreshSubmissionReview } from "./submission-review.mjs";
+import { formProofRequired, issueFormProof, verifyAndConsumeFormProof } from "./form-proof.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -168,6 +169,7 @@ async function verifyTurnstile(body, request, options = {}) {
   const secret = String(options.secret || "").trim();
   const expectedHostname = String(options.hostname || "").trim();
   const expectedAction = String(options.action || "").trim();
+  const allowTestingKey = options.allowTestingKey === true;
   const token = String(body?.turnstileToken ?? "").trim();
 
   if (token.length > 2048) {
@@ -199,10 +201,11 @@ async function verifyTurnstile(body, request, options = {}) {
   });
   const result = await response.json();
   if (!result.success) throw new RequestError(403, "TURNSTILE_FAILED", "Turnstile verification failed");
+  const testingResult = allowTestingKey && result?.metadata?.result_with_testing_key === true;
   if (expectedHostname && result.hostname !== expectedHostname) {
     throw new RequestError(403, "TURNSTILE_HOSTNAME_MISMATCH", "Turnstile hostname did not match");
   }
-  if (expectedAction && result.action !== expectedAction) {
+  if (expectedAction && result.action !== expectedAction && !testingResult) {
     throw new RequestError(403, "TURNSTILE_ACTION_MISMATCH", "Turnstile action did not match");
   }
 }
@@ -358,8 +361,14 @@ async function handleRequest(request, env, ctx) {
         registerRequired: String(env.TURNSTILE_REGISTER_REQUIRED).toLowerCase() === "true",
         recoverySiteKey: String(env.TURNSTILE_RECOVERY_SITE_KEY || ""),
         recoveryRequired: String(env.TURNSTILE_RECOVERY_REQUIRED).toLowerCase() === "true"
-      }
+      },
+      formProofRequired: formProofRequired(env)
     });
+  }
+  if (request.method === "GET" && url.pathname === "/api/form-proof") {
+    if (!formProofRequired(env)) throw new RequestError(404, "NOT_FOUND", "route was not found");
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.formProofIssue, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
+    return json(await issueFormProof(env, url.searchParams.get("action")));
   }
   if (request.method === "POST" && url.pathname === "/api/responses") {
     return handleCreateResponse(request, env, ctx);
@@ -378,13 +387,19 @@ async function handleRequest(request, env, ctx) {
   if (request.method === "POST" && url.pathname === "/api/accounts/register") {
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
     const body = await readJson(request);
+    await verifyAndConsumeFormProof(env, body, "register");
     await verifyTurnstile(body, request, {
       required: env.TURNSTILE_REGISTER_REQUIRED,
       secret: env.TURNSTILE_REGISTER_SECRET,
       hostname: env.TURNSTILE_REGISTER_HOSTNAME,
-      action: "register"
+      action: "register",
+      allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
-    return json(await registerAccount(env.DB, body, env.PASSWORD_ITERATIONS), 201);
+    return json(await registerAccount(env.DB, {
+      name: body?.name,
+      password: body?.password,
+      turnstileToken: body?.turnstileToken
+    }, env.PASSWORD_ITERATIONS), 201);
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
     const body = await readJson(request);
@@ -396,13 +411,20 @@ async function handleRequest(request, env, ctx) {
     const body = await readJson(request);
     const accountName = String(body?.name ?? "").normalize("NFKC").trim().toLowerCase();
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.recovery, accountName, env.RATE_LIMIT_FINGERPRINT_SECRET);
+    await verifyAndConsumeFormProof(env, body, "recover");
     await verifyTurnstile(body, request, {
       required: env.TURNSTILE_RECOVERY_REQUIRED,
       secret: env.TURNSTILE_RECOVERY_SECRET,
       hostname: env.TURNSTILE_RECOVERY_HOSTNAME,
-      action: "recover"
+      action: "recover",
+      allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
-    return json(await resetPasswordWithRecoveryCode(env.DB, body, env.PASSWORD_ITERATIONS));
+    return json(await resetPasswordWithRecoveryCode(env.DB, {
+      name: body?.name,
+      recoveryCode: body?.recoveryCode,
+      newPassword: body?.newPassword,
+      turnstileToken: body?.turnstileToken
+    }, env.PASSWORD_ITERATIONS));
   }
   if (url.pathname === "/api/accounts/me") {
     const account = await authenticateRequest(env.DB, request, true);

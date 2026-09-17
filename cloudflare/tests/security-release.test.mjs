@@ -197,6 +197,61 @@ test("registration Turnstile validates token action and hostname before account 
   }
 });
 
+test("staging accepts an official Turnstile testing result without an action field", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    SEISEKI_ENV: "staging",
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "official-test-secret"
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    success: true,
+    hostname: "example.com",
+    metadata: { result_with_testing_key: true }
+  });
+  try {
+    const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "公式試験鍵", password: "correct-horse-1", turnstileToken: "XXXX.DUMMY.TOKEN.XXXX" })
+    }), env);
+    assert.equal(response.status, 201);
+  } finally {
+    globalThis.fetch = originalFetch;
+    database.close();
+  }
+});
+
+test("production does not bypass Turnstile action checks for testing metadata", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    SEISEKI_ENV: "production",
+    TURNSTILE_REGISTER_REQUIRED: "true",
+    TURNSTILE_REGISTER_SECRET: "unexpected-test-secret"
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    success: true,
+    hostname: "example.com",
+    metadata: { result_with_testing_key: true }
+  });
+  try {
+    const response = await worker.fetch(new Request("http://local/api/accounts/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "本番試験鍵拒否", password: "correct-horse-1", turnstileToken: "XXXX.DUMMY.TOKEN.XXXX" })
+    }), env);
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, "TURNSTILE_ACTION_MISMATCH");
+  } finally {
+    globalThis.fetch = originalFetch;
+    database.close();
+  }
+});
+
 test("password recovery Turnstile validates the recover action before changing credentials", async () => {
   const database = createDatabase();
   const env = {
@@ -273,6 +328,43 @@ test("public config exposes only registration and recovery site keys", async () 
     recoveryRequired: true
   });
   assert.equal(JSON.stringify(body).includes("must-not-leak"), false);
+  database.close();
+});
+
+test("form proof endpoint gates registration and consumes each proof once", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    FORM_PROOF_REQUIRED: "true",
+    RATE_LIMIT_FINGERPRINT_SECRET: "integration-form-proof-secret-32-characters"
+  };
+  const headers = { "x-forwarded-for": "203.0.113.44" };
+  const issuedResponse = await worker.fetch(new Request("http://local/api/form-proof?action=register", { headers }), env);
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json();
+  assert.match(issued.token, /^v1\.register\./u);
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.readyAt - Date.now()) + 10));
+
+  const input = {
+    name: "証明登録試験",
+    password: "correct-horse-1",
+    formProof: issued.token,
+    companyWebsite: ""
+  };
+  const registered = await worker.fetch(new Request("http://local/api/accounts/register", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  }), env);
+  assert.equal(registered.status, 201);
+
+  const replayed = await worker.fetch(new Request("http://local/api/accounts/register", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ ...input, name: "証明再利用試験" })
+  }), env);
+  assert.equal(replayed.status, 409);
+  assert.equal((await replayed.json()).error, "FORM_PROOF_REPLAYED");
   database.close();
 });
 
