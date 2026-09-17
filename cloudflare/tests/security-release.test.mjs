@@ -331,6 +331,43 @@ test("public config exposes only registration and recovery site keys", async () 
   database.close();
 });
 
+test("form proof endpoint gates registration and consumes each proof once", async () => {
+  const database = createDatabase();
+  const env = {
+    DB: new D1DatabaseAdapter(database),
+    FORM_PROOF_REQUIRED: "true",
+    RATE_LIMIT_FINGERPRINT_SECRET: "integration-form-proof-secret-32-characters"
+  };
+  const headers = { "x-forwarded-for": "203.0.113.44" };
+  const issuedResponse = await worker.fetch(new Request("http://local/api/form-proof?action=register", { headers }), env);
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json();
+  assert.match(issued.token, /^v1\.register\./u);
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, issued.readyAt - Date.now()) + 10));
+
+  const input = {
+    name: "証明登録試験",
+    password: "correct-horse-1",
+    formProof: issued.token,
+    companyWebsite: ""
+  };
+  const registered = await worker.fetch(new Request("http://local/api/accounts/register", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify(input)
+  }), env);
+  assert.equal(registered.status, 201);
+
+  const replayed = await worker.fetch(new Request("http://local/api/accounts/register", {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ ...input, name: "証明再利用試験" })
+  }), env);
+  assert.equal(replayed.status, 409);
+  assert.equal((await replayed.json()).error, "FORM_PROOF_REPLAYED");
+  database.close();
+});
+
 test("login attempts are limited before repeated password derivation", async () => {
   const database = createDatabase();
   const env = { DB: new D1DatabaseAdapter(database), TURNSTILE_REQUIRED: "false" };

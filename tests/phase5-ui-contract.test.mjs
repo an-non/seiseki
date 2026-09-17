@@ -34,4 +34,7 @@ test("registration and recovery use an explicit Turnstile widget with scoped act
   assert.ok(ui.includes('appearance: "interaction-only"'));
   assert.ok(ui.includes('turnstileToken: String(turnstileToken || "")'));
   assert.ok(ui.includes('registerTurnstileRequired && !turnstileToken'));
+  assert.ok(ui.includes('cloudIssueFormProof(action)'));
+  assert.ok(ui.includes('name="companyWebsite"'));
+  assert.ok(ui.includes('formProofRequired && mode !== "login" && !formProof'));
 });

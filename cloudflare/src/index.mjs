@@ -45,6 +45,7 @@ import { enforcePlatformRateLimit, enforceRateLimit, RateLimitError, RATE_LIMIT_
 import { getPublicAggregate } from "./public-aggregate.mjs";
 import { handleStagingAdminRequest } from "./staging-admin.mjs";
 import { createSubmissionFingerprint, refreshSubmissionReview } from "./submission-review.mjs";
+import { formProofRequired, issueFormProof, verifyAndConsumeFormProof } from "./form-proof.mjs";
 
 const JSON_HEADERS = Object.freeze({
   "content-type": "application/json; charset=utf-8",
@@ -360,8 +361,14 @@ async function handleRequest(request, env, ctx) {
         registerRequired: String(env.TURNSTILE_REGISTER_REQUIRED).toLowerCase() === "true",
         recoverySiteKey: String(env.TURNSTILE_RECOVERY_SITE_KEY || ""),
         recoveryRequired: String(env.TURNSTILE_RECOVERY_REQUIRED).toLowerCase() === "true"
-      }
+      },
+      formProofRequired: formProofRequired(env)
     });
+  }
+  if (request.method === "GET" && url.pathname === "/api/form-proof") {
+    if (!formProofRequired(env)) throw new RequestError(404, "NOT_FOUND", "route was not found");
+    await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.formProofIssue, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
+    return json(await issueFormProof(env, url.searchParams.get("action")));
   }
   if (request.method === "POST" && url.pathname === "/api/responses") {
     return handleCreateResponse(request, env, ctx);
@@ -380,6 +387,7 @@ async function handleRequest(request, env, ctx) {
   if (request.method === "POST" && url.pathname === "/api/accounts/register") {
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.register, "", env.RATE_LIMIT_FINGERPRINT_SECRET);
     const body = await readJson(request);
+    await verifyAndConsumeFormProof(env, body, "register");
     await verifyTurnstile(body, request, {
       required: env.TURNSTILE_REGISTER_REQUIRED,
       secret: env.TURNSTILE_REGISTER_SECRET,
@@ -387,7 +395,11 @@ async function handleRequest(request, env, ctx) {
       action: "register",
       allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
-    return json(await registerAccount(env.DB, body, env.PASSWORD_ITERATIONS), 201);
+    return json(await registerAccount(env.DB, {
+      name: body?.name,
+      password: body?.password,
+      turnstileToken: body?.turnstileToken
+    }, env.PASSWORD_ITERATIONS), 201);
   }
   if (request.method === "POST" && url.pathname === "/api/accounts/login") {
     const body = await readJson(request);
@@ -399,6 +411,7 @@ async function handleRequest(request, env, ctx) {
     const body = await readJson(request);
     const accountName = String(body?.name ?? "").normalize("NFKC").trim().toLowerCase();
     await enforceRateLimit(env.DB, request, RATE_LIMIT_POLICIES.recovery, accountName, env.RATE_LIMIT_FINGERPRINT_SECRET);
+    await verifyAndConsumeFormProof(env, body, "recover");
     await verifyTurnstile(body, request, {
       required: env.TURNSTILE_RECOVERY_REQUIRED,
       secret: env.TURNSTILE_RECOVERY_SECRET,
@@ -406,7 +419,12 @@ async function handleRequest(request, env, ctx) {
       action: "recover",
       allowTestingKey: String(env.SEISEKI_ENV).toLowerCase() === "staging"
     });
-    return json(await resetPasswordWithRecoveryCode(env.DB, body, env.PASSWORD_ITERATIONS));
+    return json(await resetPasswordWithRecoveryCode(env.DB, {
+      name: body?.name,
+      recoveryCode: body?.recoveryCode,
+      newPassword: body?.newPassword,
+      turnstileToken: body?.turnstileToken
+    }, env.PASSWORD_ITERATIONS));
   }
   if (url.pathname === "/api/accounts/me") {
     const account = await authenticateRequest(env.DB, request, true);
