@@ -496,8 +496,9 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
 - production公開URLは2026-09-17の再確認で`/api/health`、`/api/config`、
   `/app`がHTTP 200。healthは`status=ok`、`database=d1`を返した。
 - GitHub Actions Run `34820641724`は、GitHub側Cloudflare API tokenが対象
-  アカウントを認証できず、production基盤の読取り確認で停止した。ローカル認証での
-  releaseは成功したが、GitHub Actions経路のtoken修復は未完了。
+  アカウントを認証できず、production基盤の読取り確認で停止した。その後tokenを
+  対象アカウント用に更新し、read-only preflight Run `35172498905`でD1、Queue/DLQ、
+  必要secret名、pending migrationなし、deployment一覧を変更なしで確認した。
 - `.github/workflows/production-preflight.yml`は、任意branchへのpush、生成物の
   commit、deploy、migration、D1書込みを廃止した。承認SHAをcheckoutし、D1、
   Queue/DLQ、必要secret名、pending migration、deployment一覧だけを検証する
@@ -514,3 +515,8 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
    承認SHAと`deploy-production`を渡す。D1 migrationは別Workflowで扱う。
 5. release後はread-only smokeを確認し、必要な場合だけ架空データを用いた
    write E2Eを別承認で行う。
+
+2026-09-17時点では、配備済み`e40acc1`とmain `65aa19a`のproduction runtime対象
+(`app/`、`core/`、`local/`、`cloudflare/`)に差分がない。そのため同一runtimeの
+再deployは行わず、`/api/health`、`/api/config`、`/app`のHTTP 200と
+`database=d1`を再確認してproduction作業を完了した。
