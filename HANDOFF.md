@@ -556,3 +556,17 @@ http://127.0.0.1:4174/chunk-network-entanglement-preview.html?count=5000&seed=pr
   stagingと同じ状態遷移を確認した。両環境の試験アカウントは削除済み。
 - これは単純な自動入力・即時送信・証明再利用・短時間の大量試行を抑える多層防御であり、
   Turnstileと同等のbot判定ではない。高度なbotによる通常ブラウザ操作を完全には識別できない。
+
+
+## 24. 4-Jev量子もつれ直列予測回路（2026-09-21）
+
+- `integration/jev-quad-loop/quantum-circuit.mjs` に、Jevを4段直列で1セットとする純粋計算コアを追加した。段階は baseline / conditioned-update / interference-reconciliation / final-forecast。
+- 各段はBell型論理状態 `|psi_k> = cos(theta_k)|00> + exp(i phi_k) sin(theta_k)|11>`、結合強度、位相、左右観測角、Born確率を保持する。Jevの全回答確率からエントロピー、正規化信頼度、上位2候補差、円周確率ベクトルを算出し、次段の量子状態を更新する。
+- Stage 2-4へは、元の状態に加えて直前Jevの全回答分布・百分率・dominant・confidenceと、更新済みBell式/Born確率を渡す。最終出力はStage 4結果に加え、重み `[0.15, 0.20, 0.25, 0.40]` の幾何平均プールで4段を融合する。
+- `tests/jev-quad-loop.test.mjs` は隔離Node環境で4/4成功。Bell確率の正規化、百分率入力の正規化、4段の前段％受渡し、seed決定性を確認した。
+- 保護された `jev-browser-control` に同一契約のsemantic route `/api/control/typesafe/seiseki/quad-loop` を追加し、Browserbaseの永続ContextからTypeSafe Playgroundを4回直列実行する経路を構築した。
+- 合成状態（momentum 0.62 / dispersion 0.18 / meanReversion 0.27 / relationStrength 0.74）で実E2E成功。Jev `jev-latest` の結果は Stage 1=`up 12 / flat 78 / down 10%`、Stage 2=`45 / 44 / 11%`、Stage 3=`45 / 36 / 19%`、Stage 4=`74 / 21 / 5%`。各段の百分率が次段Stateへ実際に含まれることを確認した。
+- 4段融合は `up 51.1597% / flat 38.5372% / down 10.3031%`。最終Bell状態のBorn確率は `P00=30.4459728% / P01=10.4753395% / P10=43.8559902% / P11=15.2226975%`。
+- これは論理・確率的な量子着想計算であり、Jev間の物理的量子もつれ、量子ハードウェア、量子優位性を意味しない。
+- SEISEKI production D1、実回答、自由記述、回答ID、アカウント情報はJevへ送っていない。現行の外部Jev接続は合成データまたはprivacy review済み集約・派生状態に限定する。production量子画面・D1・Cloudflare Workerへの配線は未実施。
+- 詳細は `docs/JEV-QUAD-ENTANGLEMENT.md`。次段は必要なら、productionデータ境界を維持した集約APIと本回路の接続を別設計・別承認で行う。
