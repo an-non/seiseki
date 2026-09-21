@@ -65,3 +65,53 @@ A transport adapter can inject any function matching:
 invokeJev(stageInput, stageNumber) -> { distribution: { label: probability } }
 
 The transport may later be TypeSafe API, Vercel AI Gateway, or the protected Jev browser bridge without changing the circuit math.
+
+
+## Verified end-to-end synthetic run (2026-09-21)
+
+The protected Jev Browser Bridge was exercised with one synthetic 4-stage set using `jev-latest`. No SEISEKI production response, account, D1 row, answer ID, or free text was sent.
+
+Synthetic evidence:
+
+- momentum: 0.62
+- dispersion: 0.18
+- meanReversion: 0.27
+- relationStrength: 0.74
+
+Prediction labels: `up`, `flat`, `down`.
+
+Observed serial results:
+
+| Stage | Semantic role | up | flat | down | Playground confidence | Dominant |
+|---|---|---:|---:|---:|---:|---|
+| 1 | baseline | 12% | 78% | 10% | 68% | flat |
+| 2 | conditioned-update | 45% | 44% | 11% | 18% | up |
+| 3 | interference-reconciliation | 45% | 36% | 19% | 18% | up |
+| 4 | final-forecast | 74% | 21% | 5% | 61% | up |
+
+The Stage 1 percentages were present in Stage 2 state, Stage 2 percentages in Stage 3 state, and Stage 3 percentages in Stage 4 state. The Bell-like equation and Born probabilities were recomputed between every stage.
+
+Final Bell-like state Born probabilities:
+
+- P(00): 30.4459728%
+- P(01): 10.4753395%
+- P(10): 43.8559902%
+- P(11): 15.2226975%
+
+Weighted four-stage fusion:
+
+- up: 51.1597%
+- flat: 38.5372%
+- down: 10.3031%
+
+This verifies the serial transport contract and the probability/equation handoff. It is not a calibration or accuracy validation of the prediction method.
+
+### Bridge implementation
+
+The protected control service exposes the semantic route:
+
+`/api/control/typesafe/seiseki/quad-loop`
+
+Its GET path is a fixed synthetic smoke test. POST accepts the same circuit contract but must remain restricted to synthetic or privacy-reviewed aggregate/derived state unless the SEISEKI data-governance boundary is separately changed and approved.
+
+The current bridge transport drives the authenticated TypeSafe Playground through the persisted Browserbase Context. The SEISEKI pure computation module remains transport-independent.
