@@ -160,7 +160,7 @@ function mergeAggregate(agg, row, answers) {
   agg.opinions.push(...opinions);
 }
 
-export async function getPublicAggregate(db) {
+async function loadPublicDataset(db) {
   const [responseRows, answerRows] = await Promise.all([
     db.prepare(`
       SELECT id, created_at AS createdAt, age, gender, region, occupation, party,
@@ -192,12 +192,67 @@ export async function getPublicAggregate(db) {
     answersByResponse.set(row.responseId, answers);
   }
 
+  return { responseRows: responseRows.results || [], answersByResponse };
+}
+
+export async function getPublicAggregate(db) {
+  const { responseRows, answersByResponse } = await loadPublicDataset(db);
+
   const aggregate = emptyAggregate();
-  for (const row of responseRows.results || []) mergeAggregate(aggregate, row, answersByResponse.get(row.id) || {});
+  for (const row of responseRows) mergeAggregate(aggregate, row, answersByResponse.get(row.id) || {});
   aggregate.opinions.sort((a, b) => b.ts - a.ts);
   if (aggregate.opinions.length > 120) aggregate.opinions.length = 120;
   const seriesKeys = Object.keys(aggregate.series).sort();
   for (const key of seriesKeys.slice(0, Math.max(0, seriesKeys.length - 400))) delete aggregate.series[key];
   aggregate.updatedAt = Date.now();
   return aggregate;
+}
+
+export async function getPublicOpinions(db, filters = {}) {
+  const topic = String(filters.topic || "").slice(0, 24);
+  const category = String(filters.cat || "").slice(0, 12);
+  const targetType = String(filters.tt || "").slice(0, 16);
+  const targetName = String(filters.tn || "").slice(0, 40);
+  const support = String(filters.sup || "").slice(0, 80);
+  const conditions = [
+    "r.demo_flag = 0",
+    "r.publication_status = 'accepted'",
+    "r.analysis_status = 'completed'",
+    "r.analysis_json IS NOT NULL"
+  ];
+  const values = [];
+  for (const [value, column] of [
+    [topic, "c.topic"], [category, "c.category"], [targetType, "c.target_type"],
+    [targetName, "c.target_name"], [support, "support.value"]
+  ]) {
+    if (!value) continue;
+    conditions.push(column + " = ?");
+    values.push(value);
+  }
+  const rows = await db.prepare(`
+    SELECT c.summary, c.category, c.topic, c.target_type AS targetType,
+           c.target_name AS targetName, c.emotion, c.criticality,
+           c.fact_status AS factStatus, r.created_at AS createdAt,
+           r.age, r.region, r.analysis_json AS analysisJson,
+           COALESCE(support.value, '未回答') AS support
+    FROM opinion_chunks c
+    JOIN responses r ON r.id = c.response_id
+    LEFT JOIN answers support ON support.response_id = r.id AND support.qid = '${ANCHOR_QID}'
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY c.created_at DESC, c.id DESC
+    LIMIT 120
+  `).bind(...values).all();
+
+  return (rows.results || []).map(row => {
+    const analysis = safeAnalysis(row.analysisJson);
+    return {
+      s: String(row.summary || ""), cat: String(row.category || "評価"),
+      topic: String(row.topic || "その他"), tt: String(row.targetType || "その他"),
+      tn: String(row.targetName || ""), emo: clamp(row.emotion, -1, 1),
+      crit: clamp(row.criticality, 0, 100), valid: analysis?.params.valid ?? 50,
+      motiv: analysis?.params.motiv ?? 50, fact: row.factStatus === "要検証" ? "要検証" : "意見",
+      ts: Number(row.createdAt) || 0, age: String(row.age || ""), region: String(row.region || ""),
+      dm: false, sup: String(row.support || "未回答")
+    };
+  });
 }

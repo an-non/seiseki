@@ -42,7 +42,7 @@ import {
   RequestError
 } from "./validation.mjs";
 import { enforcePlatformRateLimit, enforceRateLimit, RateLimitError, RATE_LIMIT_POLICIES } from "./rate-limit.mjs";
-import { getPublicAggregate } from "./public-aggregate.mjs";
+import { getPublicAggregate, getPublicOpinions } from "./public-aggregate.mjs";
 import { handleStagingAdminRequest } from "./staging-admin.mjs";
 import { createSubmissionFingerprint, refreshSubmissionReview } from "./submission-review.mjs";
 import { formProofRequired, issueFormProof, verifyAndConsumeFormProof } from "./form-proof.mjs";
@@ -378,6 +378,21 @@ async function handleRequest(request, env, ctx) {
   }
   if (request.method === "GET" && url.pathname === "/api/public-aggregate") {
     return json(await getPublicAggregate(env.DB), 200, { "cache-control": "public, max-age=0, s-maxage=30" });
+  }
+  if (request.method === "GET" && url.pathname === "/api/public-opinions") {
+    const filters = {
+      topic: url.searchParams.get("topic"),
+      cat: url.searchParams.get("cat"),
+      tt: url.searchParams.get("tt"),
+      tn: url.searchParams.get("tn"),
+      sup: url.searchParams.get("sup")
+    };
+    if (!Object.values(filters).some(Boolean)) {
+      throw new RequestError(400, "OPINION_FILTER_REQUIRED", "at least one opinion filter is required");
+    }
+    return json({ opinions: await getPublicOpinions(env.DB, filters) }, 200, {
+      "cache-control": "public, max-age=0, s-maxage=30"
+    });
   }
   if (request.method === "GET" && url.pathname === "/api/demo-responses") {
     return json({ responses: await listPublicDemoResponses(env.DB) }, 200, {

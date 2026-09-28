@@ -360,6 +360,18 @@ async function cloudLoadPublicAggregate() {
   };
 }
 
+async function cloudLoadPublicOpinions(filters) {
+  if (!cloudApiEnabled()) return [];
+  const query = [];
+  for (const key of ["topic", "cat", "tt", "tn", "sup"]) {
+    const value = String(filters && filters[key] || "").trim();
+    if (value) query.push(encodeURIComponent(key) + "=" + encodeURIComponent(value));
+  }
+  if (!query.length) return [];
+  const payload = await cloudApiRequest("/api/public-opinions?" + query.join("&"));
+  return payload && Array.isArray(payload.opinions) ? payload.opinions : [];
+}
+
 function withCloudDemos(base, demos) {
   const combined = JSON.parse(JSON.stringify(base || newAgg()));
   for (const raw of demos || []) {
@@ -3324,30 +3336,61 @@ function Opinions({ agg, initial, goto }) {
   const [tt, setTt] = useState(init.tt || "すべて");
   const [kw, setKw] = useState(init.kw || "");
   const [sup, setSup] = useState(init.sup || "");
-  const fromTree = !!(init.tt || init.kw || init.cat || init.sup);
-  const src = (agg && agg.opinions) || [];
+  const [topic, setTopic] = useState(init.topic || "");
+  const [tn, setTn] = useState(init.tn || "");
+  const [remoteOpinions, setRemoteOpinions] = useState(null);
+  const [remoteStatus, setRemoteStatus] = useState("idle");
+  const fromTree = !!(init.tt || init.tn || init.kw || init.topic || init.cat || init.sup);
+  const src = remoteOpinions !== null ? remoteOpinions : ((agg && agg.opinions) || []);
   const k = kw.trim();
   const list = src.filter(o =>
     (cat === "すべて" || o.cat === cat) &&
     (tt === "すべて" || o.tt === tt) &&
+    (!tn || String(o.tn || "") === tn) &&
+    (!topic || o.topic === topic) &&
     (!sup || o.sup === sup) &&
     (!k || (o.s + " " + o.topic + " " + (o.tn || "")).indexOf(k) >= 0)
   );
+
+  useEffect(() => {
+    if (!fromTree || !cloudApiEnabled()) return undefined;
+    let alive = true;
+    setRemoteStatus("loading");
+    cloudLoadPublicOpinions({ topic: init.topic, cat: init.cat, tt: init.tt, tn: init.tn, sup: init.sup })
+      .then(opinions => {
+        if (!alive) return;
+        setRemoteOpinions(opinions);
+        setRemoteStatus("loaded");
+      })
+      .catch(error => {
+        if (!alive) return;
+        console.warn("public opinion filter load failed", error);
+        setRemoteStatus("failed");
+      });
+    return () => { alive = false; };
+  }, [fromTree, init.topic, init.cat, init.tt, init.tn, init.sup]);
+
+  function clearFilters() {
+    setCat("すべて"); setTt("すべて"); setKw(""); setSup(""); setTopic(""); setTn("");
+    setRemoteOpinions(null); setRemoteStatus("idle");
+  }
   return (
     <div>
-      <H2 eyebrow="OPINIONS" sub="自由記述から規則解析が抽出した意見チャンクの一覧です(直近120件を保持)">意見一覧</H2>
+      <H2 eyebrow="OPINIONS" sub="通常は直近120件、ツリー選択時は一致する公開意見を取得します">意見一覧</H2>
       {fromTree ? (
         <Card pad={11} style={{ marginBottom: 10, borderColor: C.green }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
             <span style={{ flex: 1, minWidth: 180 }}>
               意見ツリーからの絞り込み中
               {sup ? "(立場: " + sup + ")" : ""}{tt !== "すべて" ? "(対象: " + tt + ")" : ""}
-              {cat !== "すべて" ? "(種類: " + cat + ")" : ""}{k ? "(トピック: " + k + ")" : ""}
-              — {list.length}件
+              {tn ? "(対象名: " + tn + ")" : ""}{cat !== "すべて" ? "(種類: " + cat + ")" : ""}
+              {topic ? "(トピック: " + topic + ")" : ""}{k ? "(検索: " + k + ")" : ""}
+              — {remoteStatus === "loading" ? "照合中" : list.length + "件"}
             </span>
-            <Btn small kind="ghost" onClick={() => { setCat("すべて"); setTt("すべて"); setKw(""); setSup(""); }}>絞り込みを解除</Btn>
+            <Btn small kind="ghost" onClick={clearFilters}>絞り込みを解除</Btn>
             {goto ? <Btn small kind="ghost" onClick={() => goto("tree")}>ツリーへ戻る</Btn> : null}
           </div>
+          {remoteStatus === "failed" ? <div style={{ marginTop: 6, fontSize: 11, color: C.bengara }}>全公開範囲の取得に失敗したため、直近分だけを表示しています。</div> : null}
         </Card>
       ) : null}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
@@ -4753,12 +4796,12 @@ function TreeView({ agg, questions, goto, setOpFilter }) {
 
   const hasRadial = !!(agg && agg.rtree && Object.keys(agg.rtree).length);
 
-  function pickTopic(c) { setOpFilter({ kw: c.name }); goto("opinions"); }
+  function pickTopic(c) { setOpFilter({ topic: c.name }); goto("opinions"); }
   function pickRadial(sel) {
-    setOpFilter({ sup: sel.sup || "", cat: sel.cat || "", kw: sel.topic || "" });
+    setOpFilter({ sup: sel.sup || "", cat: sel.cat || "", topic: sel.topic || "" });
     goto("opinions");
   }
-  function pickTarget(tt, tn) { setOpFilter({ tt: tt, kw: tn === "(対象名なし)" ? "" : tn }); goto("opinions"); }
+  function pickTarget(tt, tn) { setOpFilter({ tt: tt, tn: tn === "(対象名なし)" ? "" : tn }); goto("opinions"); }
 
   if (!chunkTotal) {
     return (
