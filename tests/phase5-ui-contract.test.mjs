@@ -15,6 +15,7 @@ test("tree selections fetch exact public opinions beyond the recent aggregate wi
   assert.ok(ui.includes('setOpFilter({ topic: c.name })'));
   assert.ok(ui.includes('setOpFilter({ sup: sel.sup || "", cat: sel.cat || "", topic: sel.topic || "" })'));
   assert.ok(ui.includes('setOpFilter({ tt: tt, tn: tn === "(対象名なし)" ? "" : tn })'));
+  assert.ok(ui.includes('<OpinionNetwork agg={agg} onPick={pn => { setOpFilter({ topic: pn.name }); goto("opinions"); }} />'));
   assert.ok(ui.includes('(!topic || o.topic === topic)'));
   assert.ok(ui.includes('(!tn || String(o.tn || "") === tn)'));
 });

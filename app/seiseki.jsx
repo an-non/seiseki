@@ -2792,6 +2792,39 @@ function currentPath() {
   return typeof window !== "undefined" && window.location ? window.location.pathname : "/";
 }
 
+function currentSearch() {
+  return typeof window !== "undefined" && window.location ? window.location.search : "";
+}
+
+const OPINION_FILTER_LIMITS = { topic: 24, cat: 12, tt: 16, tn: 40, sup: 80 };
+
+function normalizeOpinionFilter(filters) {
+  const normalized = {};
+  for (const key of Object.keys(OPINION_FILTER_LIMITS)) {
+    const value = String(filters && filters[key] || "").trim().slice(0, OPINION_FILTER_LIMITS[key]);
+    if (!value || ((key === "cat" || key === "tt") && value === "すべて")) continue;
+    normalized[key] = value;
+  }
+  return Object.keys(normalized).length ? normalized : null;
+}
+
+function opinionFilterFromSearch(search) {
+  const params = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+  const values = {};
+  for (const key of Object.keys(OPINION_FILTER_LIMITS)) values[key] = params.get(key) || "";
+  return normalizeOpinionFilter(values);
+}
+
+function opinionFilterSearch(filters) {
+  const normalized = normalizeOpinionFilter(filters);
+  if (!normalized) return "";
+  const params = new URLSearchParams();
+  for (const key of Object.keys(OPINION_FILTER_LIMITS)) {
+    if (normalized[key]) params.set(key, normalized[key]);
+  }
+  return params.toString();
+}
+
 const QUANTUM_PREVIEW_URL = "/quantum/chunk-network-entanglement-preview.html?count=10000&seed=prototype-10000&theme=dark&rev=quantum-embedded-v1";
 
 function QuantumObservation() {
@@ -3129,17 +3162,28 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [hasDraft, setHasDraft] = useState(false);
   const [myId, setMyId] = useState("");
-  const [opFilter, setOpFilter] = useState(null); // 意見ツリーから一覧へ渡す絞り込み
+  const [opFilter, setOpFilter] = useState(() => viewFromPath(currentPath()) === "opinions" ? opinionFilterFromSearch(currentSearch()) : null); // 意見ツリーから一覧へ渡す絞り込み
   const [session, setSession] = useState(null);   // ログイン中のアカウント { name, ts }
   const [completion, setCompletion] = useState(null);
   const [cloudDemos, setCloudDemos] = useState([]);
   const prevRef = useRef("home");                  // 「前の画面へ戻る」用
 
   useEffect(() => {
-    function onPopState() { setView(viewFromPath(currentPath())); }
+    function onPopState() {
+      const nextView = viewFromPath(currentPath());
+      setView(nextView);
+      setOpFilter(nextView === "opinions" ? opinionFilterFromSearch(currentSearch()) : null);
+    }
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (view !== "opinions") return;
+    const query = opinionFilterSearch(opFilter);
+    const target = VIEW_PATHS.opinions + (query ? "?" + query : "");
+    if (currentPath() + currentSearch() !== target) window.history.replaceState({ view: "opinions" }, "", target);
+  }, [view, opFilter]);
 
   useEffect(() => {
     let alive = true;
@@ -3344,7 +3388,7 @@ export default function App() {
         ) : view === "quantum" ? (
           <QuantumObservation />
         ) : view === "opinions" ? (
-          <Opinions agg={agg} initial={opFilter} goto={goView} />
+          <Opinions agg={agg} initial={opFilter} goto={goView} onClear={() => setOpFilter(null)} />
         ) : view === "mine" ? (
           <MyResponse questions={questions} agg={agg} notify={notify} refreshAgg={refreshAgg} goto={goView} back={goBack} session={session} onAccountUpdated={onAccountUpdated} onResponseDeleted={() => { setMyId(""); setCompletion(null); }} />
         ) : view === "admin" ? (
@@ -4999,7 +5043,7 @@ function Dashboard({ agg, questions, goto }) {
 /* ============================================================
    意見一覧
    ============================================================ */
-function Opinions({ agg, initial, goto }) {
+function Opinions({ agg, initial, goto, onClear }) {
   const init = initial || {};
   const [cat, setCat] = useState(init.cat || "すべて");
   const [tt, setTt] = useState(init.tt || "すべて");
@@ -5042,6 +5086,7 @@ function Opinions({ agg, initial, goto }) {
   function clearFilters() {
     setCat("すべて"); setTt("すべて"); setKw(""); setSup(""); setTopic(""); setTn("");
     setRemoteOpinions(null); setRemoteStatus("idle");
+    if (onClear) onClear();
   }
   return (
     <div>
@@ -6499,7 +6544,7 @@ function TreeView({ agg, questions, goto, setOpFilter }) {
         </Card>
       ) : (
         <Card pad={12} style={{ marginBottom: 8 }}>
-          <OpinionNetwork agg={agg} onPick={pn => { setOpFilter({ kw: pn.name }); goto("opinions"); }} />
+          <OpinionNetwork agg={agg} onPick={pn => { setOpFilter({ topic: pn.name }); goto("opinions"); }} />
         </Card>
       )}
       <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.9, marginBottom: 6 }}>

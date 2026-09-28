@@ -37,6 +37,15 @@ test("画面遷移はブラウザ履歴と同期する", () => {
   assert.match(ui, /addEventListener\("popstate"/);
 });
 
+test("意見一覧の絞り込みはURLへ保存し再読み込みと履歴移動で復元する", () => {
+  assert.match(ui, /function opinionFilterFromSearch\(/);
+  assert.match(ui, /function opinionFilterSearch\(/);
+  assert.match(ui, /viewFromPath\(currentPath\(\)\) === "opinions" \? opinionFilterFromSearch\(currentSearch\(\)\) : null/);
+  assert.match(ui, /setOpFilter\(nextView === "opinions" \? opinionFilterFromSearch\(currentSearch\(\)\) : null\)/);
+  assert.match(ui, /window\.history\.replaceState\(\{ view: "opinions" \}, "", target\)/);
+  assert.match(ui, /onClear=\{\(\) => setOpFilter\(null\)\}/);
+});
+
 test("Adminは通常ナビと一般画面の導線に含まれない", () => {
   const navLine = ui.split("\n").find(line => line.startsWith("const NAVS =")) || "";
   assert.doesNotMatch(navLine, /admin|管理/);
